@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "fixtureVersion": 1,
+  "engine": "current-heuristic",
+  "productionRecallChanged": false,
+  "packageContract": {
+    "node": ">=22.0.0",
+    "qmd": "2.8.3"
+  },
+  "queryCounts": {
+    "all": 60,
+    "train": 45,
+    "heldout": 15
+  },
+  "metrics": {
+    "all": {
+      "queryCount": 60,
+      "judgedQueryCount": 55,
+      "candidateRecall20": 0.872727,
+      "mrr": 0.785455,
+      "ndcg5": 0.748766,
+      "ndcg10": 0.759226,
+      "canonicalAt3": 0.836364,
+      "evidenceRecall20": 0.8,
+      "contradictionCoverage": 0.6,
+      "autoFalsePositiveRate": 0.2
+    },
+    "train": {
+      "queryCount": 45,
+      "judgedQueryCount": 40,
+      "candidateRecall20": 0.925,
+      "mrr": 0.827917,
+      "ndcg5": 0.775036,
+      "ndcg10": 0.787218,
+      "canonicalAt3": 0.875,
+      "evidenceRecall20": 0.84,
+      "contradictionCoverage": 0,
+      "autoFalsePositiveRate": 0.2
+    },
+    "heldout": {
+      "queryCount": 15,
+      "judgedQueryCount": 15,
+      "candidateRecall20": 0.733333,
+      "mrr": 0.672222,
+      "ndcg5": 0.678714,
+      "ndcg10": 0.684582,
+      "canonicalAt3": 0.733333,
+      "evidenceRecall20": 0.6,
+      "contradictionCoverage": 0.6,
+      "autoFalsePositiveRate": 0
+    }
+  }
+}

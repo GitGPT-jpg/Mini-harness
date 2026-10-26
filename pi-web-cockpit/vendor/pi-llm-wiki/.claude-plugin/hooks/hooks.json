@@ -1,0 +1,27 @@
+{
+  "description": "Surface project wiki context at Claude session start and block direct edits to raw/meta",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/claude-session-start.mjs\""
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/guard-llm-wiki-edit.mjs\""
+          }
+        ]
+      }
+    ]
+  }
+}

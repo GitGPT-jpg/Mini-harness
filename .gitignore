@@ -1,54 +1,31 @@
-# Virtualenv
-/.venv/
-/venv/
+# ---- 依赖（各机器 npm install 时重建）----
+node_modules/
+**/node_modules/
 
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
+# ---- 生成物 / 本地运行态 ----
+# start-hardened.sh 由 postinstall(harden.mjs) 自动生成
+pi-web-cockpit/start-hardened.sh
+# web-demo 为早期独立探索 demo，不随底座入库
+web-demo/
+*.log
+.DS_Store
 
-# C extensions
-*.so
+# ---- 密钥 / 口令（绝不入库）----
+# One API Key 存在 ~/.pi/agent/auth.json（仓库外）；访问口令存在 ~/.pi-web/（仓库外）
+*token*
+auth.json
+*.pem
+*.key
 
-# Distribution / packaging
-/bin/
-/build/
-/develop-eggs/
-/dist/
-/eggs/
-/lib/
-/lib64/
-/output/
-/parts/
-/sdist/
-/var/
-/*.egg-info/
-/.installed.cfg
-/*.egg
-/.eggs
+# ---- Mac .app 启动器（setup.sh 在本机 Desktop 生成，不入库）----
+*.app/
+*.icns
 
-# AUTHORS and ChangeLog will be generated while packaging
-/AUTHORS
-/ChangeLog
+# ---- pi-llm-wiki vendor：仅保留源码，剔除 node_modules 与大体积文档素材 ----
+pi-web-cockpit/vendor/pi-llm-wiki/node_modules/
+pi-web-cockpit/vendor/pi-llm-wiki/assets/
 
-# BCloud / BuildSubmitter
-/build_submitter.*
-/logger_client_log
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-.tox/
-.coverage
-.cache
-.pytest_cache
-nosetests.xml
-coverage.xml
-
-# Translations
-*.mo
-
-# Sphinx documentation
-/docs/_build/
-
+# ---- 临时 ----
+*.bak
+.tmp/
+tmp/

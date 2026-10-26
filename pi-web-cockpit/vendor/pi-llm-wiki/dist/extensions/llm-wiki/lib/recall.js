@@ -1,0 +1,954 @@
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { Type } from "typebox";
+import { cosineSimilarity, normalizeVector, readEmbeddingStore, resolveEmbedder, } from "./embeddings.js";
+import { parseKnowledgeDocument } from "./knowledge-document.js";
+import { getPersonalWikiPaths, isPersonalVault, readJson, resolveVaultPaths, } from "./utils.js";
+import { inspectVaultFormat } from "./vault-format.js";
+/** Default blend weight when none is configured. */
+export const DEFAULT_SEMANTIC_WEIGHT = 0.5;
+/**
+ * Lexical points a perfect (cosine = 1) semantic match is worth at full
+ * weight. Chosen so a strong paraphrase match (cosine ≳ 0.84) at the default
+ * weight (0.5) clears the auto-injection threshold (minScore = 5) on its own,
+ * while weak/incidental similarity stays below it.
+ */
+export const SEMANTIC_SCALE = 12;
+/**
+ * Minimum cosine for a page with NO lexical match to even be considered a
+ * semantic candidate. Keeps the candidate set bounded (near-orthogonal pages
+ * are ignored) instead of pulling in the entire embedded vault.
+ */
+export const SEMANTIC_MIN_COSINE = 0.2;
+/**
+ * Blend a lexical score with a cosine similarity. The lexical score keeps its
+ * original absolute scale (so `minScore` semantics survive); the semantic
+ * signal is added as a bounded, weighted boost on a comparable scale. With no
+ * semantic signal (cosine ≤ 0) this is the identity on the lexical score, so
+ * the pure-lexical path is preserved exactly.
+ */
+export function fuseScores(lexical, cosine, weight) {
+    return lexical + weight * SEMANTIC_SCALE * Math.max(cosine, 0);
+}
+/**
+ * Normalize text for recall matching.
+ *
+ * Wiki queries are often short and multilingual (for example: "继续学习pi").
+ * Normalization keeps CJK characters intact, lowercases Latin text, removes
+ * punctuation boundaries, and makes hyphenated page IDs match space-separated
+ * queries.
+ */
+function normalizeText(value) {
+    return flattenSearchValue(value)
+        .toLowerCase()
+        .normalize("NFKC")
+        .replace(/[-_./\\]+/g, " ")
+        .replace(/[\p{P}\p{S}]+/gu, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+function compactText(value) {
+    return value.replace(/\s+/g, "");
+}
+function flattenSearchValue(value) {
+    if (value == null)
+        return "";
+    if (Array.isArray(value))
+        return value.map(flattenSearchValue).join(" ");
+    if (typeof value === "object")
+        return Object.values(value).map(flattenSearchValue).join(" ");
+    return String(value);
+}
+function unique(values) {
+    return [...new Set(values.filter(Boolean))];
+}
+/**
+ * Tokenize with support for CJK short queries and English/kebab-case terms.
+ *
+ * Besides whitespace tokens, this returns Latin/digit runs ("pi", "recall")
+ * and overlapping CJK bigrams/trigrams. The full normalized query is also kept
+ * so exact short phrases still rank highest.
+ */
+function queryTerms(query) {
+    const normalized = normalizeText(query);
+    const compact = compactText(normalized);
+    const terms = [];
+    if (normalized)
+        terms.push(normalized);
+    if (compact && compact !== normalized)
+        terms.push(compact);
+    for (const part of normalized.split(/\s+/)) {
+        if (part.length >= 2 && !STOPWORDS.has(part))
+            terms.push(part);
+    }
+    const latinRuns = normalized.match(/[a-z0-9]{2,}/g) ?? [];
+    for (const run of latinRuns) {
+        if (!STOPWORDS.has(run))
+            terms.push(run);
+    }
+    const cjkRuns = normalized.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]+/gu) ?? [];
+    for (const run of cjkRuns) {
+        for (let size = 2; size <= 3; size++) {
+            if (run.length < size)
+                continue;
+            for (let i = 0; i <= run.length - size; i++) {
+                terms.push(run.slice(i, i + size));
+            }
+        }
+    }
+    return unique(terms).slice(0, 30);
+}
+/** Matches any CJK (Han / Hiragana / Katakana) character. */
+const CJK_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
+/**
+ * Whether `haystack` contains `term`.
+ *
+ * Root-cause fix for issue #223. Previously this was a raw substring
+ * containment, so a 2-char query token like "to" or "so" matched thousands of
+ * unrelated words ("to" ⊂ "history"/"story"; "so" ⊂ "person"/"wilson"), and
+ * weighted field stacking pushed that junk past the auto-injection gate.
+ *
+ * Now:
+ * - CJK terms (Han/Kana) have no whitespace word boundaries, so they still
+ *   match by compact substring — a CJK bigram matches inside a longer glued
+ *   CJK run, preserving the multilingual recall the vaults depend on.
+ * - Latin/ASCII terms require a WHOLE-WORD match: a spaceless haystack is a
+ *   single word (term must equal it), and a spaced haystack must contain the
+ *   term as a whole whitespace-delimited token. "to" still matches the word
+ *   "to" and "Go" still matches "Go", but no longer "history"/"story"/"person".
+ */
+function includesTerm(haystack, term) {
+    if (!haystack || !term)
+        return false;
+    const termCompact = compactText(term);
+    if (CJK_RE.test(termCompact)) {
+        return compactText(haystack).includes(termCompact);
+    }
+    if (!/\s/.test(haystack)) {
+        return compactText(haystack) === termCompact;
+    }
+    return haystack.split(/\s+/).some((t) => t === term || t === termCompact);
+}
+function scoreField(value, terms, weight) {
+    const text = normalizeText(value);
+    if (!text)
+        return 0;
+    let score = 0;
+    for (const term of terms) {
+        if (includesTerm(text, term))
+            score += weight;
+    }
+    return score;
+}
+// ─── Common English stopwords ─────────────────────────
+const STOPWORDS = new Set([
+    "the",
+    "this",
+    "that",
+    "with",
+    "from",
+    "have",
+    "been",
+    "were",
+    "they",
+    "their",
+    "them",
+    "will",
+    "would",
+    "could",
+    "should",
+    "about",
+    "there",
+    "which",
+    "what",
+    "when",
+    "where",
+    "than",
+    "then",
+    "also",
+    "just",
+    "more",
+    "some",
+    "such",
+    "only",
+    "other",
+    "into",
+    "over",
+    "very",
+    "after",
+    "before",
+    "because",
+    "between",
+    "through",
+    "during",
+    "without",
+    "within",
+    "along",
+    "these",
+    "those",
+    "page",
+    "section",
+    "note",
+    "info",
+    "type",
+    "used",
+    "using",
+    // Common English function words (issue #223). These must not become scoring
+    // terms, or a natural-language prompt full of "to"/"so"/"the"/"did" pushes
+    // unrelated pages past the auto-injection gate. 2-letter acronyms that are
+    // NOT stopwords ("go", "pi", "sso") still match, as intended.
+    "to",
+    "so",
+    "did",
+    "do",
+    "does",
+    "and",
+    "or",
+    "but",
+    "a",
+    "an",
+    "i",
+    "it",
+    "its",
+    "is",
+    "are",
+    "was",
+    "be",
+    "am",
+    "for",
+    "on",
+    "at",
+    "by",
+    "as",
+    "if",
+    "in",
+    "of",
+    "up",
+    "out",
+    "not",
+    "no",
+    "can",
+    "has",
+    "had",
+    "me",
+    "my",
+    "you",
+    "your",
+    "we",
+    "our",
+    "us",
+    "too",
+]);
+/**
+ * Split a page's body into chunks by headings.
+ * Each heading and its following content become one chunk.
+ * Content before the first heading becomes the intro chunk.
+ */
+function chunkPage(body) {
+    if (!body.trim())
+        return [];
+    const chunks = [];
+    const lines = body.split("\n");
+    let currentHeading = "";
+    let currentLevel = 0;
+    let currentContent = [];
+    for (const line of lines) {
+        const headingMatch = line.trim().match(/^(#{1,6})\s+(.+)$/);
+        if (headingMatch) {
+            // Save previous chunk
+            if (currentContent.length > 0 || currentHeading) {
+                chunks.push({
+                    heading: currentHeading,
+                    content: currentContent.join("\n").trim(),
+                    level: currentLevel,
+                });
+            }
+            currentHeading = headingMatch[2].trim();
+            currentLevel = headingMatch[1].length;
+            currentContent = [];
+        }
+        else {
+            currentContent.push(line);
+        }
+    }
+    // Save last chunk
+    if (currentContent.length > 0 || currentHeading) {
+        chunks.push({
+            heading: currentHeading,
+            content: currentContent.join("\n").trim(),
+            level: currentLevel,
+        });
+    }
+    return chunks;
+}
+function parsePage(path, id) {
+    if (!existsSync(path))
+        return undefined;
+    const content = readFileSync(path, "utf-8");
+    const result = parseKnowledgeDocument(content, `${id}.md`);
+    if (!result.ok)
+        return undefined;
+    return { frontmatter: result.document.frontmatter, body: result.document.body };
+}
+function pagePreview(content) {
+    const body = content.replace(/^---\n[\s\S]*?\n---\n?/, "");
+    return body.trim().slice(0, 200).replace(/\n/g, " ");
+}
+/**
+ * Get a preview of the best-matching chunk, or fall back to the page intro.
+ * Shows the heading (if any) and the first ~200 chars of content.
+ */
+function chunkPreview(heading, content) {
+    const trimmed = content.slice(0, 180).replace(/\n/g, " ");
+    if (heading) {
+        return `#${heading} — ${trimmed}`;
+    }
+    return trimmed;
+}
+/**
+ * Extract distinctive terms from the top search results for query expansion.
+ * Pseudo-relevance feedback: terms from top-matching pages that aren't in
+ * the original query become expansion candidates.
+ */
+function extractExpansionTerms(scored, originalQuery, _paths, maxTerms = 6) {
+    const topResults = scored.slice(0, Math.min(3, scored.length));
+    if (topResults.length === 0)
+        return [];
+    const originalNorm = normalizeText(originalQuery);
+    const termFreq = new Map();
+    for (const { id, pagePath, entry } of topResults) {
+        // Collect text from registry metadata + file content
+        const metaText = normalizeText([entry.title, entry.aliases, entry.tags, entry.summary, entry.description]
+            .filter(Boolean)
+            .join(" "));
+        for (const w of metaText.split(/\s+/)) {
+            if (w.length >= 4 && !originalNorm.includes(w) && !STOPWORDS.has(w)) {
+                termFreq.set(w, (termFreq.get(w) || 0) + 1);
+            }
+        }
+        // Also extract from file body
+        if (existsSync(pagePath)) {
+            const parsed = parsePage(pagePath, id);
+            if (parsed) {
+                const bodyNorm = normalizeText(parsed.body);
+                for (const w of bodyNorm.split(/\s+/)) {
+                    if (w.length >= 4 && !originalNorm.includes(w) && !STOPWORDS.has(w)) {
+                        termFreq.set(w, (termFreq.get(w) || 0) + 1);
+                    }
+                }
+            }
+        }
+    }
+    // Sort by frequency descending, take top N
+    return Array.from(termFreq.entries())
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .slice(0, maxTerms)
+        .map(([term]) => term);
+}
+/**
+ * Search a single vault's registry for pages matching a query.
+ * Returns up to `maxResults` matches, each with a content preview.
+ * Results below `minScore` are excluded (default 0 = no filtering).
+ */
+export function searchWiki(paths, query, maxResults = 5, minScore = 0, semantic) {
+    const registry = readJson(join(paths.meta, "registry.json"), {
+        version: "1.0",
+        last_updated: "",
+        pages: {},
+    });
+    const terms = queryTerms(query);
+    if (terms.length === 0)
+        return [];
+    // Read this vault's precomputed embedding sidecar (synchronous, offline).
+    // Missing/empty sidecar => no semantic signal => pure lexical, by construction.
+    const embeddingStore = semantic
+        ? readEmbeddingStore(paths)
+        : undefined;
+    const scored = [];
+    for (const [id, entry] of Object.entries(registry.pages)) {
+        const pagePath = join(paths.wiki, `${id}.md`);
+        const pageExists = existsSync(pagePath);
+        const parsed = parsePage(pagePath, id);
+        if (pageExists && !parsed)
+            continue;
+        const frontmatter = parsed?.frontmatter ?? {};
+        const body = parsed?.body ?? "";
+        let score = 0;
+        // Strong identifiers: exact command/short-query aliases should win.
+        score += scoreField(id, terms, 3);
+        score += scoreField(entry.title, terms, 5);
+        score += scoreField(frontmatter.title, terms, 5);
+        score += scoreField(entry.type, terms, 1);
+        // Recall-oriented metadata.
+        score += scoreField(entry.aliases, terms, 6);
+        score += scoreField(frontmatter.aliases, terms, 6);
+        score += scoreField(entry.recall_triggers, terms, 7);
+        score += scoreField(frontmatter.recall_triggers, terms, 7);
+        score += scoreField(entry.summary, terms, 3);
+        score += scoreField(frontmatter.summary, terms, 3);
+        score += scoreField(entry.description, terms, 3);
+        score += scoreField(frontmatter.description, terms, 3);
+        // General metadata from the registry/frontmatter.
+        score += scoreField(entry.tags, terms, 2);
+        score += scoreField(entry.category, terms, 2);
+        score += scoreField(entry.domain, terms, 2);
+        score += scoreField(frontmatter.tags, terms, 2);
+        score += scoreField(frontmatter.category, terms, 2);
+        score += scoreField(frontmatter.domain, terms, 2);
+        // Body search: use chunk-level indexing for more precise matching.
+        // Each section of the page is scored independently, so a query about
+        // "Postgres" matches only the Postgres section, not the whole page.
+        let bestChunkScore = 0;
+        let bestChunkHeading = "";
+        let bestChunkContent = "";
+        if (body.trim()) {
+            const chunks = chunkPage(body);
+            for (const chunk of chunks) {
+                let chunkScore = 0;
+                // Heading gets a strong boost
+                chunkScore += scoreField(chunk.heading, terms, 4);
+                // Chunk body content
+                chunkScore += scoreField(chunk.content, terms, 1);
+                if (chunkScore > bestChunkScore) {
+                    bestChunkScore = chunkScore;
+                    bestChunkHeading = chunk.heading;
+                    bestChunkContent = chunk.content;
+                }
+            }
+        }
+        // Add best chunk score to total page score
+        score += bestChunkScore;
+        // Semantic candidacy: a page with no lexical match can still qualify if its
+        // precomputed vector is sufficiently close to the query vector. The boost
+        // itself is applied AFTER pseudo-relevance feedback so PRF stays lexical.
+        let semCos = 0;
+        if (semantic && embeddingStore) {
+            const vec = embeddingStore.entries[id]?.vector;
+            if (vec && vec.length === semantic.queryVector.length) {
+                semCos = cosineSimilarity(semantic.queryVector, vec);
+            }
+        }
+        const semEligible = semCos >= SEMANTIC_MIN_COSINE;
+        if (score > 0 || semEligible) {
+            scored.push({
+                id,
+                entry,
+                score,
+                pagePath,
+                bestChunkPreview: bestChunkContent ? chunkPreview(bestChunkHeading, bestChunkContent) : "",
+                semCos,
+            });
+        }
+    }
+    scored.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+    // ── Pseudo-Relevance Feedback (PRF) ─────────────────
+    // Extract distinctive terms from the top 3 results and use them to
+    // boost semantically related pages. This gives "semantic" expansion
+    // without external dependencies: if an "Authentication" page mentions
+    // JWT, OAuth, and sessions, those terms boost other pages that discuss
+    // related concepts.
+    const expansionTerms = extractExpansionTerms(scored, query, paths, 6);
+    if (expansionTerms.length > 0) {
+        const expTermList = queryTerms(expansionTerms.join(" "));
+        // Apply expansion scoring to the top 25 results (cheap re-read)
+        const expansionCandidates = scored.slice(0, Math.min(25, scored.length));
+        for (const item of expansionCandidates) {
+            const parsed = parsePage(item.pagePath, item.id);
+            const body = parsed?.body ?? "";
+            let expChunkScore = 0;
+            if (body.trim()) {
+                const chunks = chunkPage(body);
+                for (const chunk of chunks) {
+                    let cs = 0;
+                    cs += scoreField(chunk.heading, expTermList, 2); // half weight
+                    cs += scoreField(chunk.content, expTermList, 0.5);
+                    if (cs > expChunkScore)
+                        expChunkScore = cs;
+                }
+            }
+            // Dampened addition — expansion contributes at most 40%
+            item.score += expChunkScore * 0.4;
+        }
+    }
+    // ── Semantic fusion ─────────────────────────────────
+    // Blend the precomputed cosine similarity into the (lexical + PRF) score.
+    // Applied last so PRF expansion remains purely lexical and so a strongly
+    // paraphrase-relevant page that lexical missed can clear `minScore`. With no
+    // semantic context every boost is 0, leaving the lexical ranking untouched.
+    if (semantic) {
+        for (const item of scored) {
+            item.score = fuseScores(item.score, item.semCos, semantic.weight);
+        }
+    }
+    // Re-sort after expansion + semantic scoring
+    scored.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+    const top = scored.filter((s) => s.score >= minScore).slice(0, maxResults);
+    return top.map(({ id, entry, pagePath, score, bestChunkPreview }) => {
+        let preview = bestChunkPreview;
+        if (!preview && existsSync(pagePath)) {
+            // Fallback: no chunk matched, show page intro
+            preview = pagePreview(readFileSync(pagePath, "utf-8"));
+        }
+        return {
+            id,
+            title: String(entry.title || id),
+            type: String(entry.type || "page"),
+            preview,
+            path: pagePath,
+            score,
+        };
+    });
+}
+/**
+ * Search both project/primary vault and personal vault, merging results.
+ * Results are merged by page ID (personal copies win duplicates and get
+ * tagged), then sorted by score descending — stable, so ties keep the
+ * personal-first order. This way a high-scoring project page can't be cut
+ * by a full page of lower-scoring personal hits (issue #249).
+ *
+ * @param minScore - Minimum relevance score (default 0 = no filter).
+ * @param includePersonal - Whether to search the personal vault (default true).
+ *   Auto-injection should pass false to avoid personal-vault contamination.
+ */
+export function searchWikiLayered(primaryPaths, query, maxResults = 5, minScore = 0, includePersonal = true, semantic) {
+    // Search primary vault
+    const primaryResults = searchWiki(primaryPaths, query, maxResults, minScore, semantic);
+    // If primary is already the personal vault, no layered search needed
+    if (isPersonalVault(primaryPaths))
+        return primaryResults;
+    // Search personal vault as secondary layer (only when explicitly requested)
+    let personalResults = [];
+    if (includePersonal) {
+        const personalPaths = getPersonalWikiPaths();
+        if (existsSync(join(personalPaths.dotWiki, "config.json"))) {
+            personalResults = searchWiki(personalPaths, query, maxResults, minScore, semantic);
+        }
+    }
+    // Merge: personal results first (they're the user's accumulated knowledge),
+    // then primary results (project-specific). Deduplicate by page ID.
+    const seen = new Set();
+    const merged = [];
+    for (const r of [...personalResults, ...primaryResults]) {
+        if (seen.has(r.id))
+            continue;
+        seen.add(r.id);
+        // If it's from personal vault, tag it
+        if (personalResults.includes(r)) {
+            merged.push({ ...r, vaultLabel: "📓 personal" });
+        }
+        else {
+            merged.push(r);
+        }
+    }
+    // Score-descending (stable sort keeps personal-first order on ties).
+    merged.sort((a, b) => b.score - a.score);
+    return merged.slice(0, maxResults);
+}
+// ─── Async hybrid entry point (the single, cached query embedding) ───
+/**
+ * Cache of query string → normalized embedding vector. The query embedding is
+ * the ONLY embedding call in the recall hot path; caching collapses repeated
+ * recalls of the same query within a session (e.g. auto-injection + an explicit
+ * wiki_recall) into a single network call, satisfying the #67 "single cached
+ * query-embedding lookup" bound.
+ */
+const queryEmbeddingCache = new Map();
+const QUERY_CACHE_MAX = 256;
+function queryCacheKey(model, query) {
+    return `${model}\u0000${normalizeText(query)}`;
+}
+/** Test-only: reset the module-level query-embedding cache. */
+export function __clearQueryEmbeddingCache() {
+    queryEmbeddingCache.clear();
+}
+/** True if a vault has at least one stored embedding vector. */
+function storeHasEntries(paths) {
+    return Object.keys(readEmbeddingStore(paths).entries).length > 0;
+}
+/**
+ * Embed the query string once (cached), returning a normalized vector, or
+ * `undefined` when no embedder is configured or the call yields nothing.
+ */
+async function embedQuery(embedder, query) {
+    const key = queryCacheKey(embedder.model, query);
+    const cached = queryEmbeddingCache.get(key);
+    if (cached)
+        return cached;
+    const [raw] = await embedder.embed([query]);
+    if (!raw || raw.length === 0)
+        return undefined;
+    const vec = normalizeVector(raw);
+    if (queryEmbeddingCache.size >= QUERY_CACHE_MAX) {
+        const oldest = queryEmbeddingCache.keys().next().value;
+        if (oldest !== undefined)
+            queryEmbeddingCache.delete(oldest);
+    }
+    queryEmbeddingCache.set(key, vec);
+    return vec;
+}
+/**
+ * Hybrid layered recall: lexical scoring blended with semantic cosine ranking.
+ *
+ * Design (issue #67): page vectors are precomputed at write time (#66); the
+ * ONLY per-query embedding work is a single, cached lookup of the (short) query
+ * string. If no vault has embeddings, the query embedding is skipped entirely
+ * and this degrades to exactly `searchWikiLayered` (pure lexical, zero network).
+ * Likewise when no embedder is configured. `opts.embedder` is an injection seam
+ * for tests (mirrors `embedPages`) so unit tests never touch the network.
+ */
+export async function searchWikiHybrid(primaryPaths, query, maxResults = 5, minScore = 0, includePersonal = true, opts = {}) {
+    // Pure-lexical fast path: no semantic signal anywhere => no embedding call.
+    let anyEmbeddings = storeHasEntries(primaryPaths);
+    if (!anyEmbeddings && includePersonal && !isPersonalVault(primaryPaths)) {
+        const personalPaths = getPersonalWikiPaths();
+        if (existsSync(join(personalPaths.dotWiki, "config.json"))) {
+            anyEmbeddings = storeHasEntries(personalPaths);
+        }
+    }
+    if (!anyEmbeddings) {
+        return searchWikiLayered(primaryPaths, query, maxResults, minScore, includePersonal);
+    }
+    const embedder = opts.embedder ?? (opts.config ? resolveEmbedder(opts.config) : undefined);
+    if (!embedder) {
+        // Embeddings exist but no embedder configured to embed the query: fall back
+        // to pure lexical rather than guess. (Degrades gracefully.)
+        return searchWikiLayered(primaryPaths, query, maxResults, minScore, includePersonal);
+    }
+    let semantic;
+    try {
+        const queryVector = await embedQuery(embedder, query);
+        if (queryVector) {
+            const weight = opts.config?.semanticWeight ?? DEFAULT_SEMANTIC_WEIGHT;
+            semantic = { queryVector, weight };
+        }
+    }
+    catch {
+        // Network/embedding failure must never break recall — fall back to lexical.
+        semantic = undefined;
+    }
+    return searchWikiLayered(primaryPaths, query, maxResults, minScore, includePersonal, semantic);
+}
+/**
+ * Default page-count gate for two-stage (links-first) recall (issue #68).
+ * When a vault's registered page count exceeds this, recall returns ranked
+ * links (expand on demand via `read`) instead of inline content previews.
+ */
+export const DEFAULT_RECALL_LINKS_THRESHOLD = 50;
+/** Max characters of the 1-line snippet shown beside a link in links-first mode. */
+const LINKS_SNIPPET_MAX = 80;
+/** Count the registered pages of a single vault (O(1), no page-body I/O). */
+function registryPageCount(paths) {
+    const registry = readJson(join(paths.meta, "registry.json"), {
+        version: "1.0",
+        last_updated: "",
+        pages: {},
+    });
+    return Object.keys(registry.pages).length;
+}
+/**
+ * Total registered page count across the vault(s) recall will actually search.
+ * Mirrors `searchWikiLayered`'s vault selection so the two-stage gate is keyed
+ * to the same corpus the agent sees. Reads only `registry.json` — never a page
+ * body — so the gate stays cheap as the vault grows.
+ */
+export function vaultPageCount(primaryPaths, includePersonal = true) {
+    let count = registryPageCount(primaryPaths);
+    if (includePersonal && !isPersonalVault(primaryPaths)) {
+        const personalPaths = getPersonalWikiPaths();
+        if (existsSync(join(personalPaths.dotWiki, "config.json"))) {
+            count += registryPageCount(personalPaths);
+        }
+    }
+    return count;
+}
+/**
+ * Decide whether recall should use links-first (stage 1) rendering: true when
+ * the vault page count is STRICTLY GREATER THAN the configured threshold.
+ * Threshold 0 forces links-first for any non-empty vault; a very large value
+ * keeps previews inline always. Default `DEFAULT_RECALL_LINKS_THRESHOLD`.
+ */
+export function shouldUseLinksFirst(pageCount, config) {
+    const threshold = config?.recallLinksThreshold ?? DEFAULT_RECALL_LINKS_THRESHOLD;
+    return pageCount > threshold;
+}
+/** One-line snippet for links-first rendering, derived from the chunk preview. */
+function linkSnippet(preview) {
+    const oneLine = preview.replace(/\s+/g, " ").trim();
+    if (!oneLine)
+        return "";
+    return oneLine.length > LINKS_SNIPPET_MAX ? `${oneLine.slice(0, LINKS_SNIPPET_MAX)}…` : oneLine;
+}
+/**
+ * Default cap on chars of a skill/case body inlined directly into a recall
+ * block. Overridable per-vault via `recallSkillInlineMax` (0 disables inlining).
+ * Mirrors `DEFAULT_RECALL_LINKS_THRESHOLD` — the sibling context-window lever.
+ */
+export const DEFAULT_RECALL_SKILL_INLINE_MAX = 1600;
+/**
+ * Skills/working-memory carve-out from links-first: short, high-value
+ * procedural pages (`skill`/`case`) are meant to be APPLIED immediately, so we
+ * inline their body directly rather than make the agent expand a link it often
+ * skips (adherence > context-economy for these page types). Returns null for
+ * non-skill pages or when the body can't be read.
+ */
+function isSkillOrCase(r) {
+    return (r.type === "skill" ||
+        r.type === "case" ||
+        r.id.startsWith("skills/") ||
+        r.id.startsWith("cases/"));
+}
+/**
+ * Inlined body for a skill/case page, or null. `max <= 0` disables inlining and
+ * short-circuits BEFORE any filesystem access, so a vault that opts out keeps
+ * recall page-body-I/O-free (issue #68's cheap-recall invariant). Otherwise the
+ * read is bounded: it fires only for skill/case results (which exist only when
+ * the trajectories feature is on) and only the top-N ranked hits.
+ */
+function inlineSkillBody(r, max = DEFAULT_RECALL_SKILL_INLINE_MAX) {
+    if (max <= 0)
+        return null;
+    if (!isSkillOrCase(r))
+        return null;
+    if (!r.path || !existsSync(r.path))
+        return null;
+    // Normalize CRLF first so the LF-anchored frontmatter strip below works on
+    // Windows-authored / git-autocrlf'd vaults (otherwise the raw YAML leaks in).
+    let body = readFileSync(r.path, "utf-8").replace(/\r\n/g, "\n");
+    body = body.replace(/^---\n[\s\S]*?\n---\n/, "").trim(); // strip YAML frontmatter
+    if (!body)
+        return null;
+    if (body.length > max) {
+        body = `${body.slice(0, max)}\n…(truncated — \`read\` the path above for the full page)`;
+    }
+    return body;
+}
+/**
+ * A backtick fence guaranteed longer than any backtick run inside `body`.
+ * Skill/case pages routinely embed their own fenced code blocks; CommonMark
+ * closes a fenced block only on a fence of length >= the opener, so opening
+ * with (longest inner run + 1, min 3) keeps an inlined body from terminating
+ * the wrapper early — and stays safe even when truncation cuts mid-fence.
+ */
+function codeFenceFor(body) {
+    let longest = 0;
+    for (const run of body.match(/`+/g) ?? [])
+        longest = Math.max(longest, run.length);
+    return "`".repeat(Math.max(3, longest + 1));
+}
+/** Indented, fence-safe lines wrapping an inlined skill/case body. */
+function inlineBlockLines(body, indent) {
+    const fence = codeFenceFor(body);
+    return [
+        "",
+        `${indent}${fence}`,
+        ...body.split("\n").map((line) => `${indent}${line}`),
+        `${indent}${fence}`,
+    ];
+}
+/**
+ * Format recall results as a compact system-prompt section.
+ *
+ * Two render modes (issue #68):
+ * - Default / `linksOnly: false` — preview-inline. For ordinary pages this is
+ *   byte-for-byte the pre-fix small-vault rendering (no regression); the
+ *   resolvable read-path + new footer copy are confined to links-first, where
+ *   there is no inline content and the agent MUST resolve a link.
+ * - `linksOnly: true` — stage-1 "links-first": a ranked list of links carrying
+ *   id, title, type, score, and a single short snippet, each with a resolvable
+ *   `read <path>`. The agent expands the links it wants on demand (stage 2).
+ *   Used above the vault-size threshold to keep large vaults from flooding context.
+ *
+ * `skillInlineMax` (default `DEFAULT_RECALL_SKILL_INLINE_MAX`) caps how much of a
+ * skill/case body is inlined; 0 disables inlining (pure links-first for those too).
+ */
+export function formatRecallContext(results, opts = {}) {
+    if (results.length === 0)
+        return "";
+    const skillInlineMax = opts.skillInlineMax ?? DEFAULT_RECALL_SKILL_INLINE_MAX;
+    const hasLayered = results.some((r) => r.vaultLabel);
+    const label = hasLayered ? " (personal + project)" : "";
+    // Salience nudge: when a distilled skill/case matches, tell the agent to
+    // apply it BEFORE experimenting (the dominant cost is recall non-adherence).
+    const hasSkill = results.some(isSkillOrCase);
+    const skillNudge = "⚠\ufe0f A distilled skill/case below matches this task — read and APPLY it BEFORE experimenting on your own.";
+    if (opts.linksOnly) {
+        const lines = [
+            "## Relevant Wiki Knowledge (links-first)",
+            "",
+            `_${results.length} page(s) matched your query${label}, ranked. Two-stage recall: links only — open the ones you need to read their full content._`,
+            "",
+        ];
+        if (hasSkill)
+            lines.splice(1, 0, "", skillNudge);
+        results.forEach((r, i) => {
+            const vaultTag = r.vaultLabel ? ` ${r.vaultLabel}` : "";
+            const snippet = linkSnippet(r.preview);
+            const tail = snippet ? ` — ${snippet}` : "";
+            lines.push(`${i + 1}. **[[${r.id}]]** — *${r.type}* — score ${r.score.toFixed(1)}${vaultTag} — ${r.title}${tail}`);
+            // Surface a read-resolvable path so expansion is a single, first-try
+            // `read` (issue: wikilink ids aren't resolvable by the file read tool).
+            if (r.path)
+                lines.push(`   ↳ \`read ${r.path}\``);
+            // Skills/case carve-out: inline the body so the agent doesn't have to
+            // (and often won't) expand the link before acting.
+            const inl = inlineSkillBody(r, skillInlineMax);
+            if (inl)
+                lines.push(...inlineBlockLines(inl, "   "));
+        });
+        lines.push("", "Call `read` on the exact path shown under each link to pull its full content." +
+            " Add new findings via wiki_ensure_page or wiki_retro.", "");
+        return lines.join("\n");
+    }
+    const lines = [
+        "## Relevant Wiki Knowledge",
+        "",
+        `_${results.length} page(s) matched your query${label}._`,
+        "",
+    ];
+    if (hasSkill)
+        lines.splice(1, 0, "", skillNudge);
+    for (const r of results) {
+        const vaultTag = r.vaultLabel ? ` ${r.vaultLabel}` : "";
+        lines.push(`- **[[${r.id}]]** — *${r.type}* — ${r.title}${vaultTag}`);
+        // Skills/case carve-out: inline the body (adherence > context-economy). Only
+        // here does the default path deviate from the pre-fix small-vault render —
+        // and only when a skill/case matched (i.e. the trajectories feature is on),
+        // so ordinary pages stay byte-for-byte unchanged (#68 no-regression promise).
+        const inl = inlineSkillBody(r, skillInlineMax);
+        if (inl) {
+            // Resolvable path so a truncated inline body is one `read` away.
+            if (r.path)
+                lines.push(`  ↳ \`read ${r.path}\``);
+            lines.push(...inlineBlockLines(inl, "  "));
+        }
+        else if (r.preview) {
+            // Truncate preview to one line
+            const preview = r.preview.length > 120 ? `${r.preview.slice(0, 120)}…` : r.preview;
+            lines.push(`  ${preview}`);
+        }
+        lines.push("");
+    }
+    lines.push("Use `read` to view full pages. Add new findings via wiki_ensure_page or wiki_retro.", "");
+    return lines.join("\n");
+}
+// ─── Tool Registration ──────────────────────────────────
+/**
+ * Register the `wiki_recall` tool.
+ * The model can call this explicitly to search the wiki.
+ * It is also called automatically via before_agent_start hook.
+ */
+export function registerWikiRecall(pi, runtime) {
+    pi.registerTool({
+        name: "wiki_recall",
+        label: "Wiki Recall",
+        description: "Search the wiki for pages relevant to a query. " +
+            "Returns matching page IDs, titles, types, and content previews (small vaults) " +
+            "or a ranked list of links to expand with `read` (large vaults, two-stage recall). " +
+            "Called automatically at session start — use explicitly to dig deeper.",
+        promptSnippet: "Recall wiki knowledge relevant to the current task",
+        promptGuidelines: [
+            "Use wiki_recall at the START of every task to find relevant wiki knowledge.",
+            "The extension auto-calls wiki_recall — but calling it explicitly with specific terms gets better results.",
+        ],
+        parameters: Type.Object({
+            query: Type.String({
+                description: "Search query — use the user's full request or key terms",
+            }),
+            max_results: Type.Optional(Type.Number({ description: "Max results (default: 5, max: 10)", default: 5 })),
+        }),
+        async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+            const paths = resolveVaultPaths(ctx.cwd ?? process.cwd());
+            if (!existsSync(join(paths.dotWiki, "config.json"))) {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: "No wiki vault found at this location. Initialize one with wiki_bootstrap first.",
+                        },
+                    ],
+                    details: { error: "no_vault" },
+                    isError: true,
+                };
+            }
+            const maxResults = Math.min(params.max_results ?? 5, 10);
+            const vaultDiagnostics = inspectVaultFormat(paths).diagnostics;
+            const diagnosticText = vaultDiagnostics.length
+                ? `\n\nDiagnostics: ${vaultDiagnostics.map((diagnostic) => diagnostic.code).join(", ")}`
+                : "";
+            // Use layered hybrid search: personal vault + project vault, blending
+            // lexical scoring with precomputed semantic embeddings when available.
+            // No embeddings / no embedder => pure lexical, no network call.
+            if (runtime)
+                runtime.ensureConfig(ctx.cwd ?? paths.root);
+            const results = await searchWikiHybrid(paths, params.query, maxResults, 0, true, {
+                config: runtime?.config,
+            });
+            if (results.length === 0) {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: `No wiki pages found matching "${params.query}". The wiki is empty — use wiki_retro to start building knowledge.${diagnosticText}`,
+                        },
+                    ],
+                    details: {
+                        query: params.query,
+                        matches: [],
+                        diagnostics: vaultDiagnostics,
+                    },
+                };
+            }
+            const hasPersonal = results.some((r) => r.vaultLabel);
+            const layerTag = hasPersonal ? " (personal + project)" : "";
+            // Two-stage gate (issue #68): large vaults return ranked LINKS only;
+            // the agent expands chosen links on demand via `read`. Small vaults keep
+            // the inline-preview behavior. Page count is read from the registry only.
+            const linksFirst = shouldUseLinksFirst(vaultPageCount(paths, true), runtime?.config);
+            if (linksFirst) {
+                const linkLines = results
+                    .map((r, i) => {
+                    const vault = r.vaultLabel ? ` ${r.vaultLabel}` : "";
+                    const snippet = linkSnippet(r.preview);
+                    const tail = snippet ? ` — ${snippet}` : "";
+                    return `${i + 1}. [[${r.id}]] — ${r.title} (${r.type}, score ${r.score.toFixed(1)})${vault}\n   Path: ${r.path}${tail}`;
+                })
+                    .join("\n");
+                const text = [
+                    `Found ${results.length} wiki page(s) matching "${params.query}"${layerTag} (two-stage recall — ranked links, expand on demand):`,
+                    "",
+                    linkLines,
+                    "",
+                    "Call `read` on the path(s) you need to pull full content.",
+                ].join("\n") + diagnosticText;
+                return {
+                    content: [{ type: "text", text }],
+                    details: {
+                        query: params.query,
+                        mode: "links",
+                        matches: results,
+                        diagnostics: vaultDiagnostics,
+                    },
+                };
+            }
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: `Found ${results.length} wiki page(s) matching "${params.query}"${layerTag}:\n\n${results
+                            .map((r) => {
+                            const vault = r.vaultLabel ? ` ${r.vaultLabel}` : "";
+                            return `## [[${r.id}]] — ${r.title}${vault}\nType: ${r.type}\nPath: ${r.path}\n\n${r.preview}`;
+                        })
+                            .join("\n\n---\n\n")}${diagnosticText}`,
+                    },
+                ],
+                details: {
+                    query: params.query,
+                    mode: "preview",
+                    matches: results,
+                    diagnostics: vaultDiagnostics,
+                },
+            };
+        },
+    });
+}

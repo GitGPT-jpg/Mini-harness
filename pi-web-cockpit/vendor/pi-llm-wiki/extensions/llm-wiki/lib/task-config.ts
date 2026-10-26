@@ -1,0 +1,596 @@
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { parse as parseYaml } from "yaml";
+import {
+  detectHost,
+  type HostKind,
+  listGlobalSettingsFiles,
+  listProjectSettingsFiles,
+  resolveGlobalSettingsPath,
+  resolveProjectSettingsPath,
+} from "./host.js";
+import type { WikilinkValidationMode } from "./knowledge-links.js";
+
+/**
+ * Configuration for the background-task lane (issue #64, part of #63).
+ *
+ * The wiki's intelligent work (ingest synthesis, embeddings, topic inference)
+ * can run off the main agent thread on a model of the user's choosing. This
+ * module resolves that configuration from pi's namespaced settings, mirroring
+ * the approach used by pi-observational-memory.
+ *
+ * Resolution order (later wins):
+ *   1. built-in DEFAULTS
+ *   2. global settings:  <agentDir>/{settings.json,config.yml}
+ *   3. project settings: <cwd>/{.pi,.omp}/{settings.json,config.yml}
+ *
+ * Both host layouts are read (see ./host.ts): pi uses `.pi`, oh-my-pi uses
+ * `.omp`, and each file is keyed by the namespaced `llm-wiki` section.
+ *
+ * When `taskModel` is unset, the background lane falls back to the session
+ * model (see Runtime.resolveModel), so the feature is zero-config by default.
+ */
+export interface TaskConfig {
+  /**
+   * Model used for background wiki tasks. When undefined, the session model
+   * is used. The surface for setting this (config field, /command, per-call
+   * override) is built in issue #69; this module only reads it.
+   */
+  taskModel?: { provider: string; id: string };
+
+  /**
+   * Embedding provider for background write-time embeddings (issue #66).
+   * Only "openai" / "openai-compatible" are supported. When undefined,
+   * embeddings are disabled entirely (silent no-op) — this is the default,
+   * so the feature is strictly opt-in.
+   */
+  embeddingProvider?: string;
+  /** Embedding model id (default: text-embedding-3-small). */
+  embeddingModel?: string;
+  /** OpenAI-compatible base URL (default: https://api.openai.com or OPENAI_BASE_URL). */
+  embeddingBaseUrl?: string;
+  /**
+   * Embedding API key. Prefer `embeddingApiKeyEnv` to avoid storing secrets in
+   * settings files; this direct field exists for parity but is discouraged.
+   */
+  embeddingApiKey?: string;
+  /** Env var name to read the embedding API key from (default: OPENAI_API_KEY). */
+  embeddingApiKeyEnv?: string;
+
+  /**
+   * Explicit LLM endpoint for the MCP ingest lane (hosts without pi's model
+   * registry). Mirrors the embedding* fields; unused by the pi extension,
+   * which resolves the task model through the session registry instead.
+   * Prefer taskModelApiKeyEnv to avoid storing secrets in settings files.
+   */
+  taskModelBaseUrl?: string;
+  taskModelApiKey?: string;
+  taskModelApiKeyEnv?: string;
+
+  /**
+   * Weight of the semantic (cosine) signal when blending with lexical score in
+   * hybrid recall (issue #67). 0 = pure lexical, 1 = pure semantic boost.
+   * Default 0.5. Only takes effect when embeddings exist AND an embedder is
+   * configured; otherwise recall stays 100% lexical.
+   */
+  semanticWeight?: number;
+
+  /**
+   * Two-stage recall gate (issue #68). When the vault's registered page count
+   * is STRICTLY GREATER THAN this threshold, recall switches to "links-first"
+   * mode: it returns a ranked list of links (id, title, type, score, 1-line
+   * snippet) instead of inline content previews, and the agent expands chosen
+   * links on demand via `read`. At or below the threshold, the current
+   * preview-inline behavior is preserved (no regression for small vaults).
+   *
+   * Page-count (not token-budget) was chosen deliberately: it is derived from
+   * `meta/registry.json` in O(1) with zero extra file I/O, so the gate itself
+   * never reads page bodies — token estimation would require touching every
+   * page, defeating the "cheap recall" goal. Default 50. Set to 0 to force
+   * links-first for any non-empty vault, or a very large number to always keep
+   * previews inline. Clamped to a non-negative integer.
+   */
+  recallLinksThreshold?: number;
+
+  /**
+   * Max characters of a distilled `skill`/`case` body inlined directly into a
+   * recall block before truncation (recall-adherence fix). Skills/cases are
+   * meant to be APPLIED immediately, so links-first recall inlines their short
+   * body instead of a bare link the agent often skips. Set to 0 to DISABLE
+   * inlining entirely — skills/cases then fall back to the normal link/preview
+   * path (pure links-first), and no page body is read at format time. Only
+   * relevant when the trajectories feature is on (skill/case pages exist only
+   * then). Default 1600. Clamped to a non-negative integer. Mirrors the
+   * `recallLinksThreshold` knob — the other context-window lever for recall.
+   */
+  recallSkillInlineMax?: number;
+
+  /**
+   * Surface wiki activity in the UI (issue #77). When enabled (the default),
+   * the status line reflects recall hits and the periodic observe/retro
+   * reminder is shown to the user (`display: true`) instead of being injected
+   * silently. Set to `false` to restore the previous quiet behavior — a static
+   * status line and a hidden (`display: false`) reminder — for users who do
+   * not want any chat-level wiki notices.
+   */
+  notices?: boolean;
+
+  /**
+   * Run automatic recall injection in the `before_agent_start` hook — the
+   * per-turn wiki recall that surfaces relevant pages without the agent asking.
+   * Default `true` for backward compatibility.
+   *
+   * Set to `false` to disable ONLY the automatic recall search + injection. The
+   * `wiki_recall` tool, the MCP tools, and the `/wiki-*` commands stay
+   * registered and fully usable for explicit use (issue #262). This is for
+   * users who run the wiki as a deliberately-invoked research tool alongside
+   * another memory system. Distinct from `notices` (UI visibility) and
+   * `ambientPersonalVault` (whether the personal vault applies): this directly
+   * gates the recall in `index.ts`.
+   */
+  autoRecall?: boolean;
+
+  /**
+   * Let the PERSONAL wiki act as this project's ambient vault when the project
+   * has no wiki of its own.
+   *
+   * Ambient surfaces are the ones that fire without the user asking: the
+   * session notice, the periodic observe/retro reminder, and `before_agent_start`
+   * recall injection. `resolveVaultRoot` falls back to the personal vault when
+   * a project has none, so with this on those surfaces speak up in EVERY
+   * directory once a personal vault exists — injecting reminders and unrelated
+   * cross-project recall hits into repositories where no wiki was initialized.
+   *
+   * Host-dependent default, because the two hosts disagree on what silence
+   * means for a globally installed plugin:
+   *   - pi  → `true`  (historical behavior, unchanged)
+   *   - omp → `false` (a repository without a wiki stays quiet)
+   *
+   * The wiki TOOLS are registered either way, so `/wiki-init` and
+   * `wiki_bootstrap` always work; only the unprompted injections are gated.
+   */
+  ambientPersonalVault?: boolean;
+
+  /**
+   * Agent-trajectory working-memory (capture → distill → recall), issue #80.
+   * OPT-IN, default OFF: only an explicit `trajectories: true` enables it.
+   * When off, the trajectory tools are never registered (see index.ts), so
+   * they cost nothing in the system prompt for the ~95% who don't use them.
+   */
+  trajectories?: boolean;
+
+  /**
+   * Language for background ingest synthesis narrative content (issue #124).
+   * BCP 47 language tag (e.g. "ru", "fr"). When unset, synthesis defaults to
+   * English. Applies to titles, summaries, takeaways, descriptions, etc.; raw
+   * source content and technical identifiers remain unchanged.
+   */
+  synthesisLanguage?: string;
+
+  /**
+   * Max output tokens for the synthesizer sub-agent (issue #160). Default 16384.
+   * Reasoning models consume tokens on thinking, so 4096 is too low — the
+   * response truncates before commit_synthesis can be called.
+   */
+  synthesisMaxTokens?: number;
+
+  /**
+   * Wikilink gate applied to the ingested source body before pages are
+   * written (issue #172, Layer 2). Reuses the Layer 1 resolver.
+   *   - "off"       : no-op.
+   *   - "warn"      : write proceeds; unresolved/ambiguous links are reported.
+   *   - "strict"    : block the write (commit returns ok:false) if any link is unresolvable.
+   *   - "normalize" : rewrite resolvable links to their canonical id, then write.
+   * Default "warn". See `resolveWikilinkValidation`.
+   */
+  wikilinkValidation?: WikilinkValidationMode;
+
+  /**
+   * User-defined page types for wiki_ensure_page (issue #169). Merges with
+   * the 7 built-in types (entity, concept, synthesis, analysis, requirement,
+   * skill, case). Each key is the type name; each value is the folder name
+   * inside wiki/. Example: { "decision": "decisions", "metric": "metrics" }
+   * → wiki_ensure_page(type="decision") creates wiki/decisions/<slug>.md.
+   * Custom types use a generic page template (no per-type templates).
+   */
+  customTypes?: Record<string, string>;
+}
+
+export const TASK_DEFAULTS: TaskConfig = {};
+
+/**
+ * Resolve whether user-facing wiki notices are enabled (issue #77). Defaults
+ * to `true`; only an explicit `notices: false` disables them.
+ */
+export function noticesEnabled(config: TaskConfig | undefined): boolean {
+  return config?.notices !== false;
+}
+
+/**
+ * Resolve whether automatic `before_agent_start` recall is enabled (issue
+ * #262). Same polarity as {@link noticesEnabled}: defaults to `true`; only an
+ * explicit `autoRecall: false` disables the automatic recall injection. The
+ * `wiki_recall` tool, MCP tools, and `/wiki-*` commands are unaffected.
+ */
+export function autoRecallEnabled(config: TaskConfig | undefined): boolean {
+  return config?.autoRecall !== false;
+}
+
+const WIKILINK_VALIDATION_MODES: readonly WikilinkValidationMode[] = [
+  "off",
+  "warn",
+  "strict",
+  "normalize",
+];
+
+/**
+ * Resolve the wikilink write-gate mode (issue #172, Layer 2). Defaults to
+ * `warn` — ingest always writes and reports; only an explicit `strict` blocks.
+ * Unknown values fall back to `warn` rather than failing the ingest.
+ */
+export function resolveWikilinkValidation(config: TaskConfig | undefined): WikilinkValidationMode {
+  const v = config?.wikilinkValidation;
+  if (v && (WIKILINK_VALIDATION_MODES as readonly string[]).includes(v)) return v;
+  return "warn";
+}
+
+/**
+ * Resolve whether the personal vault may serve as this project's ambient
+ * vault. Explicit `ambientPersonalVault` wins; otherwise the host decides
+ * (see the field docs on {@link TaskConfig.ambientPersonalVault}).
+ */
+export function personalVaultIsAmbient(
+  config: TaskConfig | undefined,
+  host: HostKind = detectHost(),
+): boolean {
+  if (typeof config?.ambientPersonalVault === "boolean") return config.ambientPersonalVault;
+  return host === "pi";
+}
+
+/**
+ * Resolve whether agent-trajectory working-memory is enabled (issue #80).
+ * INVERSE polarity of `noticesEnabled`: defaults to `false`; only an explicit
+ * `trajectories: true` turns it on.
+ */
+export function trajectoriesEnabled(config: TaskConfig | undefined): boolean {
+  return config?.trajectories === true;
+}
+
+const SETTINGS_KEY = "llm-wiki";
+
+function readModelSpec(value: unknown): { provider: string; id: string } | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const v = value as Record<string, unknown>;
+  if (typeof v.provider === "string" && typeof v.id === "string" && v.provider && v.id) {
+    return { provider: v.provider, id: v.id };
+  }
+  return undefined;
+}
+
+function readNamespacedConfig(path: string): Partial<TaskConfig> {
+  try {
+    const raw = readSettingsObject(path);
+    const nested = raw[SETTINGS_KEY];
+    if (!nested || typeof nested !== "object") return {};
+    const section = nested as Record<string, unknown>;
+    const out: Partial<TaskConfig> = {};
+    const taskModel = readModelSpec(section.taskModel);
+    if (taskModel) out.taskModel = taskModel;
+
+    for (const key of [
+      "embeddingProvider",
+      "embeddingModel",
+      "embeddingBaseUrl",
+      "embeddingApiKey",
+      "embeddingApiKeyEnv",
+    ] as const) {
+      const value = section[key];
+      if (typeof value === "string" && value.trim()) out[key] = value.trim();
+    }
+
+    if (typeof section.taskModelBaseUrl === "string")
+      out.taskModelBaseUrl = section.taskModelBaseUrl;
+    if (typeof section.taskModelApiKey === "string") out.taskModelApiKey = section.taskModelApiKey;
+    if (typeof section.taskModelApiKeyEnv === "string") {
+      out.taskModelApiKeyEnv = section.taskModelApiKeyEnv;
+    }
+
+    const weight = section.semanticWeight;
+    if (typeof weight === "number" && Number.isFinite(weight)) {
+      out.semanticWeight = Math.min(1, Math.max(0, weight));
+    }
+
+    const threshold = section.recallLinksThreshold;
+    if (typeof threshold === "number" && Number.isFinite(threshold)) {
+      out.recallLinksThreshold = Math.max(0, Math.floor(threshold));
+    }
+
+    const inlineMax = section.recallSkillInlineMax;
+    if (typeof inlineMax === "number" && Number.isFinite(inlineMax)) {
+      out.recallSkillInlineMax = Math.max(0, Math.floor(inlineMax));
+    }
+
+    if (typeof section.notices === "boolean") {
+      out.notices = section.notices;
+    }
+
+    if (typeof section.autoRecall === "boolean") {
+      out.autoRecall = section.autoRecall;
+    }
+
+    if (typeof section.ambientPersonalVault === "boolean") {
+      out.ambientPersonalVault = section.ambientPersonalVault;
+    }
+
+    if (typeof section.trajectories === "boolean") {
+      out.trajectories = section.trajectories;
+    }
+
+    const lang = section.synthesisLanguage;
+    if (typeof lang === "string" && lang.trim()) {
+      const canonical = validateSynthesisLanguage(lang.trim());
+      if (canonical) out.synthesisLanguage = canonical;
+    }
+
+    const maxTokens = section.synthesisMaxTokens;
+    if (typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0) {
+      out.synthesisMaxTokens = Math.floor(maxTokens);
+    }
+
+    const wl = section.wikilinkValidation;
+    if (typeof wl === "string" && (WIKILINK_VALIDATION_MODES as readonly string[]).includes(wl)) {
+      out.wikilinkValidation = wl as WikilinkValidationMode;
+    }
+
+    const ct = section.customTypes;
+    if (ct && typeof ct === "object" && !Array.isArray(ct)) {
+      const entries = Object.entries(ct as Record<string, unknown>);
+      const valid: Record<string, string> = {};
+      for (const [k, v] of entries) {
+        if (typeof k === "string" && typeof v === "string" && k && v) {
+          valid[k] = v;
+        }
+      }
+      if (Object.keys(valid).length) out.customTypes = valid;
+    }
+
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Parse a `"provider/id"` model reference (issue #69). Splits on the FIRST
+ * slash so model ids that themselves contain slashes (e.g.
+ * `openrouter/meta/llama-3`) are preserved. Returns `undefined` for empty,
+ * slashless, or partial (`provider/` / `/id`) refs so callers can reject bad
+ * input. Whitespace is trimmed.
+ */
+export function parseModelRef(ref: string): { provider: string; id: string } | undefined {
+  const trimmed = ref.trim();
+  const slash = trimmed.indexOf("/");
+  if (slash <= 0) return undefined;
+  const provider = trimmed.slice(0, slash).trim();
+  const id = trimmed.slice(slash + 1).trim();
+  if (!provider || !id) return undefined;
+  return { provider, id };
+}
+
+/**
+ * Validate and canonicalize a BCP 47 language tag for synthesisLanguage (issue #124).
+ * Returns the canonical tag, or undefined if invalid or suspicious.
+ * Uses Intl.getCanonicalLocales for validation; rejects tags containing
+ * newlines, quotes, or other prompt-injection candidates.
+ */
+export function validateSynthesisLanguage(tag: string): string | undefined {
+  // Reject obvious injection attempts: newlines, quotes, braces, angle brackets
+  if (/\n|\r|"|'|<|>|{|}/.test(tag)) return undefined;
+  // Reject if it looks like an instruction (contains "write", "ignore", "translate", etc.)
+  const lower = tag.toLowerCase();
+  if (/\b(write|ignore|translate|system|prompt|instruction)\b/.test(lower)) return undefined;
+  // Basic BCP 47 pattern: language[-script][-region][-variant]*
+  // Must start with 2-3 letter language code
+  if (!/^[a-z]{2,3}(?:-[A-Za-z]{1,8})*$/.test(tag)) return undefined;
+
+  const canonical = Intl.getCanonicalLocales(tag);
+  if (canonical.length === 0) return undefined;
+  return canonical[0];
+}
+
+/**
+ * Read a settings file as a plain object, or `{}` when it is absent or
+ * corrupt. Reads directly (no `existsSync` pre-check) so there is no
+ * check-then-use race: a missing file throws ENOENT, which the catch treats
+ * the same as an empty file.
+ *
+ * `config.yml` / `config.yaml` are parsed as YAML — that is the format oh-my-pi
+ * migrates its settings to. Everything else is JSON. JSON is a YAML subset, so
+ * the YAML parser also accepts a `.yml` file that actually holds JSON.
+ */
+function readSettingsObject(path: string): Record<string, unknown> {
+  try {
+    const text = readFileSync(path, "utf-8");
+    const parsed =
+      path.endsWith(".yml") || path.endsWith(".yaml") ? parseYaml(text) : JSON.parse(text);
+    if (parsed && typeof parsed === "object") return parsed as Record<string, unknown>;
+  } catch {
+    // Missing or corrupt settings file: start from an empty object.
+  }
+  return {};
+}
+
+/**
+ * Rewrite the `llm-wiki` section of the global settings file.
+ */
+function updateGlobalSection(mutate: (section: Record<string, unknown>) => void): void {
+  const settingsPath = resolveGlobalSettingsPath();
+  const raw = readSettingsObject(settingsPath);
+
+  const existing = raw[SETTINGS_KEY];
+  const section: Record<string, unknown> =
+    existing && typeof existing === "object" ? { ...(existing as Record<string, unknown>) } : {};
+
+  mutate(section);
+  raw[SETTINGS_KEY] = section;
+
+  mkdirSync(dirname(settingsPath), { recursive: true });
+  writeFileSync(settingsPath, `${JSON.stringify(raw, null, 2)}\n`, "utf-8");
+}
+
+/**
+ * Rewrite the `llm-wiki` section of the project settings file, preserving every
+ * other top-level key and every other setting in the section.
+ *
+ * The target file is chosen by `resolveProjectSettingsPath` — `.pi/settings.json`
+ * or `.omp/settings.json` depending on host and on what already exists — and is
+ * always JSON, which both hosts read.
+ */
+function updateProjectSection(
+  cwd: string,
+  mutate: (section: Record<string, unknown>) => void,
+): void {
+  const settingsPath = resolveProjectSettingsPath(cwd);
+  const raw = readSettingsObject(settingsPath);
+
+  const existing = raw[SETTINGS_KEY];
+  const section: Record<string, unknown> =
+    existing && typeof existing === "object" ? { ...(existing as Record<string, unknown>) } : {};
+
+  mutate(section);
+  raw[SETTINGS_KEY] = section;
+
+  mkdirSync(dirname(settingsPath), { recursive: true });
+  writeFileSync(settingsPath, `${JSON.stringify(raw, null, 2)}\n`, "utf-8");
+}
+
+/**
+ * Persist (or clear) the wiki background `taskModel` in the PROJECT settings
+ * file under the namespaced `llm-wiki` key (issue #69). Project settings win
+ * over global in `loadTaskConfig`, so this takes effect immediately on the next
+ * config load. Passing `undefined` removes the key (reverting to the session
+ * model).
+ */
+export function persistTaskModel(
+  cwd: string,
+  model: { provider: string; id: string } | undefined,
+): void {
+  updateProjectSection(cwd, (section) => {
+    if (model) {
+      section.taskModel = { provider: model.provider, id: model.id };
+    } else {
+      // biome-ignore lint/performance/noDelete: one-off settings rewrite, not a hot path; removing the key (vs setting undefined) keeps the JSON clean
+      delete section.taskModel;
+    }
+  });
+}
+
+/**
+ * Persist the agent-trajectory flag in the PROJECT settings file under the
+ * namespaced `llm-wiki` key (issue #80). Mirrors `persistTaskModel`: `true`
+ * writes `trajectories: true`; `false` removes the key (reverting to the
+ * default-off behavior).
+ */
+export function persistTrajectoriesEnabled(cwd: string, enabled: boolean): void {
+  updateProjectSection(cwd, (section) => {
+    if (enabled) {
+      section.trajectories = true;
+    } else {
+      // biome-ignore lint/performance/noDelete: one-off settings rewrite, not a hot path; removing the key keeps the JSON clean (default is off)
+      delete section.trajectories;
+    }
+  });
+}
+
+/**
+ * Merge the `llm-wiki` section from every settings file both hosts may use,
+ * lowest precedence first: built-in defaults, then user-level files, then
+ * project-level files. Absent files contribute nothing.
+ */
+export function loadTaskConfig(cwd: string): TaskConfig {
+  const config: TaskConfig = { ...TASK_DEFAULTS };
+  for (const path of listGlobalSettingsFiles()) {
+    Object.assign(config, readNamespacedConfig(path));
+  }
+  for (const path of listProjectSettingsFiles(cwd)) {
+    Object.assign(config, readNamespacedConfig(path));
+  }
+  return config;
+}
+
+// ── Settings source tracking (for /wiki-settings TUI) ──────────
+
+export type SettingScope = "default" | "global" | "project";
+
+/**
+ * Resolve where each setting is defined: project > global > default.
+ */
+/** All known setting keys — needed because TASK_DEFAULTS is {} (zero-config). */
+const KNOWN_KEYS = [
+  "taskModel",
+  "embeddingProvider",
+  "embeddingModel",
+  "embeddingBaseUrl",
+  "embeddingApiKey",
+  "embeddingApiKeyEnv",
+  "taskModelBaseUrl",
+  "taskModelApiKey",
+  "taskModelApiKeyEnv",
+  "semanticWeight",
+  "recallLinksThreshold",
+  "recallSkillInlineMax",
+  "notices",
+  "autoRecall",
+  "ambientPersonalVault",
+  "trajectories",
+  "synthesisLanguage",
+  "synthesisMaxTokens",
+  "wikilinkValidation",
+  "customTypes",
+] as const;
+
+export function loadTaskConfigSources(
+  cwd: string,
+): Record<string, { value: unknown; source: SettingScope }> {
+  const globalResult: Record<string, unknown> = {};
+  for (const path of listGlobalSettingsFiles()) {
+    Object.assign(globalResult, readNamespacedConfig(path));
+  }
+  const projectResult: Record<string, unknown> = {};
+  for (const path of listProjectSettingsFiles(cwd)) {
+    Object.assign(projectResult, readNamespacedConfig(path));
+  }
+  const effective = loadTaskConfig(cwd);
+
+  const out: Record<string, { value: unknown; source: SettingScope }> = {};
+  for (const key of KNOWN_KEYS) {
+    if (key in projectResult) out[key] = { value: projectResult[key], source: "project" };
+    else if (key in globalResult) out[key] = { value: globalResult[key], source: "global" };
+    else out[key] = { value: (effective as Record<string, unknown>)[key], source: "default" };
+  }
+  return out;
+}
+
+/**
+ * Generic setting persist: writes any single setting to the chosen scope.
+ */
+export function persistSetting(
+  cwd: string,
+  scope: SettingScope,
+  key: string,
+  value: unknown,
+): void {
+  const mutate = (section: Record<string, unknown>) => {
+    if (value === undefined || value === null) {
+      delete section[key];
+    } else {
+      section[key] = value;
+    }
+  };
+
+  if (scope === "project") {
+    updateProjectSection(cwd, mutate);
+  } else if (scope === "global") {
+    updateGlobalSection(mutate);
+  }
+}

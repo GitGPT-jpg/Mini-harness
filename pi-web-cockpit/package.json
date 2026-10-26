@@ -1,0 +1,18 @@
+{
+  "name": "pi-web-cockpit",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "postinstall": "node harden.mjs"
+  },
+  "dependencies": {
+    "pi-web-ui": "^0.111.0"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.64.1"
+  },
+  "overrides": {
+    "zod": "4.6.7",
+    "undici": "8.12.3"
+  }
+}

@@ -1,34 +1,65 @@
-Mini Harness
-===
-面向训推场景，最小化的harness实践
+# 训推引擎组 Harness（mini-harness）
 
-快速开始
----
-如何构建、安装、运行
+把开源 pi 驾驶舱（pi-web-ui）定制成**训推引擎组专用的推理底座**：锁定 pi 引擎 + Baidu One API 网关，精简掉推理场景用不到的功能，固化领域身份与安全红线，内置可直接使用的提示词模板、推理子代理、领域 skill 与自动维护的知识库（pi-llm-wiki）。
 
-测试
----
-如何执行自动化测试
+> 浏览器驾驶舱 + pi 编码智能体（v1.4.0）。仅本机监听 `127.0.0.1:8787`，带 token 鉴权。
 
-如何贡献
----
-贡献patch流程及质量要求
+## 一键安装
 
-版本信息
----
-本项目的各版本信息和变更历史可以在[这里][changelog]查看。
+```bash
+git clone <本仓库地址> mini-harness
+cd mini-harness
+./setup.sh
+```
 
-维护者
----
-### owners
-* zhangteng14(zhangteng14@baidu.com)
+`setup.sh` 会自动：
+1. 校验 Node.js（>=22.19）与 npm；
+2. 安装固定版本 `pi@1.4.0`（与验证机一致）；
+3. 安装 7 个领域 skill 到 `~/.pi/agent/skills`；
+4. 种入「Baidu One API」模型服务商与模型目录（**不含密钥**，不覆盖你已有配置）；
+5. 安装驾驶舱依赖，`postinstall` 自动执行 `harden.mjs` 完成全部加固与定制；
+6. 在 **桌面** 生成启动器 `训推引擎组 Harness.app`（macOS）。
 
-### committers
-* zhangteng14(zhangteng14@baidu.com)
+## 启动与首次配置
 
-讨论
----
-百度Hi交流群：群号
+- **macOS**：双击桌面「训推引擎组 Harness」图标（无终端黑窗，自动拉起服务并打开浏览器）。
+- **命令行**：`pi-web-cockpit/start-hardened.sh`，然后浏览器打开 `http://localhost:8787`。
 
+首次打开会弹出「首次配置」门禁：进入 **设置 → 模型服务商**，Base URL 已预填
+`https://oneapi-comate.baidu-int.com/v1`，在 API Key 处填入**你自己的 One API Key** 并保存。
+Key 仅保存在本机 `~/.pi/agent/auth.json`，**不会提交到代码库，也不外传**。
 
-[changelog]: http://icode.baidu.com/repos/baidu/ai/mini-harness/blob/master:CHANGELOG.md
+## 做了哪些定制（全部可逆，集中在 `pi-web-cockpit/harden.mjs`）
+
+- **只保留 pi 引擎**：前端引擎清单裁为 pi-only；模型服务商留给用户自填 One API。
+- **推理场景精简**：关闭沙盒 / Goal Mode / Delegate / Plan / 子代理原生入口、多模态音视频、Page Picker；工具懒加载开启（省 token、稳 prompt cache 前缀）；仅保留 `present_files` 成果卡片。
+- **安全加固**：关 remoteSsh、封禁 `__abs__` 任意文件读、禁 `eval`/`browser_page`、关插件市场与自更新（`PI_WEB_MANAGED=1`）。
+- **品牌**：左上角显示「训推引擎组 Harness」。
+- **领域身份**：覆盖组合模板的 `{{soul}}` token，注入推理服务 agent 身份、工作准则与安全红线（其余脚手架 token 不动）。
+- **提示词模板**：隐藏 25 个 pi 内置模板，灌入 7 个从 harness + Ku 沉淀、可直接用的推理模板。
+- **子代理**：保留 explore/review/implement，新增 5 个推理 workflow 子代理。
+- **知识库**：内置 `pi-llm-wiki` 扩展（已做安全审查、移除高危可选依赖子树），后台自动召回/沉淀、无感维护，纯本地不外联。
+- **One API Key 门禁**：首次打开弹窗引导配置（见上）。
+
+## 仓库结构
+
+- `setup.sh` — 可移植一键安装脚本
+- `pi-web-cockpit/harden.mjs` — 幂等、可逆的加固+定制脚本（`npm install` 时经 `postinstall` 自动重放）
+- `pi-web-cockpit/config/models.oneapi.json` — One API 服务商与模型目录种子（无密钥）
+- `pi-web-cockpit/verify-hardened.mjs` — Playwright E2E 验证（对话/文件/终端/Git 四件套 + 门禁）
+- `pi-web-cockpit/vendor/pi-llm-wiki/` — 审查过的知识库扩展源码
+- `skills/` — 7 个领域 skill（安装到 `~/.pi/agent/skills`）
+- `assets/icon.jpg` — 桌面启动器图标源
+- `资产清单.md` — 推理底座可利用资产清单
+
+## 维护
+
+- 改完定制后在 `pi-web-cockpit/` 跑 `node harden.mjs` 即可重放（幂等）。
+- 校验：`cd pi-web-cockpit && node verify-hardened.mjs`（需服务已启动）。
+- 升级 pi 版本：改 `setup.sh` 顶部 `PI_PIN` 后重跑。
+
+## 安全说明
+
+- 服务仅绑定 `127.0.0.1`，并需 URL token；不要把端口暴露到公网。
+- `~/.pi/agent/auth.json`、`~/.pi-web/` 下的口令均在仓库外，`.gitignore` 已排除一切密钥/口令。
+- 编辑 `~/.pi-web/client-state.json` 前需先停服务（运行中会把内存态写回覆盖磁盘）。

@@ -1,0 +1,14 @@
+{
+  "name": "llm-wiki",
+  "displayName": "LLM Wiki",
+  "version": "0.12.5",
+  "description": "Self-maintaining LLM wiki (Karpathy pattern): recall, observe, retro, capture sources, ensure pages, lint, and ingest. 15 tools over MCP.",
+  "author": {
+    "name": "Zosma AI",
+    "url": "https://github.com/zosmaai"
+  },
+  "repository": "https://github.com/zosmaai/pi-llm-wiki",
+  "license": "MIT",
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/hooks.json"
+}

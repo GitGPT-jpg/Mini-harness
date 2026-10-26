@@ -1,0 +1,1226 @@
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { join, relative } from "node:path";
+import { Type } from "typebox";
+import { bootstrapVault } from "./bootstrap.js";
+import { launchEmbedPages, reindexEmbeddings, resolveEmbedder } from "./embeddings.js";
+import { scheduleReindex } from "./indexing.js";
+import { runIngestSynthesis } from "./ingest-worker.js";
+import { createKnowledgeDocument, parseMarkdownFrontmatter, writeKnowledgeDocumentFile, } from "./knowledge-document.js";
+import { applyWikilinkGate, buildWikilinkIndex } from "./knowledge-links.js";
+import { runWikiLint } from "./lint.js";
+import { appendEvent, rebuildMetadata, rebuildMetadataLight } from "./metadata.js";
+import { reindexQmdVault } from "./qmd-indexing.js";
+import { captureFile, captureText, captureUrl } from "./source-packet.js";
+import { loadTaskConfig, parseModelRef, resolveWikilinkValidation } from "./task-config.js";
+import { detectVaultFormat, fmtDate, getVaultPaths, readJson, resolveVaultPaths, slugify, } from "./utils.js";
+import { inspectWritableVault } from "./vault-format.js";
+import { getWikiStatus, reindexWiki, searchRegistry } from "./wiki-service.js";
+/**
+ * All LLM Wiki custom tools.
+ */
+function getPaths(cwd) {
+    return resolveVaultPaths(cwd ?? process.cwd());
+}
+function requireVault(paths) {
+    if (detectVaultFormat(paths.root) === "none") {
+        return { ok: false, reason: `No wiki found at ${paths.root}. Run wiki_bootstrap first.` };
+    }
+    return { ok: true };
+}
+/**
+ * Dispatch a heavy mutating action to the background runtime and report its
+ * result (issue #77). The agent turn is never blocked: `work` runs off-thread
+ * and the returned one-line summary is surfaced to the user via
+ * `runtime.report()`. Returns an immediate, non-blocking tool result.
+ *
+ * When no runtime is available (unit tests / degraded mode), `work` runs
+ * synchronously and its summary is returned inline, preserving prior behavior.
+ * Retrieval tools (search/read/recall/status) never use this — the model needs
+ * their output inline.
+ */
+async function dispatchReported(runtime, ctx, opts) {
+    if (!runtime) {
+        const summary = await opts.work();
+        return {
+            content: [{ type: "text", text: summary }],
+            details: { background: false, ...opts.details },
+        };
+    }
+    runtime.launchReported({ hasUI: ctx.hasUI, ui: ctx.ui }, opts.label, opts.work);
+    return {
+        content: [{ type: "text", text: opts.started }],
+        details: { background: true, ...opts.details },
+    };
+}
+// ─── 1. wiki_bootstrap ──────────────────────────────────
+export function registerWikiBootstrap(pi) {
+    pi.registerTool({
+        name: "wiki_bootstrap",
+        label: "Wiki Bootstrap",
+        description: "Initialize a new LLM Wiki vault with the 4-layer architecture. " +
+            "Creates config, templates, schema, and metadata scaffolding.",
+        promptSnippet: "Initialize a new LLM Wiki vault",
+        promptGuidelines: ["Use wiki_bootstrap when the user wants to start a new wiki."],
+        parameters: Type.Object({
+            topic: Type.String({ description: "Main topic of the wiki" }),
+            mode: Type.Optional(Type.String({ description: "personal or company (default: personal)" })),
+            root: Type.Optional(Type.String({ description: "Root directory (default: current directory)" })),
+        }),
+        async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+            const root = params.root ?? ctx.cwd ?? process.cwd();
+            const mode = params.mode || "personal";
+            const paths = getVaultPaths(root);
+            const result = bootstrapVault(paths, { topic: params.topic, mode });
+            if (!result.ok) {
+                return {
+                    content: [{ type: "text", text: `Wiki vault error: ${result.diagnostics[0].message}` }],
+                    details: {
+                        error: result.diagnostics[0].code,
+                        diagnostics: result.diagnostics,
+                    },
+                    isError: true,
+                };
+            }
+            if (!result.projection.ok) {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: `✅ Wiki bootstrapped but projection rebuild had issues: ${result.projection.diagnostics
+                                .map((diagnostic) => `${diagnostic.code}: ${diagnostic.message}`)
+                                .join("; ")}`,
+                        },
+                    ],
+                    details: {
+                        root,
+                        mode,
+                        topic: params.topic,
+                        diagnostics: result.projection.diagnostics,
+                    },
+                };
+            }
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: [
+                            `✅ Wiki bootstrapped at \`${paths.root}\``,
+                            "**Scope:** project-local",
+                            "",
+                            "**Structure:**",
+                            "- .llm-wiki/raw/sources/ — immutable source packets",
+                            "- .llm-wiki/wiki/ — editable knowledge pages",
+                            "- .llm-wiki/meta/ — auto-generated metadata",
+                            "- .llm-wiki/ — config and templates",
+                            "- .llm-wiki/WIKI_SCHEMA.md — operating rules",
+                            "",
+                            "Next: Use wiki_capture_source to add your first source.",
+                        ].join("\n"),
+                    },
+                ],
+                details: { root, mode, topic: params.topic },
+            };
+        },
+    });
+}
+// ─── 2. wiki_capture_source ─────────────────────────────
+export function registerWikiCaptureSource(pi, runtime) {
+    pi.registerTool({
+        name: "wiki_capture_source",
+        label: "Wiki Capture Source",
+        description: "Capture a URL, local file, or pasted text into an immutable source packet and skeleton source page.",
+        promptSnippet: "Capture a source into the wiki as an immutable packet",
+        promptGuidelines: [
+            "Use wiki_capture_source when the user provides a URL, file, or text to capture.",
+            "After capture, read the extracted text and update the skeleton source page.",
+        ],
+        parameters: Type.Object({
+            url: Type.Optional(Type.String({ description: "URL to capture" })),
+            file_path: Type.Optional(Type.String({ description: "Local file path to capture" })),
+            text: Type.Optional(Type.String({ description: "Pasted text content" })),
+            title: Type.Optional(Type.String({ description: "Title for pasted text" })),
+        }),
+        async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+            const paths = getPaths(ctx.cwd);
+            const vaultCheck = inspectWritableVault(paths);
+            if (!vaultCheck.ok) {
+                return {
+                    content: [
+                        { type: "text", text: `Wiki vault error: ${vaultCheck.diagnostics[0].message}` },
+                    ],
+                    details: {
+                        error: vaultCheck.diagnostics[0].code,
+                        diagnostics: vaultCheck.diagnostics,
+                    },
+                    isError: true,
+                };
+            }
+            let result;
+            if (params.url) {
+                result = await captureUrl(pi, paths, params.url, signal);
+            }
+            else if (params.file_path) {
+                result = await captureFile(pi, paths, params.file_path, signal);
+            }
+            else if (params.text) {
+                result = captureText(paths, params.text, params.title);
+            }
+            else {
+                return {
+                    content: [{ type: "text", text: "❌ Provide one of: url, file_path, or text" }],
+                    details: { error: "missing_source" },
+                    isError: true,
+                };
+            }
+            if (runtime) {
+                scheduleReindex(runtime, { hasUI: ctx.hasUI, ui: ctx.ui }, paths);
+            }
+            else {
+                rebuildMetadataLight(paths);
+            }
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: [
+                            `✅ Captured source **${result.sourceId}**`,
+                            "",
+                            `- Packet: \`${result.packetPath}\``,
+                            `- Skeleton page: \`${result.sourcePagePath}\``,
+                            "",
+                            "**Next:** Read the extracted text and update the source page with a proper summary, entities, and concepts.",
+                        ].join("\n"),
+                    },
+                ],
+                details: {
+                    sourceId: result.sourceId,
+                    packetPath: result.packetPath,
+                    sourcePagePath: result.sourcePagePath,
+                    extractedPreview: result.extracted.slice(0, 300),
+                },
+            };
+        },
+    });
+}
+// ─── 3. wiki_ingest ─────────────────────────────────────
+export function registerWikiIngest(pi, runtime) {
+    pi.registerTool({
+        name: "wiki_ingest",
+        label: "Wiki Ingest",
+        description: "Process uningested source packets. By default synthesis runs in the background (non-blocking) on the configured task model; pass background=false to return extracted content for the main agent to synthesize itself.",
+        promptSnippet: "Ingest source packets (background synthesis by default)",
+        promptGuidelines: [
+            "Use wiki_ingest when the user wants to process captured sources.",
+            "By default ingestion runs in the BACKGROUND — you'll get a notification, not extracted content. Do NOT synthesize those sources yourself.",
+            "If the tool returns extracted content (background unavailable, or background=false), then read each source's extracted.md, update its source page, create entity/concept pages, and cross-reference.",
+            "The extension auto-updates metadata — you do NOT need to edit meta/ files.",
+        ],
+        parameters: Type.Object({
+            source_id: Type.Optional(Type.String({ description: "Specific source ID to ingest. Leave empty for all new." })),
+            batch_size: Type.Optional(Type.Number({ description: "Max sources to process (default: 3, max: 5)", default: 3 })),
+            background: Type.Optional(Type.Boolean({
+                description: "Synthesize in the background without blocking (default: true). Set false to return extracted content for the main agent to synthesize.",
+                default: true,
+            })),
+            model: Type.Optional(Type.String({
+                description: "Per-call model override as 'provider/id' (e.g. anthropic/claude-haiku). Overrides the configured wiki taskModel for this call; defaults to the configured/session model.",
+            })),
+        }),
+        async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+            const paths = getPaths(ctx.cwd);
+            const vaultCheck = inspectWritableVault(paths);
+            if (!vaultCheck.ok) {
+                return {
+                    content: [
+                        { type: "text", text: `Wiki vault error: ${vaultCheck.diagnostics[0].message}` },
+                    ],
+                    details: {
+                        error: vaultCheck.diagnostics[0].code,
+                        diagnostics: vaultCheck.diagnostics,
+                    },
+                    isError: true,
+                };
+            }
+            const batchSize = Math.min(params.batch_size ?? 3, 5);
+            if (!existsSync(paths.rawSources)) {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: "No raw/sources/ directory. Capture sources first with wiki_capture_source.",
+                        },
+                    ],
+                    details: { error: "no_sources" },
+                };
+            }
+            const packets = readdirSync(paths.rawSources)
+                .filter((d) => d.startsWith("SRC-"))
+                .sort();
+            const registry = readJson(join(paths.meta, "registry.json"), {
+                version: "1.0",
+                last_updated: "",
+                pages: {},
+            });
+            const ingested = new Set();
+            for (const [id, entry] of Object.entries(registry.pages)) {
+                if (entry.type === "source" && entry.status !== "skeleton") {
+                    const base = id.split("/").pop();
+                    if (base)
+                        ingested.add(base);
+                }
+            }
+            let toProcess = packets.filter((p) => !ingested.has(p));
+            if (params.source_id) {
+                if (!toProcess.includes(params.source_id) && !packets.includes(params.source_id)) {
+                    return {
+                        content: [
+                            { type: "text", text: `Source ${params.source_id} not found or already ingested.` },
+                        ],
+                        details: { source_id: params.source_id, status: "not_found" },
+                    };
+                }
+                toProcess = [params.source_id];
+            }
+            const batch = toProcess.slice(0, batchSize);
+            if (batch.length === 0) {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: "✅ All sources ingested. Use wiki_capture_source to add new ones.",
+                        },
+                    ],
+                    details: { ingested: ingested.size, total: packets.length },
+                };
+            }
+            const sources = batch.map((id) => {
+                const extractedPath = join(paths.rawSources, id, "extracted.md");
+                const manifestPath = join(paths.rawSources, id, "manifest.json");
+                const extracted = existsSync(extractedPath) ? readFileSync(extractedPath, "utf-8") : "";
+                const manifest = readJson(manifestPath, {});
+                // Vault-relative path used in tool messages so the read tool can open
+                // the file from the vault root (fix #101: agent previously got
+                // "raw/sources/..." and failed on new-layout vaults).
+                const relRaw = relative(paths.root, paths.rawSources);
+                return { id, extracted, manifest, relRaw };
+            });
+            // ── Background synthesis (issue #65) ──────────────────
+            // Default path: dispatch each source to a background sub-agent so the
+            // main agent is not blocked. Falls back to the synchronous return below
+            // when no runtime/model is available (resolveModel ok:false).
+            const wantBackground = params.background !== false;
+            if (wantBackground && runtime) {
+                runtime.ensureConfig(ctx.cwd);
+                // Per-call model override (issue #69): 'provider/id' beats the
+                // configured taskModel; a malformed/unknown ref degrades to the
+                // configured/session model inside resolveModel.
+                const override = params.model ? parseModelRef(params.model) : undefined;
+                const resolved = await runtime.resolveModel(ctx, override);
+                if (resolved.ok) {
+                    const launchCtx = { hasUI: ctx.hasUI, ui: ctx.ui };
+                    for (const s of sources) {
+                        runtime.launchTask(launchCtx, `ingest:${s.id}`, async () => {
+                            const committed = await runIngestSynthesis({
+                                model: resolved.model,
+                                apiKey: resolved.apiKey,
+                                headers: resolved.headers,
+                                streamFn: resolved.streamFn,
+                                env: resolved.env,
+                                paths,
+                                sourceId: s.id,
+                                manifest: s.manifest,
+                                extracted: s.extracted,
+                                synthesisLanguage: runtime.config.synthesisLanguage,
+                                wikilinkValidation: runtime.config.wikilinkValidation,
+                            });
+                            if (committed) {
+                                // Background semantic embeddings (#66): embed the pages this
+                                // ingest just wrote, off-thread. No-op when unconfigured.
+                                const pageIds = [
+                                    `sources/${committed.sourceId}`,
+                                    ...committed.entitiesCreated.map((e) => `entities/${e}`),
+                                    ...committed.entitiesLinked.map((e) => `entities/${e}`),
+                                    ...committed.conceptsCreated.map((c) => `concepts/${c}`),
+                                    ...committed.conceptsLinked.map((c) => `concepts/${c}`),
+                                ];
+                                launchEmbedPages(runtime, launchCtx, paths, pageIds, `embed:ingest:${s.id}`);
+                            }
+                            const wl = committed?.wikilinkDiagnostics?.length ?? 0;
+                            const wlNote = wl > 0 ? `, ${wl} wikilink issue${wl === 1 ? "" : "s"}` : "";
+                            const summary = committed
+                                ? `LLM Wiki: ingested ${s.id} → ${committed.entitiesCreated.length} entit${committed.entitiesCreated.length === 1 ? "y" : "ies"}, ${committed.conceptsCreated.length} concept${committed.conceptsCreated.length === 1 ? "" : "s"}${wlNote}`
+                                : `LLM Wiki: ${s.id} produced no synthesis`;
+                            if (ctx.hasUI) {
+                                ctx.ui.notify(summary, committed ? "info" : "warning");
+                            }
+                            // Persistent, user-visible completion report (issue #77) in
+                            // addition to the transient toast above. Notices-gated.
+                            runtime.report(committed ? `✅ ${summary}` : `⚠️ ${summary}`);
+                        });
+                    }
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: [
+                                    `🔄 **Ingesting ${sources.length} source(s) in the background** (${toProcess.length - batch.length} remaining).`,
+                                    "",
+                                    ...sources.map((s) => `- **${s.id}**: ${s.manifest.title || s.id}`),
+                                    "",
+                                    "Synthesis runs on the configured task model without blocking. You'll be notified as each source completes — do NOT synthesize these yourself.",
+                                ].join("\n"),
+                            },
+                        ],
+                        details: {
+                            background: true,
+                            dispatched: sources.map((s) => s.id),
+                            remaining: toProcess.length - batch.length,
+                        },
+                    };
+                }
+            }
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: [
+                            `📥 **${batch.length} source(s) ready** (${toProcess.length - batch.length} remaining)`,
+                            "",
+                            ...sources.map((s) => [
+                                `- **${s.id}**: ${s.manifest.title || s.id}`,
+                                `  - Extracted: ${s.extracted.length} chars`,
+                                `  - Read: \`${s.relRaw}/${s.id}/extracted.md\``,
+                            ].join("\n")),
+                            "",
+                            "**Next steps for each source:**",
+                            "1. Read extracted.md",
+                            "2. Update the skeleton source page in wiki/sources/",
+                            "3. Create/update entity pages in wiki/entities/",
+                            "4. Create/update concept pages in wiki/concepts/",
+                            "5. Add [[wikilinks]] cross-references",
+                            "6. Flag contradictions",
+                            "",
+                            "The extension will auto-update metadata when you're done.",
+                        ].join("\n"),
+                    },
+                ],
+                details: {
+                    batch: sources.map((s) => s.id),
+                    remaining: toProcess.length - batch.length,
+                },
+            };
+        },
+    });
+}
+// ─── 4. wiki_ensure_page ────────────────────────────────
+// Frontmatter fields wiki_ensure_page generates or derives itself (title also
+// determines the filename). Model-supplied values for these are ignored rather
+// than merged (issue #241).
+export const RESERVED_FRONTMATTER = new Set([
+    "type",
+    "title",
+    "created",
+    "updated",
+    "sources",
+    "id",
+]);
+export function registerWikiEnsurePage(pi, runtime) {
+    pi.registerTool({
+        name: "wiki_ensure_page",
+        label: "Wiki Ensure Page",
+        description: "Resolve or safely create a canonical wiki page. Returns the page path.",
+        promptSnippet: "Create a canonical wiki page if it doesn't exist",
+        promptGuidelines: [
+            "Use wiki_ensure_page before creating pages to avoid duplicates.",
+            "Search existing pages first with wiki_search.",
+            "Content may begin with a YAML frontmatter block; its fields are merged into the page frontmatter, and generated fields are reserved.",
+        ],
+        parameters: Type.Object({
+            type: Type.String({
+                description: "Page type: entity | concept | synthesis | analysis | requirement | skill | case (built-in) or any user-defined type from llm-wiki.customTypes config",
+            }),
+            title: Type.String({ description: "Page title" }),
+            content: Type.Optional(Type.String({
+                description: "Optional Markdown body. May begin with a YAML frontmatter block, whose fields are merged into the page frontmatter; generated fields (type, title, created, updated, sources) are reserved and ignored.",
+            })),
+        }),
+        async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+            const paths = getPaths(ctx.cwd);
+            const vaultCheck = inspectWritableVault(paths);
+            if (!vaultCheck.ok) {
+                return {
+                    content: [
+                        { type: "text", text: `Wiki vault error: ${vaultCheck.diagnostics[0].message}` },
+                    ],
+                    details: {
+                        error: vaultCheck.diagnostics[0].code,
+                        diagnostics: vaultCheck.diagnostics,
+                    },
+                    isError: true,
+                };
+            }
+            const config = loadTaskConfig(ctx.cwd);
+            const builtInFolderMap = {
+                entity: "entities",
+                concept: "concepts",
+                synthesis: "syntheses",
+                analysis: "analyses",
+                requirement: "requirements",
+                skill: "skills",
+                case: "cases",
+            };
+            const folderMap = { ...builtInFolderMap, ...config.customTypes };
+            const type = params.type;
+            const slug = slugify(params.title);
+            const folder = folderMap[type] || "concepts";
+            const pagePath = join(paths.wiki, folder, `${slug}.md`);
+            if (existsSync(pagePath)) {
+                return {
+                    content: [{ type: "text", text: `✅ Page already exists: \`${pagePath}\`` }],
+                    details: { path: pagePath, created: false },
+                };
+            }
+            const today = fmtDate();
+            let body = params.content ?? buildPageBody(type, params.title);
+            // #241: models sometimes pass a YAML frontmatter block inside content.
+            // Consume it (with the same hardened parser used for page reads) and merge
+            // its fields into the generated frontmatter, instead of writing the block
+            // verbatim into the body (duplicate frontmatter, and the model's fields
+            // silently never took effect). Generated fields are reserved; a
+            // frontmatter-only content falls back to the template body.
+            const extraFrontmatter = {};
+            if (body.trimStart().startsWith("---")) {
+                const parsed = parseMarkdownFrontmatter(body, `${folder}/${slug}.md`);
+                if (parsed.ok) {
+                    for (const [key, value] of Object.entries(parsed.mapping)) {
+                        if (!RESERVED_FRONTMATTER.has(key)) {
+                            extraFrontmatter[key] = value;
+                        }
+                    }
+                    body = parsed.body.trim() ? parsed.body : buildPageBody(type, params.title);
+                }
+            }
+            // Pre-write wikilink gate (#172): validate/normalize caller-supplied content.
+            const mode = resolveWikilinkValidation(loadTaskConfig(ctx.cwd));
+            let wikilinkIssues = [];
+            if (mode !== "off") {
+                const registry = readJson(join(paths.meta, "registry.json"), { pages: {} });
+                const gate = applyWikilinkGate(body, buildWikilinkIndex(Object.keys(registry.pages)), `${folder}/${slug}`, mode);
+                wikilinkIssues = gate.diagnostics.map((d) => d.message);
+                if (!gate.ok) {
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: `Rejected write — unresolved/ambiguous wikilinks:\n${wikilinkIssues
+                                    .map((m) => `- ${m}`)
+                                    .join("\n")}`,
+                            },
+                        ],
+                        details: { error: "link_validation", issues: wikilinkIssues },
+                        isError: true,
+                    };
+                }
+                if (mode === "normalize")
+                    body = gate.body;
+            }
+            const doc = createKnowledgeDocument(`${folder}/${slug}.md`, {
+                type,
+                title: params.title,
+                created: today,
+                updated: today,
+                ...extraFrontmatter,
+            }, body);
+            mkdirSync(join(paths.wiki, folder), { recursive: true });
+            writeKnowledgeDocumentFile(pagePath, doc);
+            appendEvent(paths, {
+                kind: "ensure_page",
+                page_type: type,
+                title: params.title,
+                path: `${folder}/${slug}`,
+            });
+            // Register the new page so retrieval + embeddings can see it. When a
+            // background runtime is available, the rebuild + embeddings run off the
+            // tool's critical path; otherwise fall back to a synchronous rebuild.
+            if (runtime) {
+                scheduleReindex(runtime, { hasUI: ctx.hasUI, ui: ctx.ui }, paths);
+            }
+            else {
+                rebuildMetadataLight(paths);
+            }
+            const gateNote = wikilinkIssues.length
+                ? `\n\n⚠️ ${wikilinkIssues.length} wikilink issue(s):\n${wikilinkIssues.map((m) => `- ${m}`).join("\n")}`
+                : "";
+            return {
+                content: [{ type: "text", text: `✅ Created ${type} page: \`${pagePath}\`${gateNote}` }],
+                details: {
+                    path: pagePath,
+                    created: true,
+                    wikilinkIssues,
+                },
+            };
+        },
+    });
+}
+export function buildPageBody(type, title) {
+    if (type === "entity") {
+        return `# ${title}
+
+One-line description.
+
+## Overview
+
+[Key facts]
+
+## Links
+
+- [related-page](/concepts/related-page.md)`;
+    }
+    if (type === "concept") {
+        return `# ${title}
+
+One-line definition.
+
+## Definition
+
+[Clear explanation]
+
+## Links
+
+- [related-page](/concepts/related-page.md)`;
+    }
+    if (type === "synthesis") {
+        return `# ${title}
+
+Cross-cutting analysis.
+
+## Question
+
+[What drove this?]
+
+## Links
+
+- [related-page](/concepts/related-page.md)`;
+    }
+    if (type === "analysis") {
+        return `# ${title}
+
+Durable answer from a query.
+
+## Question
+
+[Original question]
+
+## Links
+
+- [related-page](/concepts/related-page.md)`;
+    }
+    if (type === "skill") {
+        return `# ${title}
+
+_One-line summary of the reusable pattern this skill captures._
+
+## When to Use
+
+[Trigger conditions — when this pattern applies]
+
+## Procedure
+
+1. [Step 1]
+2. [Step 2]
+
+## Pitfalls
+
+- [Known failure mode or caveat]
+
+## Distilled From
+
+_Trajectories this skill was generalized from._
+
+- [trajectories/TRJ-...](/trajectories/TRJ-....md)`;
+    }
+    if (type === "case") {
+        return `# ${title}
+
+_One-line summary of the specific task this case records._
+
+## Task
+
+[What was requested]
+
+## Approach
+
+[How the agent solved it — key steps and decisions]
+
+## Outcome
+
+[Result, and anything worth reusing or avoiding next time]
+
+## Trajectory
+
+- [trajectories/TRJ-...](/trajectories/TRJ-....md) — captured tool-call run`;
+    }
+    if (type === "requirement") {
+        return `# ${title}
+
+## Description
+
+[Clear description of what this requirement entails]
+
+## Acceptance Criteria
+
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
+
+## Dependencies
+
+_Pages this requirement depends on._
+
+## Implementation Notes
+
+[Optional notes]
+
+## Sources
+
+- [sources/SRC-...](/sources/SRC-....md) — original concept capture`;
+    }
+    return `# ${title}
+
+[Description to be filled]
+
+## Links
+
+- [related-page](/concepts/related-page.md)`;
+}
+// ─── 5. wiki_search ─────────────────────────────────────
+export function registerWikiSearch(pi) {
+    pi.registerTool({
+        name: "wiki_search",
+        label: "Wiki Search",
+        description: "Search the wiki registry for pages matching a query.",
+        promptSnippet: "Search the wiki registry for pages",
+        promptGuidelines: ["Use wiki_search to find existing pages before creating duplicates."],
+        parameters: Type.Object({
+            query: Type.String({ description: "Search term" }),
+            type: Type.Optional(Type.String({ description: "Filter by page type" })),
+        }),
+        async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+            const paths = getPaths(ctx.cwd);
+            const result = searchRegistry(paths, params.query, params.type);
+            if (result.matches.length === 0) {
+                return {
+                    content: [{ type: "text", text: `No pages found for "${params.query}"` }],
+                    details: { query: params.query, matches: [], diagnostics: result.diagnostics },
+                };
+            }
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: [
+                            `🔍 **${result.matches.length} result(s)** for "${params.query}":`,
+                            "",
+                            ...result.matches.map((m) => `- [[${m.id}]] — *${m.type}* — ${m.title}`),
+                        ].join("\n"),
+                    },
+                ],
+                details: {
+                    query: params.query,
+                    matches: result.matches,
+                    diagnostics: result.diagnostics,
+                },
+            };
+        },
+    });
+}
+// ─── 6. wiki_lint ───────────────────────────────────────
+export function registerWikiLint(pi, runtime) {
+    pi.registerTool({
+        name: "wiki_lint",
+        label: "Wiki Lint",
+        description: "Health check the wiki. Scans for orphans, missing pages, contradictions, gaps. Optionally auto-fixes.",
+        promptSnippet: "Lint the wiki for health issues",
+        promptGuidelines: [
+            "Use wiki_lint when the user asks to check wiki health.",
+            "Contradictions always need human review.",
+        ],
+        parameters: Type.Object({
+            auto_fix: Type.Optional(Type.Boolean({ description: "Auto-fix orphans and missing pages", default: false })),
+        }),
+        async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+            const paths = getPaths(ctx.cwd);
+            const vaultCheck = inspectWritableVault(paths);
+            if (!vaultCheck.ok) {
+                return {
+                    content: [
+                        { type: "text", text: `Wiki vault error: ${vaultCheck.diagnostics[0].message}` },
+                    ],
+                    details: {
+                        error: vaultCheck.diagnostics[0].code,
+                        diagnostics: vaultCheck.diagnostics,
+                    },
+                    isError: true,
+                };
+            }
+            // Full-vault scan (+ optional auto-fix writes + reindex) is O(pages):
+            // run it in the background and report the health summary (issue #77).
+            return dispatchReported(runtime, ctx, {
+                label: `lint:${paths.root}`,
+                started: "\u{1F9F9} LLM Wiki: lint started in the background — the health report will be posted with your next message.",
+                work: async () => runWikiLint(paths, params.auto_fix === true),
+            });
+        },
+    });
+}
+/**
+ * Run the wiki health scan (issue #77 extracted it from the tool body so it can
+ * run off-thread via `dispatchReported`). Returns the human-readable summary.
+ */
+// ─── 7. wiki_status ─────────────────────────────────────
+export function registerWikiStatus(pi) {
+    pi.registerTool({
+        name: "wiki_status",
+        label: "Wiki Status",
+        description: "Report wiki health and stats instantly from generated registry.",
+        promptSnippet: "Report wiki health and stats",
+        promptGuidelines: ["Use wiki_status for a quick overview."],
+        parameters: Type.Object({}),
+        async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+            const paths = getPaths(ctx.cwd);
+            const vaultCheck = requireVault(paths);
+            if (!vaultCheck.ok) {
+                return {
+                    content: [{ type: "text", text: vaultCheck.reason }],
+                    details: { error: vaultCheck.reason },
+                    isError: true,
+                };
+            }
+            const status = await getWikiStatus(paths);
+            const config = readJson(join(paths.dotWiki, "config.json"), {});
+            const backlinks = readJson(join(paths.meta, "backlinks.json"), {});
+            const orphanCount = Object.entries(backlinks).filter(([, inbound]) => inbound.length === 0).length;
+            const gaps = readJson(join(paths.discoveries, "gaps.json"), {
+                gaps: [],
+            });
+            const health = status.totalPages === 0 ? "🔴 Empty" : orphanCount > 5 ? "⚠️ Warning" : "✅ Good";
+            const diagLines = status.blockingDiagnostics.length > 0
+                ? [
+                    "",
+                    "⚠️ Blocking diagnostics:",
+                    ...status.blockingDiagnostics.map((d) => `  - ${d.code}: ${d.message}`),
+                ]
+                : [];
+            const lines = [
+                "📊 LLM Wiki Status",
+                "══════════════════",
+                `Topic: ${config.topic || "Unknown"}`,
+                `Mode: ${config.mode || "personal"}`,
+                `Knowledge format: ${status.knowledgeFormat}`,
+                `Pages: ${status.totalPages}`,
+                ...Object.entries(status.byType).map(([t, c]) => `  - ${t}s: ${c}`),
+                `Orphans: ${orphanCount}`,
+                `Gaps: ${gaps.gaps?.length || 0}`,
+                `Health: ${health}`,
+                `Last updated: ${status.lastUpdated || "Never"}`,
+                `QMD index: ${status.qmd.state}`,
+                `QMD documents: ${status.qmd.totalDocuments} (${status.qmd.canonicalDocuments} canonical, ${status.qmd.evidenceDocuments} evidence)`,
+                `QMD embeddings pending: ${status.qmd.needsEmbedding}`,
+                `QMD package: ${status.qmd.qmdVersion}`,
+                ...diagLines,
+            ];
+            return {
+                content: [{ type: "text", text: lines.join("\n") }],
+                details: {
+                    topic: config.topic,
+                    mode: config.mode,
+                    knowledgeFormat: status.knowledgeFormat,
+                    totalPages: status.totalPages,
+                    byType: status.byType,
+                    orphans: orphanCount,
+                    gaps: gaps.gaps?.length || 0,
+                    health,
+                    blockingDiagnostics: status.blockingDiagnostics,
+                    qmd: status.qmd,
+                },
+            };
+        },
+    });
+}
+// ─── 8. wiki_rebuild_meta ───────────────────────────────
+export function registerWikiRebuildMeta(pi, runtime) {
+    pi.registerTool({
+        name: "wiki_rebuild_meta",
+        label: "Wiki Rebuild Meta",
+        description: "Force a full metadata rebuild (registry, backlinks, index, log).",
+        promptSnippet: "Rebuild all wiki metadata",
+        promptGuidelines: ["Use wiki_rebuild_meta if metadata seems out of sync."],
+        parameters: Type.Object({}),
+        async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+            const paths = getPaths(ctx.cwd);
+            const vaultCheck = inspectWritableVault(paths);
+            if (!vaultCheck.ok) {
+                return {
+                    content: [
+                        { type: "text", text: `Wiki vault error: ${vaultCheck.diagnostics[0].message}` },
+                    ],
+                    details: {
+                        error: vaultCheck.diagnostics[0].code,
+                        diagnostics: vaultCheck.diagnostics,
+                    },
+                    isError: true,
+                };
+            }
+            // Heavy O(pages) rebuild — dispatch off the agent's critical path and
+            // report on completion (issue #77).
+            return dispatchReported(runtime, ctx, {
+                label: `rebuild_meta:${paths.root}`,
+                started: "\u{1F9E0} LLM Wiki: metadata rebuild started in the background — the result will be reported with your next message.",
+                work: async () => {
+                    const result = rebuildMetadata(paths);
+                    // No rebuild_meta event — rebuild is a projection, not an authoritative mutation
+                    if (!result.ok) {
+                        return `⚠️ LLM Wiki: rebuild had issues — ${result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("; ")}`;
+                    }
+                    const warnings = result.diagnostics.filter((diagnostic) => diagnostic.severity === "warning");
+                    // After a successful projection, keep the generated QMD index in sync
+                    // (model-free lexical pass). A QMD failure is a warning, never a
+                    // projection failure.
+                    const qmdResult = await reindexQmdVault(paths, {
+                        scope: "changed",
+                        components: ["lexical"],
+                        force: false,
+                    });
+                    if (!qmdResult.ok) {
+                        warnings.push({
+                            severity: "warning",
+                            code: "qmd_index_error",
+                            path: paths.qmd,
+                            message: qmdResult.errors[0]?.message ?? "QMD indexing failed",
+                        });
+                    }
+                    if (warnings.length > 0) {
+                        return `⚠️ LLM Wiki: metadata rebuilt with warnings — ${warnings
+                            .map((diagnostic) => `${diagnostic.code}: ${diagnostic.message}`)
+                            .join("; ")}`;
+                    }
+                    const registry = readJson(join(paths.meta, "registry.json"), {
+                        version: "1.0",
+                        last_updated: "",
+                        pages: {},
+                    });
+                    return `✅ LLM Wiki: metadata rebuilt — ${Object.keys(registry.pages).length} pages indexed.`;
+                },
+            });
+        },
+    });
+}
+// ─── 9. wiki_log_event ──────────────────────────────────
+export function registerWikiReindexEmbeddings(pi, runtime) {
+    pi.registerTool({
+        name: "wiki_reindex_embeddings",
+        label: "Wiki Reindex Embeddings",
+        description: "Backfill / refresh semantic embeddings for the vault. Embeds pages that " +
+            "are new or stale (content changed); pass force to re-embed everything. " +
+            "No-op when no embedding provider is configured.",
+        promptSnippet: "Backfill semantic embeddings for the wiki",
+        promptGuidelines: [
+            "Use wiki_reindex_embeddings to embed an existing vault or refresh stale embeddings.",
+            "Embeddings are optional: this no-ops cleanly when no embedding provider is configured.",
+        ],
+        parameters: Type.Object({
+            force: Type.Optional(Type.Boolean({ description: "Re-embed every page, ignoring staleness (default: false)" })),
+        }),
+        async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+            const paths = getPaths(ctx.cwd);
+            const vaultCheck = inspectWritableVault(paths);
+            if (!vaultCheck.ok) {
+                return {
+                    content: [
+                        { type: "text", text: `Wiki vault error: ${vaultCheck.diagnostics[0].message}` },
+                    ],
+                    details: {
+                        error: vaultCheck.diagnostics[0].code,
+                        diagnostics: vaultCheck.diagnostics,
+                    },
+                    isError: true,
+                };
+            }
+            if (runtime)
+                runtime.ensureConfig(ctx.cwd ?? paths.root);
+            const embedder = runtime ? resolveEmbedder(runtime.config) : undefined;
+            if (!embedder) {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: 'ℹ️ No embedding provider configured — semantic embeddings are disabled. Set `llm-wiki.embeddingProvider` (e.g. "openai") in settings to enable.',
+                        },
+                    ],
+                    details: { enabled: false },
+                };
+            }
+            // Embedding is network-bound and O(pages) — run it in the background and
+            // report the stats on completion (issue #77).
+            return dispatchReported(runtime, ctx, {
+                label: `reindex_embeddings:${paths.root}`,
+                started: `\u{1F9E0} LLM Wiki: embedding reindex started in the background (${embedder.model}) — stats will be reported with your next message.`,
+                details: { enabled: true, model: embedder.model },
+                work: async () => {
+                    const stats = await reindexEmbeddings(paths, embedder, { force: params.force === true });
+                    appendEvent(paths, {
+                        kind: "reindex_embeddings",
+                        embedded: stats.embedded,
+                        skipped: stats.skipped,
+                        pruned: stats.pruned,
+                        model: embedder.model,
+                    });
+                    return `✅ LLM Wiki: embeddings reindexed (${embedder.model}) — ${stats.embedded} embedded, ${stats.skipped} fresh, ${stats.pruned} pruned.`;
+                },
+            });
+        },
+    });
+}
+export function registerWikiReindex(pi) {
+    pi.registerTool({
+        name: "wiki_reindex",
+        label: "Wiki Reindex QMD",
+        description: "Rebuild or repair the generated QMD index (meta/qmd) for the vault. " +
+            "Lexical indexing is model-free; selecting vectors may download " +
+            "approximately 2 GB of models on first use. Repair stale/error state. " +
+            "Active recall still uses the legacy heuristic until Phase 3.",
+        promptSnippet: "Rebuild the QMD search index",
+        promptGuidelines: [
+            "Use wiki_reindex to repair a stale, error, or recovering QMD index.",
+            "Lexical-only reindexing never loads a model.",
+            "Vector reindexing may download approximately 2 GB of models on first use.",
+        ],
+        parameters: Type.Object({
+            scope: Type.Optional(Type.Union([Type.Literal("changed"), Type.Literal("all")], { default: "changed" })),
+            components: Type.Optional(Type.Array(Type.Union([Type.Literal("lexical"), Type.Literal("vectors")]), {
+                minItems: 1,
+                uniqueItems: true,
+                default: () => ["lexical", "vectors"],
+            })),
+            force: Type.Optional(Type.Boolean({ default: false })),
+            vault: Type.Optional(Type.Union([
+                Type.Literal("active"),
+                Type.Literal("personal"),
+                Type.Literal("project"),
+                Type.Literal("all"),
+            ], { default: "active" })),
+        }),
+        async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+            const paths = getPaths(ctx.cwd);
+            const vaultCheck = inspectWritableVault(paths);
+            if (!vaultCheck.ok) {
+                return {
+                    content: [
+                        { type: "text", text: `Wiki vault error: ${vaultCheck.diagnostics[0].message}` },
+                    ],
+                    details: {
+                        error: vaultCheck.diagnostics[0].code,
+                        diagnostics: vaultCheck.diagnostics,
+                    },
+                    isError: true,
+                };
+            }
+            const scope = params.scope ?? "changed";
+            const components = params.components ?? ["lexical", "vectors"];
+            const force = params.force === true;
+            const vault = params.vault ?? "active";
+            const lexicalOnly = components.length === 1 && components[0] === "lexical";
+            // Warn before any vector work so the operator expects a large download.
+            if (components.includes("vectors") && signal && signal.aborted) {
+                return {
+                    content: [{ type: "text", text: "QMD reindex cancelled before it started." }],
+                    details: { cancelled: true },
+                    isError: true,
+                };
+            }
+            const result = await reindexWiki(paths, {
+                scope,
+                components,
+                force,
+                vault,
+                signal,
+            });
+            const ok = result.results.every((r) => r.result.ok);
+            const lines = [
+                ok ? "✅ QMD indexing complete" : "⚠️ QMD indexing completed with errors",
+                ...result.results.map((r) => {
+                    const st = r.result.status;
+                    return `- ${r.label} (${r.root}): state=${st.state}, documents=${st.totalDocuments}, indexed=${r.result.documents.indexed}, updated=${r.result.documents.updated}, removed=${r.result.documents.removed}, vectors=${r.result.vectors.generated}`;
+                }),
+            ];
+            if (lexicalOnly)
+                lines.push("Model-free lexical indexing — no model was downloaded.");
+            if (components.includes("vectors")) {
+                lines.push("⚠️ Vector indexing may download approximately 2 GB of models on first use.");
+            }
+            for (const r of result.results) {
+                for (const e of r.result.errors)
+                    lines.push(`- [${r.label}] ${e.code}: ${e.message}`);
+                for (const w of r.result.warnings)
+                    lines.push(`- [${r.label}] ${w.code}: ${w.message}`);
+            }
+            return {
+                content: [{ type: "text", text: lines.join("\n") }],
+                details: { scope, components, ...result },
+                ...(ok ? {} : { isError: true }),
+            };
+        },
+    });
+}
+export function registerWikiLogEvent(pi) {
+    pi.registerTool({
+        name: "wiki_log_event",
+        label: "Wiki Log Event",
+        description: "Append a structured event to meta/events.jsonl and regenerate meta/log.md.",
+        promptSnippet: "Log an event to the wiki activity log",
+        promptGuidelines: ["Use wiki_log_event to record significant actions manually."],
+        parameters: Type.Object({
+            kind: Type.String({ description: "Event kind (e.g., ingest, query, decision)" }),
+            details: Type.Optional(Type.Object({}, { description: "Additional event fields" })),
+        }),
+        async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+            const paths = getPaths(ctx.cwd);
+            const vaultCheck = inspectWritableVault(paths);
+            if (!vaultCheck.ok) {
+                return {
+                    content: [
+                        { type: "text", text: `Wiki vault error: ${vaultCheck.diagnostics[0].message}` },
+                    ],
+                    details: {
+                        error: vaultCheck.diagnostics[0].code,
+                        diagnostics: vaultCheck.diagnostics,
+                    },
+                    isError: true,
+                };
+            }
+            const kind = typeof params.kind === "string" ? params.kind.trim() : "";
+            if (!kind) {
+                return {
+                    content: [{ type: "text", text: "Event kind must be a non-empty string" }],
+                    details: { error: "event_missing_kind" },
+                    isError: true,
+                };
+            }
+            const details = params.details ?? {};
+            if (Object.hasOwn(details, "kind") || Object.hasOwn(details, "timestamp")) {
+                return {
+                    content: [{ type: "text", text: "Event details cannot override kind or timestamp" }],
+                    details: { error: "event_reserved_field" },
+                    isError: true,
+                };
+            }
+            appendEvent(paths, { kind, ...details });
+            // Regenerate projections
+            rebuildMetadata(paths);
+            return {
+                content: [{ type: "text", text: `✅ Event logged: ${kind}` }],
+                details: { kind },
+            };
+        },
+    });
+}
+// ─── 10. wiki_watch ─────────────────────────────────────
+export function registerWikiWatch(pi) {
+    pi.registerTool({
+        name: "wiki_watch",
+        label: "Wiki Watch",
+        description: "Print a ready-to-paste crontab line for scheduling automatic wiki updates (discover → ingest → lint). Does NOT schedule anything itself — it returns the command for the user to install.",
+        promptSnippet: "Schedule auto-updates for the wiki",
+        promptGuidelines: [
+            "Use wiki_watch when the user wants the wiki to stay current automatically.",
+            "wiki_watch only PRINTS a cron line — surface the output to the user verbatim so they can install it. Do not claim the schedule is active.",
+        ],
+        parameters: Type.Object({
+            interval: Type.String({ description: "daily, weekly, hourly, or stop" }),
+        }),
+        async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+            if (params.interval === "stop") {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: [
+                                "🛑 To stop wiki auto-updates, remove the cron line you installed earlier:",
+                                "",
+                                "```bash",
+                                "crontab -e   # then delete the line tagged '# llm-wiki-autoupdate'",
+                                "```",
+                                "",
+                                "Or list current jobs to confirm:",
+                                "",
+                                "```bash",
+                                "crontab -l | grep llm-wiki-autoupdate",
+                                "```",
+                            ].join("\n"),
+                        },
+                    ],
+                    details: { action: "stop_instructions" },
+                };
+            }
+            // 5-field POSIX crontab expressions (min hour dom month dow).
+            const intervals = {
+                daily: { cron: "0 8 * * *", label: "Daily at 8:00 AM" },
+                weekly: { cron: "0 9 * * 1", label: "Weekly on Monday at 9:00 AM" },
+                hourly: { cron: "0 * * * *", label: "Every hour" },
+            };
+            const config = intervals[params.interval];
+            if (!config) {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: `❌ Unknown interval: "${params.interval}". Use: daily, weekly, hourly, or stop.`,
+                        },
+                    ],
+                    details: { error: "bad_interval" },
+                    isError: true,
+                };
+            }
+            // Robustness for global crontab environments:
+            //   * `/bin/bash -lc` runs a LOGIN shell that sources /etc/profile +
+            //     ~/.profile / ~/.bash_profile, so npm-global / bun / nvm PATH
+            //     additions are imported — cron's default PATH is only
+            //     `/usr/bin:/bin` and would not find `pi`.
+            //   * `mkdir -p` makes the log dir self-healing for users with only
+            //     a project vault (no `~/.llm-wiki/` yet).
+            //   * All `$HOME` references are double-quoted to survive paths with spaces.
+            //   * `# llm-wiki-autoupdate` tags the line so the user can find and
+            //     remove it via `crontab -e` later (see `interval=stop`).
+            const cronLine = `${config.cron} /bin/bash -lc 'mkdir -p "$HOME/.llm-wiki" && pi -p "/wiki-run" >> "$HOME/.llm-wiki/cron.log" 2>&1' # llm-wiki-autoupdate`;
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: [
+                            `⏰ To set up ${config.label} wiki updates, add this line to your crontab.`,
+                            "**This tool only prints the line — it does not install it.**",
+                            "",
+                            "```bash",
+                            "crontab -e",
+                            "```",
+                            "",
+                            "Then append:",
+                            "",
+                            "```cron",
+                            cronLine,
+                            "```",
+                            "",
+                            `The line uses \`/bin/bash -lc\` so your shell profile (and the \`pi\` binary on npm-global / bun PATH) is loaded. Output goes to \`~/.llm-wiki/cron.log\`. If your system has no \`/bin/bash\`, replace with \`/bin/sh -c\` and ensure \`pi\` is in cron's PATH yourself.`,
+                        ].join("\n"),
+                    },
+                ],
+                details: {
+                    interval: params.interval,
+                    cronSchedule: config.cron,
+                    label: config.label,
+                    cronLine,
+                    installed: false,
+                },
+            };
+        },
+    });
+}
