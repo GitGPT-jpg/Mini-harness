@@ -44,6 +44,7 @@ Key 仅保存在本机 `~/.pi/agent/auth.json`，**不会提交到代码库，�
 - **提示词模板**：隐藏 25 个 pi 内置模板，灌入 7 个从 harness + Ku 沉淀、可直接用的推理模板。
 - **子代理**：保留 explore/review/implement，新增 5 个推理 workflow 子代理。
 - **知识库**：内置 `pi-llm-wiki` 扩展（已做安全审查、移除高危可选依赖子树），后台自动召回/沉淀、无感维护，纯本地不外联。
+- **薄运行时（`mini-harness-runtime`）**：任务状态机 `intake→plan→run→validate`，**以 validate.py 为唯一准入门禁**，失败自动带证据进入下一轮，达到最大轮数停止，状态落盘可断点续跑。对应"公共运行时"那一块，**不依赖模型自觉**。
 - **One API Key 门禁**：首次打开弹窗引导配置（见上）。
 
 ## 仓库结构
@@ -56,6 +57,7 @@ Key 仅保存在本机 `~/.pi/agent/auth.json`，**不会提交到代码库，�
 - `pi-web-cockpit/assets/brand-favicon.png` — 页签 favicon（紫色 C）
 - `pi-web-cockpit/verify-hardened.mjs` — Playwright E2E 验证（对话/文件/终端/Git 四件套 + 门禁）
 - `pi-web-cockpit/vendor/pi-llm-wiki/` — 审查过的知识库扩展源码
+- `pi-web-cockpit/vendor/mini-harness-runtime/` — 薄运行时扩展（状态机 + validator 门禁 + 自动迭代 + 续跑）
 - `skills/` — 7 个领域 skill（安装到 `~/.pi/agent/skills`）
 - `assets/icon.jpg` — 桌面启动器图标源
 - `资产清单.md` — 推理底座可利用资产清单

@@ -46,7 +46,7 @@
       "toolApprovalEnabled": true,
       "editSoftEnabled": false,
       "questionnaireEnabled": true,
-      "goalModeEnabled": false,
+      "goalModeEnabled": true,
       "parallelReminderEnabled": true,
       "thinkingWrap": false,
       "toolsWrap": true,

@@ -219,7 +219,7 @@ try {
     st.terminalBash = false;
     // 推理场景精简：关多模态/目标模式/工具图像，开工具懒加载（省 token、稳 prompt cache 前缀）
     st.visionBridgeEnabled = false;
-    st.goalModeEnabled = false;
+    st.goalModeEnabled = true;
     st.toolImagesEnabled = false;
     st.toolLazyLoading = true;
     // A) 领域身份：只覆盖组合模板的 {{soul}} token（替换 pi 默认"编码助手"身份），
@@ -431,7 +431,7 @@ const BUILTIN_TPL_IDS = [
 // 本插件管理的模板 id 全集（升级时先按这些 id 清掉旧条目再重灌，保留用户自建）
 const MANAGED_TPL_IDS = [
   "inf-harness-start", "inf-prefill", "inf-cache-adapt", "inf-cache-loss",
-  "inf-hitrate", "inf-cudaipc", "inf-kvcache-nextgen",
+  "inf-hitrate", "inf-cudaipc", "inf-kvcache-nextgen", "inf-runtime-loop",
 ];
 // 从 harness + Ku 沉淀的可直接使用模板（task 级参数用 <尖括号> 占位，发送前替换）
 const MANAGED_TPL = [
@@ -470,6 +470,11 @@ const MANAGED_TPL = [
     desc: "harness 跑通 radix tree 拆分 / allocator 拆分 / cache 操作与 forward overlap",
     prompt: "基于 infer-forge-harness 推进下一代 KV Cache 架构改造，里程碑：1) 与方案对齐关键路径和实现；2) Harness 平台初步跑通流程；3) 基于 Harness 跑通业务结果——完成 radix tree 拆分并验收通过、完成 allocator 拆分并验收通过、完成 cache 操作与 forward 并行 overlap 并验收通过。\n工作方式：先读 AGENTS.md / 目标 workflow / task 合约 / SKILL.md / validator 再动手，优先复用 REGISTRY 原子任务，产物与 Journal 放仓库外，每步有明确 verify、以 validator 判定为准。环境（按实际替换）：kubeconfig=<kubeconfig>，实例=<pod>，代码路径=<sglang/sdk 路径>。每步产出 run id / artifact root / validator 结论 / Journal / 证据路径并与 baseline 对比。安全红线同 harness 总纲（高危操作先确认、只动自己的 Pod）。",
   },
+  {
+    id: "inf-runtime-loop", icon: "🛡️", title: "受控 Loop（validator 门禁 + 自动迭代）",
+    desc: "用运行时启动任务：validator 不通过自动带证据进入下一轮，通过才算完成，可断点续跑",
+    prompt: "用 mini-harness 运行时启动一个受 validator 约束的任务（不要用普通对话硬跑）。\n\n调用 loop_start：\n- goal：<要达成的目标，写清可验证的完成条件>\n- validateCmd：<validator 命令，例如 python3 validate.py 或 infer-forge-harness 的 validate.py 路径>\n- harnessRoot：<可选，harness 仓库根目录>\n- maxRounds：<默认 5>\n\n然后 loop_plan 写出计划并直接修改工作区；完成每轮时调用 loop_done(summary)。\n规则：运行时会自动执行 validator；不通过会带着证据自动进入下一轮，直到通过或达到最大轮数。不要自行宣布完成，不要向用户提问，不要重复已完成的步骤。",
+  },
 ];
 try {
   let html = fs.readFileSync(htmlFile, "utf8");
@@ -484,7 +489,7 @@ try {
     `\t\t<script id="pi-prompt-seed">\n` +
     `\t\t(function(){try{\n` +
     `\t\t\tvar K="pi-web-ui:prompt-templates",F="pi-web-ui:prompt-templates-seeded";\n` +
-    `\t\t\tvar VER="v3";\n` +
+    `\t\t\tvar VER="v4";\n` +
     `\t\t\tif(localStorage.getItem(F)===VER)return;\n` +
     `\t\t\tvar P=${payload};\n` +
     `\t\t\tvar cur=[];try{cur=JSON.parse(localStorage.getItem(K)||"[]")}catch(e){}\n` +
@@ -509,7 +514,7 @@ try {
     const updated = html.replace(re, scriptBlock);
     if (updated !== html) {
       fs.writeFileSync(htmlFile, updated);
-      log(`已更新提示词模板 seed（v3：隐藏内置 + ${MANAGED_TPL.length} 个沉淀模板）`);
+      log(`已更新提示词模板 seed（v4：隐藏内置 + ${MANAGED_TPL.length} 个沉淀模板）`);
     } else log("提示词模板 seed 已是最新（跳过）");
   }
 } catch (e) {
@@ -735,6 +740,38 @@ try {
   }
 } catch (e) {
   log("WARN: One API Key 门禁注入失败", e.message);
+}
+
+// ---- 11b) mini-harness-runtime：薄运行时扩展（状态机 + validator 准入 + 自动下一轮 + 续跑）----
+{
+  const rtVendor = path.join(COCKPIT, "vendor", "mini-harness-runtime");
+  const agentSettings = path.join(HOME, ".pi", "agent", "settings.json");
+  try {
+    if (!fs.existsSync(path.join(rtVendor, "package.json"))) {
+      log("WARN: mini-harness-runtime vendor 缺失，跳过");
+    } else {
+      let st = {};
+      try { st = JSON.parse(fs.readFileSync(agentSettings, "utf8")); } catch {}
+      const pkgs = new Set(st.packages || []);
+      for (const p of [...pkgs]) if (p.includes("mini-harness-runtime") && p !== rtVendor) pkgs.delete(p);
+      const already = pkgs.has(rtVendor);
+      if (!already) {
+        log("mini-harness-runtime：未登记，自动 pi install…");
+        try { execSync(`pi install ${JSON.stringify(rtVendor)} --no-approve`, { stdio: "inherit" }); }
+        catch (e) { log("WARN: pi install 失败，将仅写 settings 登记兜底", e.message); }
+      }
+      let st2 = {};
+      try { st2 = JSON.parse(fs.readFileSync(agentSettings, "utf8")); } catch {}
+      const pkgs2 = new Set(st2.packages || []);
+      for (const p of [...pkgs2]) if (p.includes("mini-harness-runtime") && p !== rtVendor) pkgs2.delete(p);
+      pkgs2.add(rtVendor);
+      st2.packages = [...pkgs2];
+      fs.writeFileSync(agentSettings, JSON.stringify(st2, null, 2));
+      log("mini-harness-runtime：已登记（" + rtVendor + "）");
+    }
+  } catch (e) {
+    log("WARN: mini-harness-runtime 登记失败", e.message);
+  }
 }
 
 // ---- 结果汇总 ----
