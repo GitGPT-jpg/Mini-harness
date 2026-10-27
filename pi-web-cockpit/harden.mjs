@@ -718,9 +718,9 @@ try {
     `\t\t\t\tif(localStorage.getItem(ACK)==="1")return;\n` +
     `\t\t\t\tif(document.getElementById("pi-apikey-gate"))return;\n` +
     `\t\t\t\tvar o=document.createElement("div");o.id="pi-apikey-gate";\n` +
-    `\t\t\t\to.innerHTML='<div class="pg-card"><h2>训推引擎组 Harness · 首次配置</h2><p class="pg-sub">使用前需先配置 Baidu One API，否则模型无法调用。</p><ol><li>点下方「打开设置」，进入 <b>设置 → 模型服务商</b></li><li>Base URL 填 <code>https://oneapi-comate.baidu-int.com/v1</code></li><li>在 API Key 处填入你自己的 One API Key 并保存</li></ol><p class="pg-note">Key 仅保存在本机 <code>~/.pi/agent/auth.json</code>，不会提交到代码库，也不会外传。</p><div class="pg-row"><button class="pg-open">打开设置</button><button class="pg-ok">我已配置 One API，进入</button></div></div>';\n` +
+    `\t\t\t\to.innerHTML='<div class="pg-card"><h2>训推引擎组 Harness · 首次配置</h2><p class="pg-sub">使用前只需填入你自己的 One API Key（Base URL 已默认配好，无需修改）。</p><ol><li>点下方「打开设置」，进入 <b>设置 → 模型服务商</b></li><li>在 API Key 处填入你自己的 Key 并保存</li></ol><p class="pg-note">Key 仅保存在本机 <code>~/.pi/agent/auth.json</code>，不会提交到代码库，也不会外传。</p><div class="pg-row"><button class="pg-open">打开设置</button><button class="pg-ok">我已配置，进入</button></div></div>';\n` +
     `\t\t\t\tdocument.body.appendChild(o);\n` +
-    `\t\t\t\to.querySelector(".pg-open").addEventListener("click",function(){openSettings();});\n` +
+    `\t\t\t\to.querySelector(".pg-open").addEventListener("click",function(){openSettings();localStorage.setItem(ACK,"1");o.remove();});\n` +
     `\t\t\t\to.querySelector(".pg-ok").addEventListener("click",function(){localStorage.setItem(ACK,"1");o.remove();});\n` +
     `\t\t\t}\n` +
     `\t\t\tif(document.readyState==="loading")document.addEventListener("DOMContentLoaded",function(){setTimeout(mount,600);});else setTimeout(mount,600);\n` +
