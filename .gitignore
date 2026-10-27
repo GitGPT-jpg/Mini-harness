@@ -25,6 +25,17 @@ auth.json
 pi-web-cockpit/vendor/pi-llm-wiki/node_modules/
 pi-web-cockpit/vendor/pi-llm-wiki/assets/
 
+# ---- 运行时产生的会话 / 知识库 / 任务状态（绝不入库）----
+# 这些只存在于各自机器的 HOME 下；同事 clone 后是全新状态，看不到任何调试聊天记录
+.llm-wiki/
+sessions/
+*.jsonl
+client-state.json
+.pi/
+.mini-harness/
+runs/
+inbox/
+
 # ---- 临时 ----
 *.bak
 .tmp/

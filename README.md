@@ -34,6 +34,9 @@ cd mini-harness
 `https://oneapi-comate.baidu-int.com/v1`，在 API Key 处填入**你自己的 One API Key** 并保存。
 Key 仅保存在本机 `~/.pi/agent/auth.json`，**不会提交到代码库，也不外传**。
 
+> **全新状态**：首次安装是干净的——不包含任何会话/聊天记录、最近项目、任务运行状态或知识库内容。
+> 这些数据只存在于各自机器的 `~/.pi/agent/` 与 `~/.pi-web/` 下，且已在 `.gitignore` 中排除。
+
 ## 做了哪些定制（全部可逆，集中在 `pi-web-cockpit/harden.mjs`）
 
 - **只保留 pi 引擎**：前端引擎清单裁为 pi-only；底栏引擎切换器隐藏；模型服务商留给用户自填 One API。
