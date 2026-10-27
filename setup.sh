@@ -18,6 +18,12 @@ say "仓库根目录: $HERE"
 
 # ---- 1) 基础依赖 ----
 command -v git >/dev/null 2>&1 || die "缺少 git，请先安装。"
+# 若 PATH 里没有 node，但机器上装过 pi（官方安装器自带 node），优先复用它的 node
+if ! command -v node >/dev/null 2>&1; then
+  for d in "${XDG_DATA_HOME:-$HOME/.local/share}/pi-node/current/bin"; do
+    if [ -x "$d/node" ]; then PATH="$d:$PATH"; export PATH; say "复用 pi 自带 Node: $d"; fi
+  done
+fi
 if ! command -v node >/dev/null 2>&1; then
   die "缺少 Node.js (>=22.19)。可先用 pi 官方安装器获取（含 node）：curl -fsSL https://pi.dev/install | sh，或自行安装 Node 后重试。"
 fi
@@ -33,11 +39,11 @@ say "Node $(node -v) / npm $(npm -v) OK"
 need_pi=1
 if command -v pi >/dev/null 2>&1; then
   cur="$(pi --version 2>/dev/null | head -1 | tr -dc '0-9.')"
-  if [ "$cur" = "$PI_PIN" ]; then need_pi=0; say "pi 已是 $PI_PIN（跳过）";
-  else warn "检测到 pi $cur，期望 $PI_PIN，将安装固定版本。"; fi
+  if [ "$cur" = "$PI_PIN" ]; then need_pi=0; say "pi 已是 ${PI_PIN}（跳过）";
+  else warn "检测到 pi $cur，期望 ${PI_PIN}，将安装固定版本。"; fi
 fi
 if [ "$need_pi" = 1 ]; then
-  say "安装 pi@$PI_PIN（npm 全局，--ignore-scripts）…"
+  say "安装 pi@${PI_PIN}（npm 全局，--ignore-scripts）…"
   npm install -g --ignore-scripts "@earendil-works/pi-coding-agent@${PI_PIN}" \
     || die "pi 安装失败，请检查 npm 全局安装权限或网络。"
 fi
@@ -57,9 +63,9 @@ done
 say "已安装 $n_sk 个领域 skill 到 ~/.pi/agent/skills"
 
 # ---- 4) 种入 Baidu One API 模型服务商（不覆盖已有配置，不含任何密钥）----
-node - "$HERE/pi-web-cockpit/config/models.oneapi.json" <<'NODE'
+SEED_FILE="$HERE/pi-web-cockpit/config/models.oneapi.json" node <<'NODE'
 const fs=require("fs"),os=require("os"),path=require("path");
-const seed=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+const seed=JSON.parse(fs.readFileSync(process.env.SEED_FILE,"utf8"));
 const mf=path.join(os.homedir(),".pi/agent/models.json");
 let m={providers:{}};
 try{ m=JSON.parse(fs.readFileSync(mf,"utf8")); }catch{}
@@ -78,6 +84,23 @@ NODE
 say "安装驾驶舱依赖并自动加固（首次较慢，会连带装 pi-llm-wiki 与登记扩展）…"
 ( cd "$COCKPIT" && npm install )
 say "驾驶舱加固完成。"
+
+# ---- 5b) 预热生成 client-state 并二次加固 ----
+# 首装时 ~/.pi-web/client-state.json 由驾驶舱运行时才生成，而上面的 postinstall(harden)
+# 跑在首次启动之前，拿不到该文件 => 客户端态开关与领域身份(soul)那部分会被跳过。
+# 这里先无头启动一次让它落盘，停服，再重放一次 harden 把这部分补齐。
+if [ ! -f "$HOME/.pi-web/client-state.json" ]; then
+  say "首次安装：预热驾驶舱以生成运行时配置…"
+  ( cd "$COCKPIT" && nohup ./start-hardened.sh >/tmp/pi-web-warmup.log 2>&1 & )
+  for i in $(seq 1 40); do lsof -ti tcp:8787 >/dev/null 2>&1 && break; sleep 0.5; done
+  for i in $(seq 1 30); do [ -f "$HOME/.pi-web/client-state.json" ] && break; sleep 0.5; done
+  sleep 1
+  pids="$(lsof -ti tcp:8787 2>/dev/null || true)"; [ -n "$pids" ] && kill $pids 2>/dev/null || true
+  sleep 1
+  say "重放加固（应用客户端态开关与领域身份）…"
+  ( cd "$COCKPIT" && node harden.mjs >/dev/null 2>&1 ) || warn "二次加固失败，请手动在 pi-web-cockpit 跑 node harden.mjs"
+  say "预热与二次加固完成。"
+fi
 
 # ---- 6) 生成 Mac 启动器 .app（放桌面；决策3：用 assets/icon.jpg）----
 build_mac_app(){

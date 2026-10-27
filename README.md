@@ -13,12 +13,17 @@ cd mini-harness
 ```
 
 `setup.sh` 会自动：
-1. 校验 Node.js（>=22.19）与 npm；
+1. 校验 Node.js（>=22.19）与 npm（若 PATH 无 node，会尝试复用 pi 自带的 Node）；
 2. 安装固定版本 `pi@1.4.0`（与验证机一致）；
 3. 安装 7 个领域 skill 到 `~/.pi/agent/skills`；
 4. 种入「Baidu One API」模型服务商与模型目录（**不含密钥**，不覆盖你已有配置）；
-5. 安装驾驶舱依赖，`postinstall` 自动执行 `harden.mjs` 完成全部加固与定制；
+5. 安装驾驶舱依赖，`postinstall` 自动执行 `harden.mjs` 完成全部加固与定制
+   （含首装 client-state 播种，保证客户端开关与领域身份在干净机器上同样生效）；
 6. 在 **桌面** 生成启动器 `训推引擎组 Harness.app`（macOS）。
+
+> 前置条件：macOS / Linux、Node ≥22.19、可访问 npm 与 One API 网关。
+> macOS 若终端组件 node-pty 需要编译，建议先安装 Xcode Command Line Tools（`xcode-select --install`）。
+> 若移动了仓库目录，重跑一次 `./setup.sh` 以刷新桌面 `.app` 内的绝对路径。
 
 ## 启动与首次配置
 
@@ -31,10 +36,10 @@ Key 仅保存在本机 `~/.pi/agent/auth.json`，**不会提交到代码库，�
 
 ## 做了哪些定制（全部可逆，集中在 `pi-web-cockpit/harden.mjs`）
 
-- **只保留 pi 引擎**：前端引擎清单裁为 pi-only；模型服务商留给用户自填 One API。
-- **推理场景精简**：关闭沙盒 / Goal Mode / Delegate / Plan / 子代理原生入口、多模态音视频、Page Picker；工具懒加载开启（省 token、稳 prompt cache 前缀）；仅保留 `present_files` 成果卡片。
+- **只保留 pi 引擎**：前端引擎清单裁为 pi-only；底栏引擎切换器隐藏；模型服务商留给用户自填 One API。
+- **推理场景精简**：关闭沙盒 / Goal Mode / Delegate / Plan / 子代理原生入口、多模态音视频、Page Picker、codemode 扩展；工具懒加载开启（省 token、稳 prompt cache 前缀）；仅保留 `present_files` 成果卡片。
 - **安全加固**：关 remoteSsh、封禁 `__abs__` 任意文件读、禁 `eval`/`browser_page`、关插件市场与自更新（`PI_WEB_MANAGED=1`）。
-- **品牌**：左上角显示「训推引擎组 Harness」。
+- **品牌**：左上角为 icon1111 图标 + 「训推引擎组 Harness」；浏览器页签标题同名、favicon 为紫色 C；并停用 PWA Service Worker（避免旧缓存导致界面不更新）。
 - **领域身份**：覆盖组合模板的 `{{soul}}` token，注入推理服务 agent 身份、工作准则与安全红线（其余脚手架 token 不动）。
 - **提示词模板**：隐藏 25 个 pi 内置模板，灌入 7 个从 harness + Ku 沉淀、可直接用的推理模板。
 - **子代理**：保留 explore/review/implement，新增 5 个推理 workflow 子代理。
@@ -46,6 +51,9 @@ Key 仅保存在本机 `~/.pi/agent/auth.json`，**不会提交到代码库，�
 - `setup.sh` — 可移植一键安装脚本
 - `pi-web-cockpit/harden.mjs` — 幂等、可逆的加固+定制脚本（`npm install` 时经 `postinstall` 自动重放）
 - `pi-web-cockpit/config/models.oneapi.json` — One API 服务商与模型目录种子（无密钥）
+- `pi-web-cockpit/config/client-state.seed.json` — 首装驾驶舱设置种子（开关/领域身份，无用户路径）
+- `pi-web-cockpit/assets/brand-logo.png` — 左上角 logo（icon1111）
+- `pi-web-cockpit/assets/brand-favicon.png` — 页签 favicon（紫色 C）
 - `pi-web-cockpit/verify-hardened.mjs` — Playwright E2E 验证（对话/文件/终端/Git 四件套 + 门禁）
 - `pi-web-cockpit/vendor/pi-llm-wiki/` — 审查过的知识库扩展源码
 - `skills/` — 7 个领域 skill（安装到 `~/.pi/agent/skills`）

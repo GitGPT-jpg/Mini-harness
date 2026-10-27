@@ -12,6 +12,22 @@ const BASE = path.dirname(COCKPIT);
 const DIST = path.join(COCKPIT, "node_modules/pi-web-ui/dist/server");
 const log = (...a) => console.log("[harden]", ...a);
 
+// 首装兜底：干净机器上 ~/.pi-web / ~/.pi/agent 可能还不存在，后续写 token / client-state / 子代理模板 / settings 都需要它们。
+try {
+  fs.mkdirSync(path.join(HOME, ".pi-web"), { recursive: true });
+  fs.mkdirSync(path.join(HOME, ".pi/agent"), { recursive: true });
+} catch {}
+
+// 品牌图标：左上角 logo 用 icon1111（brand-logo.png），浏览器页签 favicon 用紫色 C（brand-favicon.png）。
+// 两者分开，均读仓库内 PNG -> data URI（可逆）。
+let BRAND_LOGO = "";
+let BRAND_FAVICON = "";
+try {
+  const toData = (f) => (fs.existsSync(f) ? "data:image/png;base64," + fs.readFileSync(f).toString("base64") : "");
+  BRAND_LOGO = toData(path.join(COCKPIT, "assets", "brand-logo.png"));
+  BRAND_FAVICON = toData(path.join(COCKPIT, "assets", "brand-favicon.png"));
+} catch {}
+
 // 领域「灵魂」提示词：覆盖 pi 组合模板的 {{soul}} token（替换 pi 默认"编码助手"身份，
 // 其余 {{tools}}/{{guidelines}}/{{pi_docs}} 等脚手架 token 保持自动生成不动）。
 // 内容源自 5 个 workflow skill 的身份/核心原则/安全红线。
@@ -119,6 +135,24 @@ if (cap.includes("remoteSsh: true,")) {
   if (!done) log("WARN: 未在 bundle 中定位引擎清单（可能已变更）");
 }
 
+// ---- 2e) 彻底关闭 codemode：SDK 的 CodemodeMode 只有 on/only，无法用设置关闭，
+//         故把它的扩展工厂换成空实现（不再注册 codemode 工具）。幂等可逆。----
+try {
+  const agentFile = path.join(DIST, "agent-service.js");
+  let js = fs.readFileSync(agentFile, "utf8");
+  const codeMarker = "HARDENED:codemode-off";
+  if (!js.includes(codeMarker)) {
+    const needle = "factory: createCodemodeExtension(),";
+    if (js.includes(needle)) {
+      js = js.replace(needle, `factory: () => {}, /* ${codeMarker} */`);
+      fs.writeFileSync(agentFile, js);
+      log("已关闭 codemode 扩展（空实现，工具不再注册）");
+    } else log("WARN: 未定位 createCodemodeExtension 工厂");
+  } else log("codemode 已关闭（跳过）");
+} catch (e) {
+  log("WARN: codemode 关闭失败", e.message);
+}
+
 // ---- 3) 服务端彻底拒绝远程 SSH 消息 ----
 const dispFile = path.join(DIST, "dispatch-domain-handlers.js");
 let disp = fs.readFileSync(dispFile, "utf8");
@@ -158,7 +192,18 @@ if (!idx.includes(absMarker)) {
 } else log("__abs__ 已封禁（跳过）");
 
 // ---- 5) 驾驶舱设置：禁 eval、关 codemode、禁技能 + 推理场景精简开关（纵深防御）----
+// 首装时 client-state.json 尚不存在（由浏览器连接后才生成）；先播种一份 sanitized 的默认设置，
+// 否则下面的开关与领域身份在首装会被跳过（这正是干净机器上"定制丢失"的根因）。
 const csFile = path.join(HOME, ".pi-web/client-state.json");
+const csSeed = path.join(COCKPIT, "config", "client-state.seed.json");
+try {
+  if (!fs.existsSync(csFile) && fs.existsSync(csSeed)) {
+    fs.copyFileSync(csSeed, csFile);
+    log("已播种 client-state（首装默认设置）");
+  }
+} catch (e) {
+  log("WARN: client-state 播种失败", e.message);
+}
 try {
   const cs = JSON.parse(fs.readFileSync(csFile, "utf8"));
   const st = cs.__settings__?.settings;
@@ -233,6 +278,8 @@ try {
     `\t\t\t[data-bar-item="host:canvas"],\n` +
     `\t\t\t[data-bar-item="host:zen-mode"],\n` +
     `\t\t\t[data-bar-item="host:new-ephemeral-chat"] { display: none !important; }\n` +
+    `\t\t\t/* 底栏引擎切换器：锁定单引擎 pi，关掉"点击切换智能体引擎"入口 */\n` +
+    `\t\t\t[data-bar-item="host:engine"] { display: none !important; }\n` +
     `\t\t\t/* 富媒体音视频播放：砍播放器，保留图片(<img>)与 present_files 成果卡片 */\n` +
     `\t\t\taudio, video,\n` +
     `\t\t\t.present-media-video, .present-media-audio,\n` +
@@ -240,6 +287,10 @@ try {
     `\t\t\t/* 品牌名替换：pi-web-ui -> 训推引擎组 Harness（字面量隐藏 + ::after 覆盖，可逆） */\n` +
     `\t\t\t.brand-name { font-size: 0 !important; }\n` +
     `\t\t\t.brand-name::after { content: "训推引擎组 Harness"; font-size: 12px; font-weight: 600; letter-spacing: 0.2px; white-space: nowrap; }\n` +
+    (BRAND_LOGO
+      ? `\t\t\t/* 左上角 pi logo 换成 icon1111（content 覆盖 <img> 渲染，可逆） */\n` +
+        `\t\t\t.brand-logo { content: url("${BRAND_LOGO}") !important; object-fit: contain !important; }\n`
+      : "") +
     `\t\t</style>\n\t`;
   if (!html.includes(trimMarker)) {
     html = html.replace("</head>", styleBlock + "</head>");
@@ -256,6 +307,113 @@ try {
   }
 } catch (e) {
   log("WARN: 前端入口精简注入失败", e.message);
+}
+
+// ---- 7b) 页签标题 + favicon 品牌化（标题是前端动态设置的，用脚本锁定+观察，可逆）----
+try {
+  let html = fs.readFileSync(htmlFile, "utf8");
+  const brandMarker = "HARDENED:brand-fix";
+  const scriptBlock =
+    `\t\t<!-- ${brandMarker} 页签标题与 favicon 品牌化（可逆）。 -->\n` +
+    `\t\t<script id="pi-brand-fix">\n` +
+    `\t\t(function(){try{\n` +
+    `\t\t\t// 清除 PWA 残留：注销 SW + 清 caches，确保始终加载最新品牌态\n` +
+    `\t\t\ttry{if("serviceWorker" in navigator){navigator.serviceWorker.getRegistrations().then(function(rs){rs.forEach(function(r){r.unregister();});}).catch(function(){});}}catch(e){}\n` +
+    `\t\t\ttry{if(window.caches&&caches.keys){caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});}).catch(function(){});}}catch(e){}\n` +
+    `\t\t\tvar T="训推引擎组 Harness";var ICON=${JSON.stringify(BRAND_FAVICON)};\n` +
+    `\t\t\tfunction setFav(){try{if(!ICON)return;var ls=document.querySelectorAll('link[rel*="icon"]');if(ls.length)ls.forEach(function(l){l.href=ICON;});else{var l=document.createElement("link");l.rel="icon";l.href=ICON;document.head.appendChild(l);}}catch(e){}}\n` +
+    `\t\t\tfunction setTitle(){try{var t=document.querySelector("title");if(!t){t=document.createElement("title");document.head.appendChild(t);}if(t.textContent!==T)t.textContent=T;if(document.title!==T)document.title=T;}catch(e){}}\n` +
+    `\t\t\tfunction start(){setTitle();setFav();var t=document.querySelector("title");if(t){new MutationObserver(setTitle).observe(t,{childList:true,characterData:true,subtree:true});}}\n` +
+    `\t\t\tif(document.readyState==="loading")document.addEventListener("DOMContentLoaded",start);else start();\n` +
+    `\t\t\tsetInterval(function(){setTitle();setFav();},1500);\n` +
+    `\t\t}catch(e){}})();\n` +
+    `\t\t</script>\n\t`;
+  if (!html.includes(brandMarker)) {
+    html = html.replace("</head>", scriptBlock + "</head>");
+    fs.writeFileSync(htmlFile, html);
+    log("已注入页签标题 + favicon 品牌化");
+  } else {
+    const re = /\t*<!-- HARDENED:brand-fix[\s\S]*?pi-brand-fix">[\s\S]*?<\/script>\n\t?/;
+    const updated = html.replace(re, scriptBlock);
+    if (updated !== html) { fs.writeFileSync(htmlFile, updated); log("已更新页签标题/favicon 品牌化"); }
+    else log("页签标题/favicon 品牌化已是最新（跳过）");
+  }
+} catch (e) {
+  log("WARN: 页签/favicon 品牌化注入失败", e.message);
+}
+
+// ---- 7c) 改写静态 <title> 与 favicon：消除刷新时首帧闪回 pi-web-ui（直接改 index.html，随 harden 重放）----
+// 7b 的脚本是在页面加载后才改标题/图标，首帧仍是 index.html 里写死的 pi-web-ui，刷新时会闪一下。
+// 这里把 index.html 里的静态 <title> 和 favicon 链接直接改掉，首帧就是品牌态，无闪回。
+try {
+  let html = fs.readFileSync(htmlFile, "utf8");
+  let changed = false;
+  const newTitle = "<title>训推引擎组 Harness</title>";
+  if (/<title>[^<]*<\/title>/.test(html) && !html.includes(newTitle)) {
+    html = html.replace(/<title>[^<]*<\/title>/, newTitle);
+    changed = true;
+  }
+  if (BRAND_FAVICON) {
+    const favLink = `<link rel="icon" href="${BRAND_FAVICON}" />`;
+    const appleLink = `<link rel="apple-touch-icon" href="${BRAND_FAVICON}" />`;
+    const h2 = html
+      .replace(/<link\b[^>]*\brel="icon"[^>]*>/, favLink)
+      .replace(/<link\b[^>]*\brel="apple-touch-icon"[^>]*>/, appleLink);
+    if (h2 !== html) { html = h2; changed = true; }
+  }
+  if (changed) { fs.writeFileSync(htmlFile, html); log("已改写静态标题/favicon（消除刷新闪回）"); }
+  else log("静态标题/favicon 已是最新（跳过）");
+} catch (e) {
+  log("WARN: 静态标题/favicon 改写失败", e.message);
+}
+
+// ---- 7d) 覆盖磁盘图标文件：兜住浏览器直接请求 /favicon.svg、PWA/apple 图标与 brand-logo 原生 src ----
+// 仅改 <link> 挡不住浏览器对 favicon 的顽固缓存与直连请求；把磁盘上被请求到的图标字节也换成品牌图标。
+try {
+  const webDist = path.join(DIST, "..", "..", "web", "dist");
+  const logoFile = path.join(COCKPIT, "assets", "brand-logo.png");
+  const favFile = path.join(COCKPIT, "assets", "brand-favicon.png");
+  if (fs.existsSync(logoFile) && fs.existsSync(favFile)) {
+    const logoPng = fs.readFileSync(logoFile);
+    const favPng = fs.readFileSync(favFile);
+    const favB64 = favPng.toString("base64");
+    let n = 0;
+    // icon-192 是左上角 brand-logo 的原生 src，放 icon1111；其余 PWA/图标放紫色 C
+    for (const rel of ["icons/icon-192.png", "icons/icon-512.png", "icons/icon-1024.png",
+                        "icons/maskable-192.png", "icons/maskable-512.png", "icons/maskable-1024.png"]) {
+      const fp = path.join(webDist, rel);
+      if (fs.existsSync(fp)) { fs.writeFileSync(fp, rel === "icons/icon-192.png" ? logoPng : favPng); n++; }
+    }
+    const favSvg = path.join(webDist, "favicon.svg");
+    fs.writeFileSync(favSvg, `<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"><image href="data:image/png;base64,${favB64}" width="128" height="128"/></svg>\n`);
+    log(`已覆盖磁盘图标文件（${n} 个 PNG + favicon.svg）`);
+  } else log("WARN: 缺 brand-logo.png / brand-favicon.png，跳过磁盘图标覆盖");
+} catch (e) {
+  log("WARN: 磁盘图标覆盖失败", e.message);
+}
+
+// ---- 7e) 停用 Service Worker：PWA 的 SW 会缓存旧 app shell（旧 logo/标题/favicon），
+// 导致改了磁盘/HTML 浏览器仍显示旧的。把 sw.js 换成"自毁"版：激活即清空所有 cache、
+// 注销自身并刷新页面 => 浏览器下次导航拉到新 sw.js 后自愈，之后永远走网络拿最新。
+try {
+  const webDist = path.join(DIST, "..", "..", "web", "dist");
+  const swFile = path.join(webDist, "sw.js");
+  const killSw =
+    `/* HARDENED:sw-kill 自毁 Service Worker，禁用 PWA 离线缓存，保证始终加载最新 */\n` +
+    `self.addEventListener("install", function(e){ self.skipWaiting(); });\n` +
+    `self.addEventListener("activate", function(e){ e.waitUntil((async function(){\n` +
+    `  try { var ks = await caches.keys(); await Promise.all(ks.map(function(k){return caches.delete(k);})); } catch(e){}\n` +
+    `  try { await self.registration.unregister(); } catch(e){}\n` +
+    `  try { var cs = await self.clients.matchAll({type:"window"}); cs.forEach(function(c){ try{c.navigate(c.url);}catch(e){} }); } catch(e){}\n` +
+    `})()); });\n` +
+    `/* 不注册 fetch 处理器 => 所有请求直连网络，永不走缓存 */\n`;
+  if (fs.existsSync(swFile)) {
+    const cur = fs.readFileSync(swFile, "utf8");
+    if (!cur.includes("HARDENED:sw-kill")) { fs.writeFileSync(swFile, killSw); log("已将 sw.js 换成自毁版（停用 PWA 缓存，首次导航自愈）"); }
+    else log("sw.js 自毁版已就位（跳过）");
+  } else { fs.writeFileSync(swFile, killSw); log("已写入自毁版 sw.js"); }
+} catch (e) {
+  log("WARN: sw.js 停用失败", e.message);
 }
 
 // ---- 8) 提示词模板：隐藏 25 个 pi 内置模板，灌入从 harness+Ku 沉淀的多个可直接用模板 ----
@@ -498,7 +656,9 @@ try {
       else log("pi-llm-wiki：高危可选依赖已清理（跳过）");
 
       // b) 登记到 pi 全局 settings.json packages（绝对路径，可移植；去重）
-      const st = JSON.parse(fs.readFileSync(agentSettings, "utf8"));
+      // 首装时 settings.json 可能尚不存在（pi install 未成功时），用空对象兜底，保证其余配置仍能写入。
+      let st = {};
+      try { st = JSON.parse(fs.readFileSync(agentSettings, "utf8")); } catch {}
       const pkgs = new Set(st.packages || []);
       // 清掉任何 /tmp 的旧登记，以及任何旧的 pi-llm-wiki 相对/硬编码登记
       for (const p of [...pkgs]) {
