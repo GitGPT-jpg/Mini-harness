@@ -436,6 +436,9 @@ try {
     `\t\t\t#mh-code-loop-modal button{font-size:13px;border-radius:8px;padding:8px 16px;cursor:pointer;border:1px solid transparent;}\n` +
     `\t\t\t#mh-code-loop-modal .cl-cancel{background:#2b313b;color:#d8dde6;border-color:#3a414d;}\n` +
     `\t\t\t#mh-code-loop-modal .cl-start{background:#a855f7;color:#fff;}\n` +
+    `\t\t\t#mh-code-loop-modal details.cl-adv{margin-top:12px;border-top:1px dashed #333a45;padding-top:10px;}\n` +
+    `\t\t\t#mh-code-loop-modal details.cl-adv summary{cursor:pointer;font-size:12px;color:#8b93a1;user-select:none;outline:none;}\n` +
+    `\t\t\t#mh-code-loop-modal details.cl-adv[open] summary{margin-bottom:6px;}\n` +
     `\t\t</style>\n` +
     `\t\t<script id="pi-loop-modes-script">\n` +
     `\t\t(function(){try{\n` +
@@ -455,11 +458,14 @@ try {
     `\t\t\tfunction openModal(){\n` +
     `\t\t\t\tif(document.getElementById('mh-code-loop-modal'))return;\n` +
     `\t\t\t\tvar o=document.createElement('div');o.id='mh-code-loop-modal';\n` +
-    `\t\t\t\to.innerHTML='<div class="cl-card"><h2>代码 loop（validator 门禁）</h2><p class="cl-sub">提交后由运行时驱动：validator 不通过会自动带证据进入下一轮，通过才算完成；可断点续跑。</p>'+\n` +
-    `\t\t\t\t\t'<label>目标（写清可验证的完成条件）</label><textarea id="cl-goal" placeholder="例如：用 harness 真实 graph 执行 perf-012g gate，产出 db_gap_gate.json 且 gate_state=ESTIMATE_READY"></textarea>'+\n` +
-    `\t\t\t\t\t'<label>validator 命令</label><input id="cl-cmd" value="python3 validate.py" />'+\n` +
+    `\t\t\t\to.innerHTML='<div class="cl-card"><h2>代码 loop（自动验证）</h2><p class="cl-sub">只需说清想完成什么。系统会自动检查是否完成，不通过会带着原因重试；中途关掉页面也能回来继续。</p>'+\n` +
+    `\t\t\t\t\t'<label>你想完成什么？</label><textarea id="cl-goal" placeholder="例如：用 harness 跑 perf-012g gate，生成 db_gap_gate.json，gate_state 为 ESTIMATE_READY"></textarea>'+\n` +
+    `\t\t\t\t\t'<label>怎么算完成？（可选，写你能检查的条件）</label><textarea id="cl-criteria" style="min-height:54px" placeholder="例如：文件存在且 gate_state=ESTIMATE_READY；或命令 python3 check.py 返回 0"></textarea>'+\n` +
+    `\t\t\t\t\t'<details class="cl-adv"><summary>高级选项</summary>'+\n` +
+    `\t\t\t\t\t'<label>检查命令（留空=自动准备）</label><input id="cl-cmd" placeholder="留空则由系统根据目标准备，例如 python3 validate.py" />'+\n` +
     `\t\t\t\t\t'<label>产物目录（可选，逗号分隔）</label><input id="cl-roots" placeholder="/external/runs/xxx" />'+\n` +
-    `\t\t\t\t\t'<label>最大轮数</label><input id="cl-rounds" type="number" value="5" min="1" max="20" />'+\n` +
+    `\t\t\t\t\t'<label>最多尝试次数</label><input id="cl-rounds" type="number" value="5" min="1" max="20" />'+\n` +
+    `\t\t\t\t\t'</details>'+\n` +
     `\t\t\t\t\t'<div class="cl-row"><button class="cl-cancel">取消</button><button class="cl-start">启动代码 loop</button></div></div>';\n` +
     `\t\t\t\tdocument.body.appendChild(o);\n` +
     `\t\t\t\to.querySelector('.cl-cancel').addEventListener('click',function(){o.remove();});\n` +
@@ -467,13 +473,16 @@ try {
     `\t\t\t\to.querySelector('.cl-start').addEventListener('click',function(){\n` +
     `\t\t\t\t\tvar goal=(document.getElementById('cl-goal').value||'').trim();\n` +
     `\t\t\t\t\tif(!goal){document.getElementById('cl-goal').focus();return;}\n` +
+    `\t\t\t\t\tvar criteria=(document.getElementById('cl-criteria').value||'').trim();\n` +
     `\t\t\t\t\tvar cmd=(document.getElementById('cl-cmd').value||'').trim();\n` +
     `\t\t\t\t\tvar roots=(document.getElementById('cl-roots').value||'').split(',').map(function(s){return s.trim();}).filter(Boolean);\n` +
     `\t\t\t\t\tvar rounds=parseInt(document.getElementById('cl-rounds').value,10)||5;\n` +
-    `\t\t\t\t\tvar p='用 loop_start 启动受控代码 Loop（validator 门禁）：goal='+JSON.stringify(goal);\n` +
-    `\t\t\t\t\tif(cmd)p+=', validateCmd='+JSON.stringify(cmd);\n` +
-    `\t\t\t\t\tif(roots.length)p+=', artifactRoots='+JSON.stringify(roots);\n` +
-    `\t\t\t\t\tp+=', maxRounds='+rounds+'。然后 loop_plan 并直接完成工作，完成时调用 loop_done。不要向用户提问。';\n` +
+    `\t\t\t\t\tvar p='用 loop_start 启动受控代码 Loop（自动验证）。\\ngoal='+JSON.stringify(goal);\n` +
+    `\t\t\t\t\tif(criteria)p+='\\n验收标准：'+criteria;\n` +
+    `\t\t\t\t\tif(cmd){p+='\\nvalidateCmd='+JSON.stringify(cmd)+'（直接使用这个检查命令）';}\n` +
+    `\t\t\t\t\telse{p+='\\n验收方式：如果当前工作区没有真正可用的 validate.py，请先根据目标和验收标准写一个 validate.py（必须真正检查，不能恒通过），然后用 validateCmd="python3 validate.py" 启动。';}\n` +
+    `\t\t\t\t\tif(roots.length)p+='\\nartifactRoots='+JSON.stringify(roots);\n` +
+    `\t\t\t\t\tp+='\\nmaxRounds='+rounds+'。然后 loop_plan 并直接完成工作，完成时调用 loop_done。不要向用户提问。';\n` +
     `\t\t\t\t\tif(sendPrompt(p))o.remove();\n` +
     `\t\t\t\t});\n` +
     `\t\t\t\tsetTimeout(function(){var g=document.getElementById('cl-goal');if(g)g.focus();},80);\n` +
@@ -484,7 +493,7 @@ try {
     `\t\t\t\t\tif(!slot)return;\n` +
     `\t\t\t\t\tif(slot.querySelector('.mh-code-loop-btn'))return;\n` +
     `\t\t\t\t\tvar row=slot.querySelector('.goalbar-collapsed')||slot;\n` +
-    `\t\t\t\t\tvar btn=document.createElement('button');btn.type='button';btn.className='mh-code-loop-btn';btn.textContent='代码 loop';btn.title='启动受控代码 Loop（validator 门禁，可断点续跑）';\n` +
+    `\t\t\t\t\tvar btn=document.createElement('button');btn.type='button';btn.className='mh-code-loop-btn';btn.textContent='代码 loop';btn.title='启动受控代码 Loop（自动验证，可断点续跑）';\n` +
     `\t\t\t\t\tbtn.addEventListener('click',openModal);\n` +
     `\t\t\t\t\trow.appendChild(btn);\n` +
     `\t\t\t\t}catch(e){}\n` +
