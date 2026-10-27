@@ -16,16 +16,40 @@ intake → plan → run → validate ──pass──→ done
 - **断点续跑**：状态落盘在仓库之外（默认 `~/.mini-harness/runs/<runId>/`），进程重启后按 session/workspace 自动接续。
 - **不污染主提示词**：每轮状态作为隐藏尾消息注入，保持 provider 的 prompt cache 前缀稳定。
 
+## 多角色：planner / reviewer（强制跨家族）
+
+- **planner**（可选）：开工前由一个**不同家族**的模型产出拆解步骤与机器可验证的验收条件。
+- **reviewer**（可选，有否决权）：validator 通过后，由另一个**不同家族**的模型基于
+  「运行时采集的真实工作区快照（git status/diff/未跟踪文件内容；非 git 目录回退为目录快照）」+ validator 输出做审计。
+  - **只能 block，不能 approve**：validator 未通过时无权放行。
+  - block → 带 reviewer 理由进入下一轮（受 maxRounds 约束）。
+- **家族约束**：`planner` 与主模型不同家族；`reviewer` 与主模型、`planner` 都不同家族。
+  用户可显式指定，未指定时运行时自动挑选；显式冲突直接拒绝，不创建运行。
+  家族按模型 id 识别：openai / anthropic / google / zhipu / moonshot / deepseek / xai / minimax / alibaba …
+
 ## 工具
 
 | 工具 | 作用 |
 |---|---|
-| `loop_start(goal, validateCmd?, harnessRoot?, maxRounds?, auto?)` | 创建运行 |
+| `loop_start(goal, validateCmd?, harnessRoot?, maxRounds?, auto?, plannerModel?, reviewerModel?, useReviewer?)` | 创建运行（含家族校验与 planner） |
 | `loop_plan(plan)` | 记录计划，进入 `run` |
 | `loop_done(summary)` | 声明本轮完成，触发运行时验证 |
 | `loop_validate()` | 手动执行 validator（通常由运行时自动调用） |
 | `loop_status(runId?)` | 查看状态/最近证据 |
 | `loop_stop(reason?)` | 停止运行 |
+
+## watcher（最小任务队列）
+
+`watcher.mjs` 轮询 inbox 里的 `*.json` 任务，逐个交给 `pi --print` 执行，完成后归档到 `done/` 或 `failed/`：
+
+```bash
+MINI_HARNESS_INBOX=~/.mini-harness/inbox \
+MINI_HARNESS_RUNTIME_ROOT=~/.mini-harness/runs \
+node vendor/mini-harness-runtime/watcher.mjs
+```
+
+任务 JSON：`{goal, validateCmd, cwd?, maxRounds?, plannerModel?, reviewerModel?, useReviewer?}`；
+日志在 `inbox/logs/<task>.log`。不引入 LangChain/AWS/Qdrant 等重依赖。
 
 ## 落盘结构
 
@@ -44,7 +68,10 @@ intake → plan → run → validate ──pass──→ done
 
 ## 已验证
 
-- 一次通过：round 1 → validate pass → done
+- 一次通过：round 1 → validate pass → reviewer pass → done
 - 失败自动迭代：round 1 fail → 带证据 round 2 → pass → done
 - 最大轮数：连续失败到 maxRounds → stopped（不无限循环）
 - 断点续跑：进程重启后从 `state.json` 接续同一 runId 并完成
+- 家族约束：同家族 planner 被拒绝且不创建运行；缺省自动挑选不同家族的 planner/reviewer
+- reviewer 否决：validator 放水（恒通过）时 reviewer 能连续 block 并驱动修复；真实工作区快照可见后放行
+- watcher：任务投递 → 自动执行 → validator+reviewer 通过 → 归档 `done/`（约 1 分钟/任务）
