@@ -53,11 +53,14 @@ function buildPrompt(t) {
   ];
   if (t.validateCmd) lines.push(`validateCmd: ${t.validateCmd}`);
   if (t.harnessRoot) lines.push(`harnessRoot: ${t.harnessRoot}`);
+  if (Array.isArray(t.artifactRoots) && t.artifactRoots.length)
+    lines.push(`artifactRoots: ${JSON.stringify(t.artifactRoots)}`);
   if (t.maxRounds) lines.push(`maxRounds: ${t.maxRounds}`);
   if (t.plannerModel) lines.push(`plannerModel: ${t.plannerModel}`);
   if (t.reviewerModel) lines.push(`reviewerModel: ${t.reviewerModel}`);
   if (t.useReviewer === false) lines.push("useReviewer: false");
   lines.push("不要向用户提问；运行时会自动验证、失败自动进入下一轮。");
+  if (t.instructions) lines.push("", "具体要求/命令：", t.instructions);
   return lines.join("\n");
 }
 

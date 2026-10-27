@@ -50,8 +50,9 @@ MINI_HARNESS_RUNTIME_ROOT=~/.mini-harness/runs \
 node vendor/mini-harness-runtime/watcher.mjs
 ```
 
-任务 JSON：`{goal, validateCmd, cwd?, maxRounds?, plannerModel?, reviewerModel?, useReviewer?}`；
-日志在 `inbox/logs/<task>.log`。不引入 LangChain/AWS/Qdrant 等重依赖。
+任务 JSON：`{goal, validateCmd, cwd?, artifactRoots?, maxRounds?, plannerModel?, reviewerModel?, useReviewer?, instructions?}`；
+`instructions` 会追加到执行提示词（可放具体命令）；日志在 `inbox/logs/<task>.log`。
+不引入 LangChain/AWS/Qdrant 等重依赖。
 
 ## 落盘结构
 
