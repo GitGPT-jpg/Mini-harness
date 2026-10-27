@@ -386,12 +386,12 @@ async function collectDiff(pi, st) {
           [
             `echo '=== artifact root: ${root} ==='`,
             `ls -la ${JSON.stringify(root)} 2>/dev/null | head -40`,
-            `echo '--- files (maxdepth 5, first 20) ---'`,
+            'echo \'--- files (maxdepth 5, first 20) ---\'',
             `find ${JSON.stringify(root)} -maxdepth 5 -type f 2>/dev/null | head -20`,
-            `echo '--- recent json/status contents (first 5, 2KB each) ---'`,
+            'echo \'--- recent json/status contents (first 5, 2KB each) ---\'',
             `for f in $(find ${JSON.stringify(root)} -maxdepth 6 -type f ` +
-              `\\( -name '*.json' -o -name '*.log' -o -name '*.md' \\) 2>/dev/null | head -5); ` +
-              `do echo \"--- $f ---\"; head -c 2000 \"$f\" 2>/dev/null; echo; done`,
+              '\\( -name \'*.json\' -o -name \'*.log\' -o -name \'*.md\' \\) 2>/dev/null | head -5); ' +
+              'do echo "--- $f ---"; head -c 2000 "$f" 2>/dev/null; echo; done',
           ].join('\n'),
         ],
         { cwd: st.workspace, timeout: 30000 },
@@ -671,7 +671,7 @@ export default function miniHarnessRuntime(pi) {
                 {
                   type: 'text',
                   text:
-                    `reviewer 家族冲突：必须与主模型、planner 都不同家族。` +
+                    'reviewer 家族冲突：必须与主模型、planner 都不同家族。' +
                     `当前已用 ${[...used].join('/')}，reviewer ${reviewer.id} 属于 ${f}。`,
                 },
               ],
@@ -747,7 +747,7 @@ export default function miniHarnessRuntime(pi) {
           journal(st, 'planner', { family: st.plannerModel?.family, chars: plan.length });
           plannerNote =
             `\nplanner（${st.plannerModel?.family}/${st.plannerModel?.id}）` +
-            `已产出验收条件，见状态块。`;
+            '已产出验收条件，见状态块。';
         } catch (e) {
           plannerNote = `\n⚠️ planner 调用失败（不影响运行）：${String(e?.message || e)}`;
           journal(st, 'planner-error', { error: String(e?.message || e) });
@@ -763,10 +763,10 @@ export default function miniHarnessRuntime(pi) {
               `主模型家族：${mainFam}；` +
               `planner：${st.plannerModel ? `${st.plannerModel.family}/${st.plannerModel.id}` : '(无)'}；` +
               `reviewer：${st.reviewerModel ? `${st.reviewerModel.family}/${st.reviewerModel.id}` : '(无)'}。\n` +
-              `下一步：先调用 loop_plan 写出计划（会自动进入 run 阶段），` +
-              `然后直接修改工作区。\n` +
-              `完成时调用 loop_done(summary)；运行时会自动执行 validator，` +
-              `通过后 reviewer 可行使否决权，不通过则带证据进入下一轮。` +
+              '下一步：先调用 loop_plan 写出计划（会自动进入 run 阶段），' +
+              '然后直接修改工作区。\n' +
+              '完成时调用 loop_done(summary)；运行时会自动执行 validator，' +
+              '通过后 reviewer 可行使否决权，不通过则带证据进入下一轮。' +
               plannerNote,
           },
         ],
@@ -837,8 +837,8 @@ export default function miniHarnessRuntime(pi) {
             type: 'text',
             text:
               `已记录完成声明（第 ${st.round} 轮）。` +
-              `运行时将在本轮结束时自动执行 validator；` +
-              `不通过会带着证据进入下一轮。`,
+              '运行时将在本轮结束时自动执行 validator；' +
+              '不通过会带着证据进入下一轮。',
           },
         ],
         details: { runId: st.runId, stage: st.stage },
