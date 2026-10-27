@@ -425,6 +425,7 @@ try {
     `\t\t<style id="pi-loop-modes-style">\n` +
     `\t\t\t.mh-code-loop-btn{align-self:center;display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 9px;margin-left:6px;font-size:12px;border-radius:6px;cursor:pointer;color:#c4b5fd;background:rgba(168,85,247,.12);border:1px solid rgba(168,85,247,.45);white-space:nowrap;}\n` +
     `\t\t\t.mh-code-loop-btn:hover{background:rgba(168,85,247,.22);color:#ddd6fe;}\n` +
+    `\t\t\t.mh-llm-hint{font-size:11px;color:#7f8897;padding:6px 2px 0;line-height:1.5;}\n` +
     `\t\t\t#mh-code-loop-modal{position:fixed;inset:0;z-index:2147483500;display:flex;align-items:center;justify-content:center;background:rgba(15,17,21,.72);backdrop-filter:blur(3px);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;}\n` +
     `\t\t\t#mh-code-loop-modal .cl-card{width:min(560px,92vw);background:#1b1e24;color:#e7e9ee;border:1px solid #333a45;border-radius:14px;padding:24px 26px;box-shadow:0 18px 60px rgba(0,0,0,.5);}\n` +
     `\t\t\t#mh-code-loop-modal h2{margin:0 0 6px;font-size:17px;font-weight:700;}\n` +
@@ -442,7 +443,24 @@ try {
     `\t\t</style>\n` +
     `\t\t<script id="pi-loop-modes-script">\n` +
     `\t\t(function(){try{\n` +
-    `\t\t\tfunction relabel(){try{document.querySelectorAll('.goalbar-hint span').forEach(function(s){if((s.textContent||'').trim()==='目标')s.textContent='LLM loop';});}catch(e){}}\n` +
+    `\t\t\tfunction replaceText(root,from,to){try{var w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,null,false),n;while(n=w.nextNode()){if(n.nodeValue&&n.nodeValue.indexOf(from)!==-1)n.nodeValue=n.nodeValue.split(from).join(to);}}catch(e){}}\n` +
+    `\t\t\tfunction relabel(){\n` +
+    `\t\t\t\ttry{\n` +
+    `\t\t\t\t\tdocument.querySelectorAll('.goalbar-hint span').forEach(function(s){if((s.textContent||'').trim()==='目标')s.textContent='LLM loop';});\n` +
+    `\t\t\t\t\tvar hintBtn=document.querySelector('.goalbar-hint');if(hintBtn)hintBtn.title='LLM loop：由 AI 自己判断是否完成，适合开放式任务（可能提前结束）';\n` +
+    `\t\t\t\t\tvar inp=document.querySelector('.goalbar-input');\n` +
+    `\t\t\t\t\tif(inp&&/输入要达成的目标/.test(inp.placeholder||''))inp.placeholder='描述你想让 AI 完成的事…';\n` +
+    `\t\t\t\t\tvar slot=document.querySelector('.goalbar-slot');\n` +
+    `\t\t\t\t\tif(slot){\n` +
+    `\t\t\t\t\t\tslot.querySelectorAll('button').forEach(function(b){var t=(b.textContent||'').trim();if(t==='提炼')b.textContent='帮我细化';else if(t==='发送')b.textContent='开始';});\n` +
+    `\t\t\t\t\t\treplaceText(slot,'调研模型','规划模型');replaceText(slot,'最大轮数','最多尝试');\n` +
+    `\t\t\t\t\t\tif(slot.querySelector('.goalbar')&&!slot.querySelector('.mh-llm-hint')){\n` +
+    `\t\t\t\t\t\t\tvar d=document.createElement('div');d.className='mh-llm-hint';d.textContent='LLM loop：由 AI 自己判断是否完成，可能提前结束；需要严格验收请点旁边的「代码 loop」。';\n` +
+    `\t\t\t\t\t\t\tslot.appendChild(d);\n` +
+    `\t\t\t\t\t\t}\n` +
+    `\t\t\t\t\t}\n` +
+    `\t\t\t\t}catch(e){}\n` +
+    `\t\t\t}\n` +
     `\t\t\tfunction sendPrompt(text){\n` +
     `\t\t\t\ttry{\n` +
     `\t\t\t\t\tvar ta=document.querySelector('textarea[placeholder^="给 pi 发送消息"]');\n` +
