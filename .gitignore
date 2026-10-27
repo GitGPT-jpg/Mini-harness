@@ -16,6 +16,8 @@ web-demo/
 auth.json
 *.pem
 *.key
+# 堡垒机/隧道真实配置（每人一份，不入库）
+tunnel.env
 
 # ---- Mac .app 启动器（setup.sh 在本机 Desktop 生成，不入库）----
 *.app/
