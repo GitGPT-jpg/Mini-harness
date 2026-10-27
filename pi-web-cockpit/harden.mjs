@@ -447,13 +447,14 @@ try {
     `\t\t\tfunction relabel(){\n` +
     `\t\t\t\ttry{\n` +
     `\t\t\t\t\tdocument.querySelectorAll('.goalbar-hint span').forEach(function(s){if((s.textContent||'').trim()==='目标')s.textContent='LLM loop';});\n` +
-    `\t\t\t\t\tvar hintBtn=document.querySelector('.goalbar-hint');if(hintBtn)hintBtn.title='LLM loop：由 AI 自己判断是否完成，适合开放式任务（可能提前结束）';\n` +
+    `\t\t\t\t\tvar hintBtn=document.querySelector('.goalbar-hint');if(hintBtn){hintBtn.title='LLM loop：由 AI 自己判断是否完成，适合开放式任务（可能提前结束）';if(!hintBtn.__mhBound){hintBtn.__mhBound=true;hintBtn.addEventListener('click',function(){setTimeout(tick,60);setTimeout(tick,300);});}}\n` +
     `\t\t\t\t\tvar inp=document.querySelector('.goalbar-input');\n` +
     `\t\t\t\t\tif(inp&&/输入要达成的目标/.test(inp.placeholder||''))inp.placeholder='描述你想让 AI 完成的事…';\n` +
     `\t\t\t\t\tvar slot=document.querySelector('.goalbar-slot');\n` +
     `\t\t\t\t\tif(slot){\n` +
     `\t\t\t\t\t\tslot.querySelectorAll('button').forEach(function(b){var t=(b.textContent||'').trim();if(t==='提炼')b.textContent='帮我细化';else if(t==='发送')b.textContent='开始';});\n` +
     `\t\t\t\t\t\treplaceText(slot,'调研模型','规划模型');replaceText(slot,'最大轮数','最多尝试');\n` +
+    `\t\t\t\t\t\tif(!slot.querySelector('.goalbar')){var oldHint=slot.querySelector('.mh-llm-hint');if(oldHint)oldHint.remove();}\n` +
     `\t\t\t\t\t\tif(slot.querySelector('.goalbar')&&!slot.querySelector('.mh-llm-hint')){\n` +
     `\t\t\t\t\t\t\tvar d=document.createElement('div');d.className='mh-llm-hint';d.textContent='LLM loop：由 AI 自己判断是否完成，可能提前结束；需要严格验收请点旁边的「代码 loop」。';\n` +
     `\t\t\t\t\t\t\tslot.appendChild(d);\n` +
@@ -517,6 +518,7 @@ try {
     `\t\t\t\t}catch(e){}\n` +
     `\t\t\t}\n` +
     `\t\t\tfunction tick(){relabel();ensureBtn();}\n` +
+    `\t\t\tif(!window.__mhTickBound){window.__mhTickBound=true;document.addEventListener('click',function(){setTimeout(tick,80);},true);}\n` +
     `\t\t\tif(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){setTimeout(tick,700);});else setTimeout(tick,700);\n` +
     `\t\t\tsetInterval(tick,1200);\n` +
     `\t\t}catch(e){}})();\n` +
