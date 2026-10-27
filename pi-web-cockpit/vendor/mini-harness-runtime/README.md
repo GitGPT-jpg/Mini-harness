@@ -20,9 +20,11 @@ intake → plan → run → validate ──pass──→ done
 
 - **planner**（可选）：开工前由一个**不同家族**的模型产出拆解步骤与机器可验证的验收条件。
 - **reviewer**（可选，有否决权）：validator 通过后，由另一个**不同家族**的模型基于
-  「运行时采集的真实工作区快照（git status/diff/未跟踪文件内容；非 git 目录回退为目录快照）」+ validator 输出做审计。
+  「运行时采集的真实证据：工作区快照（git status/diff/未跟踪文件；非 git 目录回退目录快照）+
+  artifactRoots 产物目录快照 + validator 输出」做审计。
   - **只能 block，不能 approve**：validator 未通过时无权放行。
   - block → 带 reviewer 理由进入下一轮（受 maxRounds 约束）。
+  - 产物在 workspace 之外时，用 `artifactRoots` 显式告知运行时（例如 harness 的 `/external/runs/<id>`）。
 - **家族约束**：`planner` 与主模型不同家族；`reviewer` 与主模型、`planner` 都不同家族。
   用户可显式指定，未指定时运行时自动挑选；显式冲突直接拒绝，不创建运行。
   家族按模型 id 识别：openai / anthropic / google / zhipu / moonshot / deepseek / xai / minimax / alibaba …
@@ -31,7 +33,7 @@ intake → plan → run → validate ──pass──→ done
 
 | 工具 | 作用 |
 |---|---|
-| `loop_start(goal, validateCmd?, harnessRoot?, maxRounds?, auto?, plannerModel?, reviewerModel?, useReviewer?)` | 创建运行（含家族校验与 planner） |
+| `loop_start(goal, validateCmd?, harnessRoot?, artifactRoots?, maxRounds?, auto?, plannerModel?, reviewerModel?, useReviewer?)` | 创建运行（含家族校验与 planner） |
 | `loop_plan(plan)` | 记录计划，进入 `run` |
 | `loop_done(summary)` | 声明本轮完成，触发运行时验证 |
 | `loop_validate()` | 手动执行 validator（通常由运行时自动调用） |
@@ -75,3 +77,7 @@ node vendor/mini-harness-runtime/watcher.mjs
 - 家族约束：同家族 planner 被拒绝且不创建运行；缺省自动挑选不同家族的 planner/reviewer
 - reviewer 否决：validator 放水（恒通过）时 reviewer 能连续 block 并驱动修复；真实工作区快照可见后放行
 - watcher：任务投递 → 自动执行 → validator+reviewer 通过 → 归档 `done/`（约 1 分钟/任务）
+- **真实 harness 端到端**：在 `infer-forge-harness` 仓库内用 `cli/graph.py` 受管执行
+  `perf-012g-decode-sim-db-gap-gate`，产物写入外部 artifact root，
+  `tasks/decode_sim_db_gap_gate/validate.py` 真实通过，跨家族 reviewer 依据 artifact 快照通过；
+  第 1 轮收敛，约 3 分钟（含 planner + reviewer）。

@@ -313,10 +313,62 @@ async function collectDiff(pi, st) {
       "fi",
     ].join("\n");
     const res = await pi.exec("bash", ["-lc", script], { cwd: st.workspace, timeout: 30000 });
-    return tail(`${res.stdout || ""}${res.stderr ? "\n" + res.stderr : ""}`, 14000);
+    let out = `${res.stdout || ""}${res.stderr ? "\n" + res.stderr : ""}`;
+    // 外部产物根（artifact roots）：workspace 之外的真实产出，reviewer 也必须能看到
+    for (const root of st.artifactRoots || []) {
+      const r = await pi.exec(
+        "bash",
+        [
+          "-lc",
+          [
+            `echo '=== artifact root: ${root} ==='`,
+            `ls -la ${JSON.stringify(root)} 2>/dev/null | head -40`,
+            `echo '--- files (maxdepth 5, first 20) ---'`,
+            `find ${JSON.stringify(root)} -maxdepth 5 -type f 2>/dev/null | head -20`,
+            `echo '--- recent json/status contents (first 5, 2KB each) ---'`,
+            `for f in $(find ${JSON.stringify(root)} -maxdepth 6 -type f \\( -name '*.json' -o -name '*.log' -o -name '*.md' \\) 2>/dev/null | head -5); do echo \"--- $f ---\"; head -c 2000 \"$f\" 2>/dev/null; echo; done`,
+          ].join("\n"),
+        ],
+        { cwd: st.workspace, timeout: 30000 },
+      );
+      out += `\n${r.stdout || ""}${r.stderr ? "\n" + r.stderr : ""}`;
+    }
+    return tail(out, 20000);
   } catch {
     return "";
   }
+}
+
+/** 从模型输出里提取第一个合法的 JSON 对象（处理前后夹杂文字/多个对象）。 */
+function extractJson(text) {
+  const s = String(text || "");
+  for (let start = s.indexOf("{"); start !== -1; start = s.indexOf("{", start + 1)) {
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    for (let i = start; i < s.length; i++) {
+      const ch = s[i];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === "\\") esc = true;
+        else if (ch === '"') inStr = false;
+        continue;
+      }
+      if (ch === '"') inStr = true;
+      else if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) {
+          try {
+            return JSON.parse(s.slice(start, i + 1));
+          } catch {
+            break;
+          }
+        }
+      }
+    }
+  }
+  return null;
 }
 
 async function runReview(ctx, st, v, pi) {
@@ -327,30 +379,43 @@ async function runReview(ctx, st, v, pi) {
   if (!model) return { verdict: "error", reasons: ["reviewer model unavailable"] };
   const diff = await collectDiff(pi, st);
   const system =
-    '你是独立审查者。下面给出的是「运行时自动采集的真实工作区快照」（git 状态、diff、未跟踪文件内容）与 validator 输出，不是执行者口述。' +
+    '你是独立审查者。下面给出的是「运行时自动采集的真实证据」：工作区快照（git 状态/diff/未跟踪文件内容；非 git 目录为目录快照）、artifact 产物目录快照、以及 validator 输出。' +
     '只依据这些证据判断目标是否达成，不要臆测，也不要因为"没有终端日志"而否决。' +
-    '输出严格 JSON：{"verdict":"pass"|"block","reasons":["..."]}。证据不足、或与目标/验收条件不符时，必须输出 block。';
+    '只输出一个 JSON 对象，不要输出任何其它文字：{"verdict":"pass"|"block","reasons":["..."]}。证据不足、或与目标/验收条件不符时，必须输出 block。';
   const user = [
     `目标：${st.goal}`,
     st.plannerOutput ? `规划与验收条件：\n${tail(st.plannerOutput, 2000)}` : "",
     st.plan ? `执行计划：\n${tail(st.plan, 1200)}` : "",
     st.summary ? `执行者自述：\n${tail(st.summary, 1200)}` : "",
     `validator：exit=${v.code}\n${tail(v.output, 3000)}`,
-    diff ? `工作区快照（运行时采集，真实）：\n${tail(diff, 9000)}` : "工作区快照：（空）",
+    diff ? `工作区/产物快照（运行时采集，真实）：\n${tail(diff, 12000)}` : "工作区/产物快照：（空）",
   ]
     .filter(Boolean)
     .join("\n\n");
-  try {
-    const text = await callModel(ctx, model, system, user);
-    const m = text.match(/\{[\s\S]*\}/);
-    const obj = JSON.parse(m ? m[0] : text);
-    const verdict = obj.verdict === "block" ? "block" : "pass";
-    const reasons = Array.isArray(obj.reasons)
-      ? obj.reasons.map(String)
-      : obj.reasons
-        ? [String(obj.reasons)]
-        : [];
+  const parse = (text) => {
+    const obj = extractJson(text);
+    if (!obj) return null;
+    const verdict = obj.verdict === "block" ? "block" : obj.verdict === "pass" ? "pass" : null;
+    if (!verdict) return null;
+    const reasons = Array.isArray(obj.reasons) ? obj.reasons.map(String) : obj.reasons ? [String(obj.reasons)] : [];
     return { verdict, reasons };
+  };
+  try {
+    let text = await callModel(ctx, model, system, user);
+    let parsed = parse(text);
+    if (!parsed) {
+      // 一次重试：明确要求只输出 JSON
+      text = await callModel(
+        ctx,
+        model,
+        system,
+        `${user}\n\n上一次输出不是合法 JSON。请只输出一个 JSON 对象，不要任何其它文字。`,
+        120000,
+      );
+      parsed = parse(text);
+    }
+    if (!parsed) return { verdict: "error", reasons: ["reviewer output is not valid JSON after retry"] };
+    return parsed;
   } catch (e) {
     return { verdict: "error", reasons: [String(e?.message || e)] };
   }
@@ -431,6 +496,9 @@ export default function miniHarnessRuntime(pi) {
         Type.String({ description: "validator 命令（shell）。缺省自动找 workspace/validate.py 或 HARNESS_ROOT/validate.py" }),
       ),
       harnessRoot: Type.Optional(Type.String({ description: "infer-forge-harness 仓库根目录（用于定位 validate.py）" })),
+      artifactRoots: Type.Optional(
+        Type.Array(Type.String(), { description: "产物根目录（可多个，workspace 之外）；reviewer 会核验这些目录" }),
+      ),
       maxRounds: Type.Optional(Type.Number({ description: `最大轮数，默认 ${DEFAULT_MAX_ROUNDS}` })),
       auto: Type.Optional(Type.Boolean({ description: "是否自动验证并自动下一轮，默认 true" })),
       plannerModel: Type.Optional(
@@ -504,6 +572,7 @@ export default function miniHarnessRuntime(pi) {
         goal: String(params.goal || "").trim(),
         workspace: real(ctx?.cwd || process.cwd()),
         harnessRoot: params.harnessRoot || null,
+        artifactRoots: Array.isArray(params.artifactRoots) ? params.artifactRoots.map((x) => real(String(x))) : [],
         validateCmd: params.validateCmd || null,
         maxRounds,
         auto: params.auto !== false,
