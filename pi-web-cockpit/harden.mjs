@@ -416,6 +416,98 @@ try {
   log("WARN: sw.js 停用失败", e.message);
 }
 
+// ---- 7f) 双 Loop 入口：目标条改名为「LLM loop」，旁边加「代码 loop」按钮（validator 门禁运行时）----
+try {
+  let html = fs.readFileSync(htmlFile, "utf8");
+  const loopMarker = "HARDENED:loop-modes";
+  const loopBlock =
+    `\t\t<!-- ${loopMarker} 双 Loop 入口：LLM loop（目标条改名）+ 代码 loop（受控运行时）。 -->\n` +
+    `\t\t<style id="pi-loop-modes-style">\n` +
+    `\t\t\t.mh-code-loop-btn{align-self:center;display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 9px;margin-left:6px;font-size:12px;border-radius:6px;cursor:pointer;color:#c4b5fd;background:rgba(168,85,247,.12);border:1px solid rgba(168,85,247,.45);white-space:nowrap;}\n` +
+    `\t\t\t.mh-code-loop-btn:hover{background:rgba(168,85,247,.22);color:#ddd6fe;}\n` +
+    `\t\t\t#mh-code-loop-modal{position:fixed;inset:0;z-index:2147483500;display:flex;align-items:center;justify-content:center;background:rgba(15,17,21,.72);backdrop-filter:blur(3px);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;}\n` +
+    `\t\t\t#mh-code-loop-modal .cl-card{width:min(560px,92vw);background:#1b1e24;color:#e7e9ee;border:1px solid #333a45;border-radius:14px;padding:24px 26px;box-shadow:0 18px 60px rgba(0,0,0,.5);}\n` +
+    `\t\t\t#mh-code-loop-modal h2{margin:0 0 6px;font-size:17px;font-weight:700;}\n` +
+    `\t\t\t#mh-code-loop-modal .cl-sub{margin:0 0 16px;font-size:12px;color:#9aa3b2;}\n` +
+    `\t\t\t#mh-code-loop-modal label{display:block;font-size:12px;color:#9aa3b2;margin:10px 0 4px;}\n` +
+    `\t\t\t#mh-code-loop-modal textarea,#mh-code-loop-modal input{width:100%;box-sizing:border-box;background:#11141a;border:1px solid #2b313b;border-radius:7px;color:#e7e9ee;padding:8px 10px;font-size:13px;font-family:inherit;}\n` +
+    `\t\t\t#mh-code-loop-modal textarea{min-height:70px;resize:vertical;}\n` +
+    `\t\t\t#mh-code-loop-modal .cl-row{display:flex;gap:10px;justify-content:flex-end;margin-top:18px;}\n` +
+    `\t\t\t#mh-code-loop-modal button{font-size:13px;border-radius:8px;padding:8px 16px;cursor:pointer;border:1px solid transparent;}\n` +
+    `\t\t\t#mh-code-loop-modal .cl-cancel{background:#2b313b;color:#d8dde6;border-color:#3a414d;}\n` +
+    `\t\t\t#mh-code-loop-modal .cl-start{background:#a855f7;color:#fff;}\n` +
+    `\t\t</style>\n` +
+    `\t\t<script id="pi-loop-modes-script">\n` +
+    `\t\t(function(){try{\n` +
+    `\t\t\tfunction relabel(){try{document.querySelectorAll('.goalbar-hint span').forEach(function(s){if((s.textContent||'').trim()==='目标')s.textContent='LLM loop';});}catch(e){}}\n` +
+    `\t\t\tfunction sendPrompt(text){\n` +
+    `\t\t\t\ttry{\n` +
+    `\t\t\t\t\tvar ta=document.querySelector('textarea[placeholder^="给 pi 发送消息"]');\n` +
+    `\t\t\t\t\tif(!ta){return false;}\n` +
+    `\t\t\t\t\tvar setter=Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype,'value').set;\n` +
+    `\t\t\t\t\tsetter.call(ta,text);\n` +
+    `\t\t\t\t\tta.dispatchEvent(new Event('input',{bubbles:true}));\n` +
+    `\t\t\t\t\tta.focus();\n` +
+    `\t\t\t\t\tsetTimeout(function(){ta.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}));},200);\n` +
+    `\t\t\t\t\treturn true;\n` +
+    `\t\t\t\t}catch(e){return false;}\n` +
+    `\t\t\t}\n` +
+    `\t\t\tfunction openModal(){\n` +
+    `\t\t\t\tif(document.getElementById('mh-code-loop-modal'))return;\n` +
+    `\t\t\t\tvar o=document.createElement('div');o.id='mh-code-loop-modal';\n` +
+    `\t\t\t\to.innerHTML='<div class="cl-card"><h2>代码 loop（validator 门禁）</h2><p class="cl-sub">提交后由运行时驱动：validator 不通过会自动带证据进入下一轮，通过才算完成；可断点续跑。</p>'+\n` +
+    `\t\t\t\t\t'<label>目标（写清可验证的完成条件）</label><textarea id="cl-goal" placeholder="例如：用 harness 真实 graph 执行 perf-012g gate，产出 db_gap_gate.json 且 gate_state=ESTIMATE_READY"></textarea>'+\n` +
+    `\t\t\t\t\t'<label>validator 命令</label><input id="cl-cmd" value="python3 validate.py" />'+\n` +
+    `\t\t\t\t\t'<label>产物目录（可选，逗号分隔）</label><input id="cl-roots" placeholder="/external/runs/xxx" />'+\n` +
+    `\t\t\t\t\t'<label>最大轮数</label><input id="cl-rounds" type="number" value="5" min="1" max="20" />'+\n` +
+    `\t\t\t\t\t'<div class="cl-row"><button class="cl-cancel">取消</button><button class="cl-start">启动代码 loop</button></div></div>';\n` +
+    `\t\t\t\tdocument.body.appendChild(o);\n` +
+    `\t\t\t\to.querySelector('.cl-cancel').addEventListener('click',function(){o.remove();});\n` +
+    `\t\t\t\to.addEventListener('click',function(e){if(e.target===o)o.remove();});\n` +
+    `\t\t\t\to.querySelector('.cl-start').addEventListener('click',function(){\n` +
+    `\t\t\t\t\tvar goal=(document.getElementById('cl-goal').value||'').trim();\n` +
+    `\t\t\t\t\tif(!goal){document.getElementById('cl-goal').focus();return;}\n` +
+    `\t\t\t\t\tvar cmd=(document.getElementById('cl-cmd').value||'').trim();\n` +
+    `\t\t\t\t\tvar roots=(document.getElementById('cl-roots').value||'').split(',').map(function(s){return s.trim();}).filter(Boolean);\n` +
+    `\t\t\t\t\tvar rounds=parseInt(document.getElementById('cl-rounds').value,10)||5;\n` +
+    `\t\t\t\t\tvar p='用 loop_start 启动受控代码 Loop（validator 门禁）：goal='+JSON.stringify(goal);\n` +
+    `\t\t\t\t\tif(cmd)p+=', validateCmd='+JSON.stringify(cmd);\n` +
+    `\t\t\t\t\tif(roots.length)p+=', artifactRoots='+JSON.stringify(roots);\n` +
+    `\t\t\t\t\tp+=', maxRounds='+rounds+'。然后 loop_plan 并直接完成工作，完成时调用 loop_done。不要向用户提问。';\n` +
+    `\t\t\t\t\tif(sendPrompt(p))o.remove();\n` +
+    `\t\t\t\t});\n` +
+    `\t\t\t\tsetTimeout(function(){var g=document.getElementById('cl-goal');if(g)g.focus();},80);\n` +
+    `\t\t\t}\n` +
+    `\t\t\tfunction ensureBtn(){\n` +
+    `\t\t\t\ttry{\n` +
+    `\t\t\t\t\tvar slot=document.querySelector('.goalbar-slot');\n` +
+    `\t\t\t\t\tif(!slot)return;\n` +
+    `\t\t\t\t\tif(slot.querySelector('.mh-code-loop-btn'))return;\n` +
+    `\t\t\t\t\tvar row=slot.querySelector('.goalbar-collapsed')||slot;\n` +
+    `\t\t\t\t\tvar btn=document.createElement('button');btn.type='button';btn.className='mh-code-loop-btn';btn.textContent='代码 loop';btn.title='启动受控代码 Loop（validator 门禁，可断点续跑）';\n` +
+    `\t\t\t\t\tbtn.addEventListener('click',openModal);\n` +
+    `\t\t\t\t\trow.appendChild(btn);\n` +
+    `\t\t\t\t}catch(e){}\n` +
+    `\t\t\t}\n` +
+    `\t\t\tfunction tick(){relabel();ensureBtn();}\n` +
+    `\t\t\tif(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){setTimeout(tick,700);});else setTimeout(tick,700);\n` +
+    `\t\t\tsetInterval(tick,1200);\n` +
+    `\t\t}catch(e){}})();\n` +
+    `\t\t</script>\n\t`;
+  if (!html.includes(loopMarker)) {
+    html = html.replace("</head>", loopBlock + "</head>");
+    fs.writeFileSync(htmlFile, html);
+    log("已注入双 Loop 入口（LLM loop 改名 + 代码 loop 按钮）");
+  } else {
+    const re = /\t*<!-- HARDENED:loop-modes[\s\S]*?pi-loop-modes-script">[\s\S]*?<\/script>\n\t?/;
+    const updated = html.replace(re, loopBlock);
+    if (updated !== html) { fs.writeFileSync(htmlFile, updated); log("已更新双 Loop 入口"); }
+    else log("双 Loop 入口已是最新（跳过）");
+  }
+} catch (e) {
+  log("WARN: 双 Loop 入口注入失败", e.message);
+}
+
 // ---- 8) 提示词模板：隐藏 25 个 pi 内置模板，灌入从 harness+Ku 沉淀的多个可直接用模板 ----
 // 模板落在浏览器 localStorage['pi-web-ui:prompt-templates']。内置模板靠 {id,hidden:true} 隐藏；
 // 自定义模板用完整 {id,icon,title,desc,prompt}。版本化 seed 标志 => 改内容后能重新应用。
