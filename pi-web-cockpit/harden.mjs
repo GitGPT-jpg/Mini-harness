@@ -368,11 +368,11 @@ try {
     `\t\t\ttry{if("serviceWorker" in navigator){navigator.serviceWorker.getRegistrations().then(function(rs){rs.forEach(function(r){r.unregister();});}).catch(function(){});}}catch(e){}\n` +
     `\t\t\ttry{if(window.caches&&caches.keys){caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});}).catch(function(){});}}catch(e){}\n` +
     `\t\t\tvar T="训推引擎组 Harness";var ICON=${JSON.stringify(BRAND_FAVICON)};\n` +
-    `\t\t\tfunction setFav(){try{if(!ICON)return;var ls=document.querySelectorAll('link[rel*="icon"]');if(ls.length)ls.forEach(function(l){l.href=ICON;});else{var l=document.createElement("link");l.rel="icon";l.href=ICON;document.head.appendChild(l);}}catch(e){}}\n` +
+    `\t\t\tfunction setFav(){try{if(!ICON)return;var ls=document.querySelectorAll('link[rel*="icon"]');if(ls.length)ls.forEach(function(l){if(l.href!==ICON)l.href=ICON;});else{var l=document.createElement("link");l.rel="icon";l.href=ICON;document.head.appendChild(l);}}catch(e){}}\n` +
     `\t\t\tfunction setTitle(){try{var t=document.querySelector("title");if(!t){t=document.createElement("title");document.head.appendChild(t);}if(t.textContent!==T)t.textContent=T;if(document.title!==T)document.title=T;}catch(e){}}\n` +
     `\t\t\tfunction start(){setTitle();setFav();var t=document.querySelector("title");if(t){new MutationObserver(setTitle).observe(t,{childList:true,characterData:true,subtree:true});}}\n` +
     `\t\t\tif(document.readyState==="loading")document.addEventListener("DOMContentLoaded",start);else start();\n` +
-    `\t\t\tsetInterval(function(){setTitle();setFav();},1500);\n` +
+    `\t\t\tsetInterval(function(){if(document.hidden)return;setTitle();setFav();},5000);\n` +
     `\t\t}catch(e){}})();\n` +
     `\t\t</script>\n\t`;
   if (!html.includes(brandMarker)) {
@@ -561,13 +561,17 @@ try {
     `\t\t\t\tvar p=document.createElement('div');p.id='mh-loop-pop';p.className='mh-loop-pop';document.body.appendChild(p);\n` +
     `\t\t\t\trenderPop(__mhLastRun);\n` +
     `\t\t\t}\n` +
+    `\t\t\tfunction schedulePoll(ms){var pill=document.getElementById('mh-loop-pill');if(!pill)return;clearTimeout(pill.__poll);pill.__poll=setTimeout(pollStatus,ms);}\n` +
     `\t\t\tfunction pollStatus(){\n` +
     `\t\t\t\tvar pill=document.getElementById('mh-loop-pill');if(!pill)return;\n` +
+    `\t\t\t\tif(pill.__busy)return;pill.__busy=true;\n` +
+    `\t\t\t\tif(document.hidden){pill.__busy=false;schedulePoll(30000);return;}\n` +
     `\t\t\t\tvar tok=new URLSearchParams(location.search).get('token')||'';\n` +
     `\t\t\t\tfetch('/api/mini-harness/runs/latest'+(tok?('?token='+encodeURIComponent(tok)):''),{headers:tok?{'x-pi-token':tok}:{}})\n` +
     `\t\t\t\t\t.then(function(r){return r.ok?r.json():null;})\n` +
     `\t\t\t\t\t.then(function(st){\n` +
-    `\t\t\t\t\t\tif(!st){pill.style.display='none';hidePop();__mhLastRun=null;return;}\n` +
+    `\t\t\t\t\t\tpill.__busy=false;\n` +
+    `\t\t\t\t\t\tif(!st){pill.style.display='none';hidePop();__mhLastRun=null;schedulePoll(10000);return;}\n` +
     `\t\t\t\t\t\t__mhLastRun=st;\n` +
     `\t\t\t\t\t\tvar ok=st.status==='done', stop=st.status==='stopped';\n` +
     `\t\t\t\t\t\tpill.style.display='flex';\n` +
@@ -575,14 +579,15 @@ try {
     `\t\t\t\t\t\tvar v=st.lastVerdict==='pass'?'通过':(st.lastVerdict==='fail'?'未通过':'—');\n` +
     `\t\t\t\t\t\tpill.querySelector('.lp-text').textContent=(ok?'Loop 完成 ✓':stop?'Loop 停止 ✗':('Loop '+st.round+'/'+st.maxRounds+' · '+v));\n` +
     `\t\t\t\t\t\tvar bar=pill.querySelector('.lp-bar');if(bar)bar.style.width=(ok||stop?'100%':(Math.min(100,Math.round((st.round||1)/(st.maxRounds||1)*100))+'%'));\n` +
-    `\t\t\t\t\t\tif(ok||stop){clearTimeout(pill.__hide);pill.__hide=setTimeout(function(){pill.style.display='none';hidePop();},8000);}else{clearTimeout(pill.__hide);}\n` +
+    `\t\t\t\t\t\tif(ok||stop){clearTimeout(pill.__hide);pill.__hide=setTimeout(function(){pill.style.display='none';hidePop();},8000);schedulePoll(10000);}\n` +
+    `\t\t\t\t\t\telse{clearTimeout(pill.__hide);schedulePoll(3000);}\n` +
     `\t\t\t\t\t\tif(window.__mhPillOpen)renderPop(st);\n` +
-    `\t\t\t\t\t}).catch(function(){});\n` +
+    `\t\t\t\t\t}).catch(function(){pill.__busy=false;schedulePoll(8000);});\n` +
     `\t\t\t}\n` +
     `\t\t\tfunction showStatusCard(){\n` +
     `\t\t\t\tvar pill=document.getElementById('mh-loop-pill');\n` +
     `\t\t\t\tif(!pill){pill=document.createElement('div');pill.id='mh-loop-pill';pill.className='mh-loop-pill running';pill.innerHTML='<span class="lp-dot"></span><span class="lp-text">Loop …</span><span class="lp-bar"></span>';document.body.appendChild(pill);pill.addEventListener('click',togglePop);}\n` +
-    `\t\t\t\tpollStatus();clearInterval(pill.__poll);pill.__poll=setInterval(pollStatus,2000);\n` +
+    `\t\t\t\tpill.__started=true;pollStatus();\n` +
     `\t\t\t}\n` +
     `\t\t\tfunction openModal(){\n` +
     `\t\t\t\tif(document.getElementById('mh-code-loop-modal'))return;\n` +
@@ -642,10 +647,9 @@ try {
     `\t\t\t\t}catch(e){}\n` +
     `\t\t\t}\n` +
     `\t\t\tfunction tick(){relabel();ensureBtn();}\n` +
-    `\t\t\tif(!window.__mhTickBound){window.__mhTickBound=true;document.addEventListener('click',function(){setTimeout(tick,80);},true);}\n` +
     `\t\t\tif(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){setTimeout(tick,700);setTimeout(showStatusCard,900);});else setTimeout(tick,700);\n` +
     `\t\t\tsetTimeout(showStatusCard,900);\n` +
-    `\t\t\tsetInterval(tick,1200);\n` +
+    `\t\t\tif(!window.__mhTickTimer){window.__mhTickTimer=setInterval(function(){if(document.hidden)return;tick();},3000);}\n` +
     `\t\t}catch(e){}})();\n` +
     `\t\t</script>\n\t`;
   if (!html.includes(loopMarker)) {
