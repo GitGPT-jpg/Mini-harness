@@ -47,7 +47,7 @@ Key 仅保存在本机 `~/.pi/agent/auth.json`，**不会提交到代码库，�
 - **提示词模板**：隐藏 25 个 pi 内置模板，灌入 7 个从 harness + Ku 沉淀、可直接用的推理模板。
 - **子代理**：保留 explore/review/implement，新增 5 个推理 workflow 子代理。
 - **知识库**：内置 `pi-llm-wiki` 扩展（已做安全审查、移除高危可选依赖子树），后台自动召回/沉淀、无感维护，纯本地不外联。
-- **薄运行时（`mini-harness-runtime`）**：任务状态机 `intake→plan→run→validate`，**以 validate.py 为唯一准入门禁**，失败自动带证据进入下一轮，达到最大轮数停止，状态落盘可断点续跑。可选 **跨家族 planner / reviewer**：planner 产出可验证的验收条件；reviewer 只能否决、不能放行（validator 通过才算完成）。附最小 watcher 任务队列。对应"公共运行时"那一块，**不依赖模型自觉**。
+- **薄运行时（`mini-harness-runtime`）**：任务状态机 `intake→plan→run→validate`，**以 validate.py 为唯一准入门禁**，失败自动带证据进入下一轮，达到最大轮数停止，状态落盘可断点续跑。可选 **跨家族 planner / reviewer**：planner 产出可验证的验收条件；reviewer 只能否决、不能放行（validator 通过才算完成）。支持 **worktree 隔离 + watcher 并行**，并提供 `loop_review`/`loop_timeline` 可读证据与时间线。对应"公共运行时"那一块，**不依赖模型自觉**。
 - **One API Key 门禁**：首次打开弹窗引导配置（见上）。
 
 ## 仓库结构
