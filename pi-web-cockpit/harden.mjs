@@ -211,11 +211,11 @@ try {
       `      const p = pathM.join(dir, id, "state.json");\n` +
       `      if (!fsM.existsSync(p)) continue;\n` +
       `      const st = JSON.parse(fsM.readFileSync(p, "utf8"));\n` +
-      `      if (st.status !== "active") continue;\n` +
       `      const t = Date.parse(st.updatedAt || 0) || 0;\n` +
       `      if (t > bestT) { bestT = t; best = st; }\n` +
       `    }\n` +
-      `    res.json(best ? { runId: best.runId, stage: best.stage, round: best.round, maxRounds: best.maxRounds, status: best.status, lastVerdict: best.lastVerdict, goal: String(best.goal || "").slice(0, 200) } : null);\n` +
+      `    const fresh = best && (best.status === "active" || (Date.now() - bestT) < 30 * 60 * 1000);\n` +
+      `    res.json(fresh ? { runId: best.runId, stage: best.stage, round: best.round, maxRounds: best.maxRounds, status: best.status, lastVerdict: best.lastVerdict, goal: String(best.goal || "").slice(0, 200) } : null);\n` +
       `  } catch (e) { res.status(500).end(String(e)); }\n` +
       `});\n\n`;
     if (idx2.includes(anchor)) {
@@ -504,6 +504,11 @@ try {
     `\t\t\t.mh-status-card .sc-line{color:#9aa3b2;line-height:1.6;}\n` +
     `\t\t\t.mh-status-card .sc-ok{color:#34d399;}\n` +
     `\t\t\t.mh-status-card .sc-bad{color:#f87171;}\n` +
+    `\t\t\t.mh-status-card .sc-bar{height:4px;border-radius:2px;background:#262c35;overflow:hidden;margin:7px 0 2px;}\n` +
+    `\t\t\t.mh-status-card .sc-bar-fill{height:100%;background:linear-gradient(90deg,#a855f7,#7c3aed);border-radius:2px;transition:width .4s ease;}\n` +
+    `\t\t\t.mh-status-card.done{border-color:rgba(52,211,153,.4);}\n` +
+    `\t\t\t.mh-status-card.stopped{border-color:rgba(248,113,113,.4);}\n` +
+    `\t\t\t#mh-code-loop-modal.closing{opacity:0;transition:opacity .15s ease;}\n` +
     `\t\t\t@keyframes mhPulse{0%,100%{opacity:1;}50%{opacity:.3;}}\n` +
     `\t\t</style>\n` +
     `\t\t<script id="pi-loop-modes-script">\n` +
@@ -549,8 +554,16 @@ try {
     `\t\t\t\t\t.then(function(st){\n` +
     `\t\t\t\t\t\tif(!st){c.className='mh-status-card';c.innerHTML='<div class="sc-title"><span class="sc-dot" style="background:#6b7280"></span>没有进行中的运行</div>';return;}\n` +
     `\t\t\t\t\t\tvar v=st.lastVerdict==='pass'?'<span class="sc-ok">已通过</span>':(st.lastVerdict==='fail'?'<span class="sc-bad">未通过</span>':'—');\n` +
+    `\t\t\t\t\t\tif(st.status==='done'||st.status==='stopped'){\n` +
+    `\t\t\t\t\t\t\tvar ok=st.status==='done';\n` +
+    `\t\t\t\t\t\t\tc.className='mh-status-card '+(ok?'done':'stopped');\n` +
+    `\t\t\t\t\t\t\tc.innerHTML='<div class="sc-title"><span class="sc-dot" style="background:'+(ok?'#34d399':'#f87171')+'"></span>'+(ok?'代码 loop 已完成':'代码 loop 已停止')+'</div>'+'<div class="sc-line">第 '+st.round+'/'+st.maxRounds+' 轮 · 校验 '+v+'</div>'+(st.goal?('<div class="sc-line" style="color:#6b7280">'+escapeHtml(st.goal)+'</div>'):'');\n` +
+    `\t\t\t\t\t\t\tclearTimeout(c.__hide);c.__hide=setTimeout(function(){c.remove();},8000);\n` +
+    `\t\t\t\t\t\t\treturn;\n` +
+    `\t\t\t\t\t\t}\n` +
+    `\t\t\t\t\t\tvar pct=Math.min(100,Math.round((st.round||1)/(st.maxRounds||1)*100));\n` +
     `\t\t\t\t\t\tc.className='mh-status-card running';\n` +
-    `\t\t\t\t\t\tc.innerHTML='<div class="sc-title"><span class="sc-dot"></span>代码 loop 运行中</div>'+'<div class="sc-line">第 '+st.round+'/'+st.maxRounds+' 轮 · '+st.stage+'</div>'+'<div class="sc-line">上次校验：'+v+'</div>'+(st.goal?('<div class="sc-line" style="color:#6b7280">'+escapeHtml(st.goal)+'</div>'):'');\n` +
+    `\t\t\t\t\t\tc.innerHTML='<div class="sc-title"><span class="sc-dot"></span>代码 loop 运行中</div>'+'<div class="sc-line">第 '+st.round+'/'+st.maxRounds+' 轮 · '+st.stage+' · 校验 '+v+'</div>'+'<div class="sc-bar"><div class="sc-bar-fill" style="width:'+pct+'%"></div></div>'+(st.goal?('<div class="sc-line" style="color:#6b7280">'+escapeHtml(st.goal)+'</div>'):'');\n` +
     `\t\t\t\t\t}).catch(function(){c.className='mh-status-card';c.innerHTML='<div class="sc-title"><span class="sc-dot" style="background:#6b7280"></span>无法读取运行状态</div>';});\n` +
     `\t\t\t}\n` +
     `\t\t\tfunction showStatusCard(){var c=document.getElementById('mh-status-card');if(!c){c=document.createElement('div');c.id='mh-status-card';c.className='mh-status-card running';document.body.appendChild(c);}pollStatus();clearInterval(c.__poll);c.__poll=setInterval(pollStatus,2000);}\n` +
