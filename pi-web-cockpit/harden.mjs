@@ -497,17 +497,17 @@ try {
     `\t\t\t#mh-code-loop-modal .cl-start:disabled{opacity:.45;cursor:not-allowed;}\n` +
     `\t\t\t#mh-code-loop-modal .cl-start.loading{pointer-events:none;}\n` +
     `\t\t\t#mh-toast{position:fixed;left:50%;bottom:32px;transform:translateX(-50%);z-index:2147483600;background:#181b22;color:#e7e9ee;border:1px solid #333a45;border-radius:10px;padding:10px 16px;font-size:13px;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.5);animation:mhClPop .18s ease-out;}\n` +
-    `\t\t\t.mh-status-card{position:fixed;right:16px;bottom:16px;z-index:2147483550;width:250px;background:#1b1e24;color:#e7e9ee;border:1px solid #333a45;border-radius:12px;padding:12px 14px;font-size:12px;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;box-shadow:0 12px 40px rgba(0,0,0,.5);}\n` +
-    `\t\t\t.mh-status-card .sc-title{display:flex;align-items:center;gap:6px;font-weight:600;margin-bottom:6px;}\n` +
-    `\t\t\t.mh-status-card .sc-dot{width:8px;height:8px;border-radius:50%;background:#a855f7;}\n` +
-    `\t\t\t.mh-status-card.running .sc-dot{animation:mhPulse 1.1s ease-in-out infinite;}\n` +
-    `\t\t\t.mh-status-card .sc-line{color:#9aa3b2;line-height:1.6;}\n` +
-    `\t\t\t.mh-status-card .sc-ok{color:#34d399;}\n` +
-    `\t\t\t.mh-status-card .sc-bad{color:#f87171;}\n` +
-    `\t\t\t.mh-status-card .sc-bar{height:4px;border-radius:2px;background:#262c35;overflow:hidden;margin:7px 0 2px;}\n` +
-    `\t\t\t.mh-status-card .sc-bar-fill{height:100%;background:linear-gradient(90deg,#a855f7,#7c3aed);border-radius:2px;transition:width .4s ease;}\n` +
-    `\t\t\t.mh-status-card.done{border-color:rgba(52,211,153,.4);}\n` +
-    `\t\t\t.mh-status-card.stopped{border-color:rgba(248,113,113,.4);}\n` +
+    `\t\t\t.mh-loop-pill{position:fixed;left:14px;bottom:14px;z-index:2147483540;display:none;align-items:center;gap:7px;height:30px;padding:0 12px;border-radius:999px;background:rgba(24,26,32,.9);backdrop-filter:blur(8px);border:1px solid #333a45;color:#e7e9ee;font-size:12px;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.45);cursor:pointer;animation:mhClPop .2s ease-out;overflow:hidden;}\n` +
+    `\t\t\t.mh-loop-pill .lp-dot{width:8px;height:8px;border-radius:50%;background:#a855f7;flex:none;}\n` +
+    `\t\t\t.mh-loop-pill.running .lp-dot{animation:mhPulse 1.1s ease-in-out infinite;}\n` +
+    `\t\t\t.mh-loop-pill.done .lp-dot{background:#34d399;}\n` +
+    `\t\t\t.mh-loop-pill.stopped .lp-dot{background:#f87171;}\n` +
+    `\t\t\t.mh-loop-pill .lp-bar{position:absolute;left:0;bottom:0;height:3px;border-radius:999px;background:linear-gradient(90deg,#a855f7,#7c3aed);transition:width .4s ease;}\n` +
+    `\t\t\t.mh-loop-pop{position:fixed;left:14px;bottom:52px;z-index:2147483530;width:260px;background:#1b1e24;color:#e7e9ee;border:1px solid #333a45;border-radius:12px;padding:12px 14px;font-size:12px;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;box-shadow:0 12px 40px rgba(0,0,0,.5);animation:mhClPop .18s ease-out;}\n` +
+    `\t\t\t.mh-loop-pop .sc-title{display:flex;align-items:center;gap:6px;font-weight:600;margin-bottom:6px;}\n` +
+    `\t\t\t.mh-loop-pop .sc-line{color:#9aa3b2;line-height:1.6;}\n` +
+    `\t\t\t.mh-loop-pop .sc-ok{color:#34d399;}\n` +
+    `\t\t\t.mh-loop-pop .sc-bad{color:#f87171;}\n` +
     `\t\t\t#mh-code-loop-modal.closing{opacity:0;transition:opacity .15s ease;}\n` +
     `\t\t\t@keyframes mhPulse{0%,100%{opacity:1;}50%{opacity:.3;}}\n` +
     `\t\t</style>\n` +
@@ -546,27 +546,44 @@ try {
     `\t\t\t}\n` +
     `\t\t\tfunction escapeHtml(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML;}\n` +
     `\t\t\tfunction showToast(msg){var t=document.getElementById('mh-toast');if(!t){t=document.createElement('div');t.id='mh-toast';document.body.appendChild(t);}t.textContent=msg;t.style.display='block';clearTimeout(t.__tm);t.__tm=setTimeout(function(){t.style.display='none';},2600);}\n` +
+    `\t\t\tvar __mhLastRun=null;\n` +
+    `\t\t\tfunction hidePop(){var p=document.getElementById('mh-loop-pop');if(p)p.remove();window.__mhPillOpen=false;}\n` +
+    `\t\t\tfunction renderPop(st){\n` +
+    `\t\t\t\tvar p=document.getElementById('mh-loop-pop');if(!p)return;\n` +
+    `\t\t\t\tvar v=st.lastVerdict==='pass'?'<span class="sc-ok">已通过</span>':(st.lastVerdict==='fail'?'<span class="sc-bad">未通过</span>':'—');\n` +
+    `\t\t\t\tvar ok=st.status==='done', stop=st.status==='stopped';\n` +
+    `\t\t\t\tp.innerHTML='<div class="sc-title"><span class="lp-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:'+(ok?'#34d399':stop?'#f87171':'#a855f7')+'"></span>'+(ok?'代码 loop 已完成':stop?'代码 loop 已停止':'代码 loop 运行中')+'</div>'+'<div class="sc-line">第 '+st.round+'/'+st.maxRounds+' 轮 · '+st.stage+' · 校验 '+v+'</div>'+(st.goal?('<div class="sc-line" style="color:#6b7280">'+escapeHtml(st.goal)+'</div>'):'');\n` +
+    `\t\t\t}\n` +
+    `\t\t\tfunction togglePop(){\n` +
+    `\t\t\t\tif(window.__mhPillOpen){hidePop();return;}\n` +
+    `\t\t\t\tif(!__mhLastRun)return;\n` +
+    `\t\t\t\twindow.__mhPillOpen=true;\n` +
+    `\t\t\t\tvar p=document.createElement('div');p.id='mh-loop-pop';p.className='mh-loop-pop';document.body.appendChild(p);\n` +
+    `\t\t\t\trenderPop(__mhLastRun);\n` +
+    `\t\t\t}\n` +
     `\t\t\tfunction pollStatus(){\n` +
-    `\t\t\t\tvar c=document.getElementById('mh-status-card');if(!c)return;\n` +
+    `\t\t\t\tvar pill=document.getElementById('mh-loop-pill');if(!pill)return;\n` +
     `\t\t\t\tvar tok=new URLSearchParams(location.search).get('token')||'';\n` +
     `\t\t\t\tfetch('/api/mini-harness/runs/latest'+(tok?('?token='+encodeURIComponent(tok)):''),{headers:tok?{'x-pi-token':tok}:{}})\n` +
     `\t\t\t\t\t.then(function(r){return r.ok?r.json():null;})\n` +
     `\t\t\t\t\t.then(function(st){\n` +
-    `\t\t\t\t\t\tif(!st){c.className='mh-status-card';c.innerHTML='<div class="sc-title"><span class="sc-dot" style="background:#6b7280"></span>没有进行中的运行</div>';return;}\n` +
-    `\t\t\t\t\t\tvar v=st.lastVerdict==='pass'?'<span class="sc-ok">已通过</span>':(st.lastVerdict==='fail'?'<span class="sc-bad">未通过</span>':'—');\n` +
-    `\t\t\t\t\t\tif(st.status==='done'||st.status==='stopped'){\n` +
-    `\t\t\t\t\t\t\tvar ok=st.status==='done';\n` +
-    `\t\t\t\t\t\t\tc.className='mh-status-card '+(ok?'done':'stopped');\n` +
-    `\t\t\t\t\t\t\tc.innerHTML='<div class="sc-title"><span class="sc-dot" style="background:'+(ok?'#34d399':'#f87171')+'"></span>'+(ok?'代码 loop 已完成':'代码 loop 已停止')+'</div>'+'<div class="sc-line">第 '+st.round+'/'+st.maxRounds+' 轮 · 校验 '+v+'</div>'+(st.goal?('<div class="sc-line" style="color:#6b7280">'+escapeHtml(st.goal)+'</div>'):'');\n` +
-    `\t\t\t\t\t\t\tclearTimeout(c.__hide);c.__hide=setTimeout(function(){c.remove();},8000);\n` +
-    `\t\t\t\t\t\t\treturn;\n` +
-    `\t\t\t\t\t\t}\n` +
-    `\t\t\t\t\t\tvar pct=Math.min(100,Math.round((st.round||1)/(st.maxRounds||1)*100));\n` +
-    `\t\t\t\t\t\tc.className='mh-status-card running';\n` +
-    `\t\t\t\t\t\tc.innerHTML='<div class="sc-title"><span class="sc-dot"></span>代码 loop 运行中</div>'+'<div class="sc-line">第 '+st.round+'/'+st.maxRounds+' 轮 · '+st.stage+' · 校验 '+v+'</div>'+'<div class="sc-bar"><div class="sc-bar-fill" style="width:'+pct+'%"></div></div>'+(st.goal?('<div class="sc-line" style="color:#6b7280">'+escapeHtml(st.goal)+'</div>'):'');\n` +
-    `\t\t\t\t\t}).catch(function(){c.className='mh-status-card';c.innerHTML='<div class="sc-title"><span class="sc-dot" style="background:#6b7280"></span>无法读取运行状态</div>';});\n` +
+    `\t\t\t\t\t\tif(!st){pill.style.display='none';hidePop();__mhLastRun=null;return;}\n` +
+    `\t\t\t\t\t\t__mhLastRun=st;\n` +
+    `\t\t\t\t\t\tvar ok=st.status==='done', stop=st.status==='stopped';\n` +
+    `\t\t\t\t\t\tpill.style.display='flex';\n` +
+    `\t\t\t\t\t\tpill.className='mh-loop-pill '+(ok?'done':stop?'stopped':'running');\n` +
+    `\t\t\t\t\t\tvar v=st.lastVerdict==='pass'?'通过':(st.lastVerdict==='fail'?'未通过':'—');\n` +
+    `\t\t\t\t\t\tpill.querySelector('.lp-text').textContent=(ok?'Loop 完成 ✓':stop?'Loop 停止 ✗':('Loop '+st.round+'/'+st.maxRounds+' · '+v));\n` +
+    `\t\t\t\t\t\tvar bar=pill.querySelector('.lp-bar');if(bar)bar.style.width=(ok||stop?'100%':(Math.min(100,Math.round((st.round||1)/(st.maxRounds||1)*100))+'%'));\n` +
+    `\t\t\t\t\t\tif(ok||stop){clearTimeout(pill.__hide);pill.__hide=setTimeout(function(){pill.style.display='none';hidePop();},8000);}else{clearTimeout(pill.__hide);}\n` +
+    `\t\t\t\t\t\tif(window.__mhPillOpen)renderPop(st);\n` +
+    `\t\t\t\t\t}).catch(function(){});\n` +
     `\t\t\t}\n` +
-    `\t\t\tfunction showStatusCard(){var c=document.getElementById('mh-status-card');if(!c){c=document.createElement('div');c.id='mh-status-card';c.className='mh-status-card running';document.body.appendChild(c);}pollStatus();clearInterval(c.__poll);c.__poll=setInterval(pollStatus,2000);}\n` +
+    `\t\t\tfunction showStatusCard(){\n` +
+    `\t\t\t\tvar pill=document.getElementById('mh-loop-pill');\n` +
+    `\t\t\t\tif(!pill){pill=document.createElement('div');pill.id='mh-loop-pill';pill.className='mh-loop-pill running';pill.innerHTML='<span class="lp-dot"></span><span class="lp-text">Loop …</span><span class="lp-bar"></span>';document.body.appendChild(pill);pill.addEventListener('click',togglePop);}\n` +
+    `\t\t\t\tpollStatus();clearInterval(pill.__poll);pill.__poll=setInterval(pollStatus,2000);\n` +
+    `\t\t\t}\n` +
     `\t\t\tfunction openModal(){\n` +
     `\t\t\t\tif(document.getElementById('mh-code-loop-modal'))return;\n` +
     `\t\t\t\tvar o=document.createElement('div');o.id='mh-code-loop-modal';\n` +
