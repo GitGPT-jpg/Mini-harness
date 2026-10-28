@@ -191,6 +191,43 @@ if (!idx.includes(absMarker)) {
   } else log("WARN: 未找到 ABS_MARKER");
 } else log("__abs__ 已封禁（跳过）");
 
+// ---- 4b) 运行状态只读接口：GET /api/mini-harness/runs/latest（供前端代码 loop 状态卡片轮询）----
+try {
+  let idx2 = fs.readFileSync(idxFile, "utf8");
+  const runMarker = "/* HARDENED:mini-harness-runs-api */";
+  if (!idx2.includes(runMarker)) {
+    const anchor = 'app.get("/api/attachment/:hash", async (req, res) => {';
+    const route =
+      `// ${runMarker} 返回最近一个活跃运行的公开状态（round/stage/verdict），仅供前端状态卡片轮询。\n` +
+      `app.get("/api/mini-harness/runs/latest", async (req, res) => {\n` +
+      `  if (!tokenOk(req)) { res.status(403).end("unauthorized"); return; }\n` +
+      `  try {\n` +
+      `    const fsM = await import("node:fs");\n` +
+      `    const pathM = await import("node:path");\n` +
+      `    const osM = await import("node:os");\n` +
+      `    const dir = pathM.join(osM.homedir(), ".mini-harness", "runs");\n` +
+      `    let best = null, bestT = 0;\n` +
+      `    for (const id of fsM.readdirSync(dir)) {\n` +
+      `      const p = pathM.join(dir, id, "state.json");\n` +
+      `      if (!fsM.existsSync(p)) continue;\n` +
+      `      const st = JSON.parse(fsM.readFileSync(p, "utf8"));\n` +
+      `      if (st.status !== "active") continue;\n` +
+      `      const t = Date.parse(st.updatedAt || 0) || 0;\n` +
+      `      if (t > bestT) { bestT = t; best = st; }\n` +
+      `    }\n` +
+      `    res.json(best ? { runId: best.runId, stage: best.stage, round: best.round, maxRounds: best.maxRounds, status: best.status, lastVerdict: best.lastVerdict, goal: String(best.goal || "").slice(0, 200) } : null);\n` +
+      `  } catch (e) { res.status(500).end(String(e)); }\n` +
+      `});\n\n`;
+    if (idx2.includes(anchor)) {
+      idx2 = idx2.replace(anchor, route + anchor);
+      fs.writeFileSync(idxFile, idx2);
+      log("已注入运行状态只读接口 /api/mini-harness/runs/latest");
+    } else log("WARN: 未找到 attachment 路由锚点（接口未注入）");
+  } else log("运行状态接口已注入（跳过）");
+} catch (e) {
+  log("WARN: 运行状态接口注入失败", e.message);
+}
+
 // ---- 5) 驾驶舱设置：禁 eval、关 codemode、禁技能 + 推理场景精简开关（纵深防御）----
 // 首装时 client-state.json 尚不存在（由浏览器连接后才生成）；先播种一份 sanitized 的默认设置，
 // 否则下面的开关与领域身份在首装会被跳过（这正是干净机器上"定制丢失"的根因）。
@@ -440,6 +477,8 @@ try {
     `\t\t\t#mh-code-loop-modal .cl-card{width:min(560px,92vw);background:#1b1e24;color:#e7e9ee;border:1px solid #333a45;border-radius:14px;padding:24px 26px;box-shadow:0 18px 60px rgba(0,0,0,.5);}\n` +
     `\t\t\t#mh-code-loop-modal h2{margin:0 0 6px;font-size:17px;font-weight:700;}\n` +
     `\t\t\t#mh-code-loop-modal .cl-sub{margin:0 0 16px;font-size:12px;color:#9aa3b2;}\n` +
+    `\t\t\t#mh-code-loop-modal .cl-env-note{font-size:11.5px;color:#8b93a1;background:#11141a;border:1px solid #262c35;border-radius:8px;padding:7px 10px;margin-bottom:12px;}\n` +
+    `\t\t\t#mh-code-loop-modal .cl-env-note code{color:#8fd0ff;}\n` +
     `\t\t\t#mh-code-loop-modal label{display:block;font-size:12px;color:#9aa3b2;margin:10px 0 4px;}\n` +
     `\t\t\t#mh-code-loop-modal textarea,#mh-code-loop-modal input{width:100%;box-sizing:border-box;background:#11141a;border:1px solid #2b313b;border-radius:7px;color:#e7e9ee;padding:8px 10px;font-size:13px;font-family:inherit;}\n` +
     `\t\t\t#mh-code-loop-modal textarea{min-height:70px;resize:vertical;}\n` +
@@ -450,6 +489,22 @@ try {
     `\t\t\t#mh-code-loop-modal details.cl-adv{margin-top:12px;border-top:1px dashed #333a45;padding-top:10px;}\n` +
     `\t\t\t#mh-code-loop-modal details.cl-adv summary{cursor:pointer;font-size:12px;color:#8b93a1;user-select:none;outline:none;}\n` +
     `\t\t\t#mh-code-loop-modal details.cl-adv[open] summary{margin-bottom:6px;}\n` +
+    `\t\t\t#mh-code-loop-modal .cl-card{animation:mhClPop .18s ease-out;}\n` +
+    `\t\t\t@keyframes mhClPop{from{opacity:0;transform:scale(.96) translateY(6px);}to{opacity:1;transform:none;}}\n` +
+    `\t\t\t#mh-code-loop-modal .cl-presets{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 10px;}\n` +
+    `\t\t\t#mh-code-loop-modal .cl-preset{font-size:11.5px;border-radius:14px;padding:4px 10px;cursor:pointer;color:#c4b5fd;background:rgba(168,85,247,.10);border:1px solid rgba(168,85,247,.35);}\n` +
+    `\t\t\t#mh-code-loop-modal .cl-preset:hover{background:rgba(168,85,247,.2);}\n` +
+    `\t\t\t#mh-code-loop-modal .cl-start:disabled{opacity:.45;cursor:not-allowed;}\n` +
+    `\t\t\t#mh-code-loop-modal .cl-start.loading{pointer-events:none;}\n` +
+    `\t\t\t#mh-toast{position:fixed;left:50%;bottom:32px;transform:translateX(-50%);z-index:2147483600;background:#181b22;color:#e7e9ee;border:1px solid #333a45;border-radius:10px;padding:10px 16px;font-size:13px;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.5);animation:mhClPop .18s ease-out;}\n` +
+    `\t\t\t.mh-status-card{position:fixed;right:16px;bottom:16px;z-index:2147483550;width:250px;background:#1b1e24;color:#e7e9ee;border:1px solid #333a45;border-radius:12px;padding:12px 14px;font-size:12px;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;box-shadow:0 12px 40px rgba(0,0,0,.5);}\n` +
+    `\t\t\t.mh-status-card .sc-title{display:flex;align-items:center;gap:6px;font-weight:600;margin-bottom:6px;}\n` +
+    `\t\t\t.mh-status-card .sc-dot{width:8px;height:8px;border-radius:50%;background:#a855f7;}\n` +
+    `\t\t\t.mh-status-card.running .sc-dot{animation:mhPulse 1.1s ease-in-out infinite;}\n` +
+    `\t\t\t.mh-status-card .sc-line{color:#9aa3b2;line-height:1.6;}\n` +
+    `\t\t\t.mh-status-card .sc-ok{color:#34d399;}\n` +
+    `\t\t\t.mh-status-card .sc-bad{color:#f87171;}\n` +
+    `\t\t\t@keyframes mhPulse{0%,100%{opacity:1;}50%{opacity:.3;}}\n` +
     `\t\t</style>\n` +
     `\t\t<script id="pi-loop-modes-script">\n` +
     `\t\t(function(){try{\n` +
@@ -484,10 +539,31 @@ try {
     `\t\t\t\t\treturn true;\n` +
     `\t\t\t\t}catch(e){return false;}\n` +
     `\t\t\t}\n` +
+    `\t\t\tfunction escapeHtml(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML;}\n` +
+    `\t\t\tfunction showToast(msg){var t=document.getElementById('mh-toast');if(!t){t=document.createElement('div');t.id='mh-toast';document.body.appendChild(t);}t.textContent=msg;t.style.display='block';clearTimeout(t.__tm);t.__tm=setTimeout(function(){t.style.display='none';},2600);}\n` +
+    `\t\t\tfunction pollStatus(){\n` +
+    `\t\t\t\tvar c=document.getElementById('mh-status-card');if(!c)return;\n` +
+    `\t\t\t\tvar tok=new URLSearchParams(location.search).get('token')||'';\n` +
+    `\t\t\t\tfetch('/api/mini-harness/runs/latest'+(tok?('?token='+encodeURIComponent(tok)):''),{headers:tok?{'x-pi-token':tok}:{}})\n` +
+    `\t\t\t\t\t.then(function(r){return r.ok?r.json():null;})\n` +
+    `\t\t\t\t\t.then(function(st){\n` +
+    `\t\t\t\t\t\tif(!st){c.className='mh-status-card';c.innerHTML='<div class="sc-title"><span class="sc-dot" style="background:#6b7280"></span>没有进行中的运行</div>';return;}\n` +
+    `\t\t\t\t\t\tvar v=st.lastVerdict==='pass'?'<span class="sc-ok">已通过</span>':(st.lastVerdict==='fail'?'<span class="sc-bad">未通过</span>':'—');\n` +
+    `\t\t\t\t\t\tc.className='mh-status-card running';\n` +
+    `\t\t\t\t\t\tc.innerHTML='<div class="sc-title"><span class="sc-dot"></span>代码 loop 运行中</div>'+'<div class="sc-line">第 '+st.round+'/'+st.maxRounds+' 轮 · '+st.stage+'</div>'+'<div class="sc-line">上次校验：'+v+'</div>'+(st.goal?('<div class="sc-line" style="color:#6b7280">'+escapeHtml(st.goal)+'</div>'):'');\n` +
+    `\t\t\t\t\t}).catch(function(){c.className='mh-status-card';c.innerHTML='<div class="sc-title"><span class="sc-dot" style="background:#6b7280"></span>无法读取运行状态</div>';});\n` +
+    `\t\t\t}\n` +
+    `\t\t\tfunction showStatusCard(){var c=document.getElementById('mh-status-card');if(!c){c=document.createElement('div');c.id='mh-status-card';c.className='mh-status-card running';document.body.appendChild(c);}pollStatus();clearInterval(c.__poll);c.__poll=setInterval(pollStatus,2000);}\n` +
     `\t\t\tfunction openModal(){\n` +
     `\t\t\t\tif(document.getElementById('mh-code-loop-modal'))return;\n` +
     `\t\t\t\tvar o=document.createElement('div');o.id='mh-code-loop-modal';\n` +
-    `\t\t\t\to.innerHTML='<div class="cl-card"><h2>代码 loop（自动验证）</h2><p class="cl-sub">只需说清想完成什么。系统会自动检查是否完成，不通过会带着原因重试；中途关掉页面也能回来继续。</p>'+\n` +
+    `\t\t\t\to.innerHTML='<div class="cl-card"><h2>代码 loop（自动验证）</h2><p class="cl-sub">说清想完成什么，系统会自动检查是否完成；不通过会带着原因重试，中途关页面也能回来继续。</p>'+\n` +
+    `\t\t\t\t\t'<div class="cl-env-note">环境：连集群需 <code>kubectl</code> + <code>kubeconfig</code>；检查命令留空会自动准备。</div>'+\n` +
+    `\t\t\t\t\t'<div class="cl-presets">'+\n` +
+    `\t\t\t\t\t'<button class="cl-preset" data-goal="跑 harness 的 perf-012g gate，生成 db_gap_gate.json 且 gate_state=ESTIMATE_READY" data-crit="db_gap_gate.json 存在且 gate_state=ESTIMATE_READY">harness 门禁任务</button>'+\n` +
+    `\t\t\t\t\t'<button class="cl-preset" data-goal="在当前目录创建 result.txt，内容为 DONE" data-crit="result.txt 存在且内容为 DONE">创建并验收文件</button>'+\n` +
+    `\t\t\t\t\t'<button class="cl-preset" data-goal="运行测试直到全部通过" data-crit="测试命令退出码为 0">跑测试直到通过</button>'+\n` +
+    `\t\t\t\t\t'</div>'+\n` +
     `\t\t\t\t\t'<label>你想完成什么？</label><textarea id="cl-goal" placeholder="例如：用 harness 跑 perf-012g gate，生成 db_gap_gate.json，gate_state 为 ESTIMATE_READY"></textarea>'+\n` +
     `\t\t\t\t\t'<label>怎么算完成？（可选，写你能检查的条件）</label><textarea id="cl-criteria" style="min-height:54px" placeholder="例如：文件存在且 gate_state=ESTIMATE_READY；或命令 python3 check.py 返回 0"></textarea>'+\n` +
     `\t\t\t\t\t'<details class="cl-adv"><summary>高级选项</summary>'+\n` +
@@ -495,26 +571,34 @@ try {
     `\t\t\t\t\t'<label>产物目录（可选，逗号分隔）</label><input id="cl-roots" placeholder="/external/runs/xxx" />'+\n` +
     `\t\t\t\t\t'<label>最多尝试次数</label><input id="cl-rounds" type="number" value="5" min="1" max="20" />'+\n` +
     `\t\t\t\t\t'</details>'+\n` +
-    `\t\t\t\t\t'<div class="cl-row"><button class="cl-cancel">取消</button><button class="cl-start">启动代码 loop</button></div></div>';\n` +
+    `\t\t\t\t\t'<div class="cl-row"><button class="cl-cancel">取消</button><button class="cl-start" disabled>启动代码 loop</button></div></div>';\n` +
     `\t\t\t\tdocument.body.appendChild(o);\n` +
+    `\t\t\t\tvar goal=o.querySelector('#cl-goal'),start=o.querySelector('.cl-start');\n` +
+    `\t\t\t\tfunction sync(){start.disabled=!(goal.value||'').trim();}\n` +
+    `\t\t\t\tgoal.addEventListener('input',sync);\n` +
+    `\t\t\t\to.querySelectorAll('.cl-preset').forEach(function(b){b.addEventListener('click',function(){o.querySelector('#cl-goal').value=b.getAttribute('data-goal')||'';o.querySelector('#cl-criteria').value=b.getAttribute('data-crit')||'';sync();goal.focus();});});\n` +
     `\t\t\t\to.querySelector('.cl-cancel').addEventListener('click',function(){o.remove();});\n` +
     `\t\t\t\to.addEventListener('click',function(e){if(e.target===o)o.remove();});\n` +
     `\t\t\t\to.querySelector('.cl-start').addEventListener('click',function(){\n` +
-    `\t\t\t\t\tvar goal=(document.getElementById('cl-goal').value||'').trim();\n` +
-    `\t\t\t\t\tif(!goal){document.getElementById('cl-goal').focus();return;}\n` +
-    `\t\t\t\t\tvar criteria=(document.getElementById('cl-criteria').value||'').trim();\n` +
-    `\t\t\t\t\tvar cmd=(document.getElementById('cl-cmd').value||'').trim();\n` +
-    `\t\t\t\t\tvar roots=(document.getElementById('cl-roots').value||'').split(',').map(function(s){return s.trim();}).filter(Boolean);\n` +
-    `\t\t\t\t\tvar rounds=parseInt(document.getElementById('cl-rounds').value,10)||5;\n` +
-    `\t\t\t\t\tvar p='用 loop_start 启动受控代码 Loop（自动验证）。\\ngoal='+JSON.stringify(goal);\n` +
+    `\t\t\t\t\tvar g=(goal.value||'').trim();\n` +
+    `\t\t\t\t\tif(!g){goal.focus();return;}\n` +
+    `\t\t\t\t\tvar criteria=(o.querySelector('#cl-criteria').value||'').trim();\n` +
+    `\t\t\t\t\tvar cmd=(o.querySelector('#cl-cmd').value||'').trim();\n` +
+    `\t\t\t\t\tvar roots=(o.querySelector('#cl-roots').value||'').split(',').map(function(s){return s.trim();}).filter(Boolean);\n` +
+    `\t\t\t\t\tvar rounds=parseInt(o.querySelector('#cl-rounds').value,10)||5;\n` +
+    `\t\t\t\t\tvar p='用 loop_start 启动受控代码 Loop（自动验证）。\\ngoal='+JSON.stringify(g);\n` +
     `\t\t\t\t\tif(criteria)p+='\\n验收标准：'+criteria;\n` +
     `\t\t\t\t\tif(cmd){p+='\\nvalidateCmd='+JSON.stringify(cmd)+'（直接使用这个检查命令）';}\n` +
     `\t\t\t\t\telse{p+='\\n验收方式：如果当前工作区没有真正可用的 validate.py，请先根据目标和验收标准写一个 validate.py（必须真正检查，不能恒通过），然后用 validateCmd="python3 validate.py" 启动。';}\n` +
     `\t\t\t\t\tif(roots.length)p+='\\nartifactRoots='+JSON.stringify(roots);\n` +
     `\t\t\t\t\tp+='\\nmaxRounds='+rounds+'。然后 loop_plan 并直接完成工作，完成时调用 loop_done。不要向用户提问。';\n` +
-    `\t\t\t\t\tif(sendPrompt(p))o.remove();\n` +
+    `\t\t\t\t\tstart.disabled=true;start.classList.add('loading');start.textContent='启动中…';\n` +
+    `\t\t\t\t\tvar ok=sendPrompt(p);\n` +
+    `\t\t\t\t\to.remove();\n` +
+    `\t\t\t\t\tshowToast('已提交，AI 正在执行代码 loop');\n` +
+    `\t\t\t\t\tshowStatusCard();\n` +
     `\t\t\t\t});\n` +
-    `\t\t\t\tsetTimeout(function(){var g=document.getElementById('cl-goal');if(g)g.focus();},80);\n` +
+    `\t\t\t\tsetTimeout(function(){goal.focus();},80);\n` +
     `\t\t\t}\n` +
     `\t\t\tfunction ensureBtn(){\n` +
     `\t\t\t\ttry{\n` +
