@@ -45,3 +45,6 @@ tmp/
 
 # 防止工作区测试产生的 validator 被误提交
 /validate.py
+
+# 打包产物
+/dist/
