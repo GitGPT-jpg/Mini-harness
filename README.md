@@ -77,6 +77,7 @@ eval "$(./tunnel/tunnel.sh env)"                          # 让当前终端走�
 ```
 
 隧道打通后，任何 pod 的 IP 都由内网路由解决，无需为每个 pod 单独配置。
+**两种部署形态**：已在堡垒机/内网（`kubectl` 直连成功）时，`tunnel.sh auto` 会自动跳过；不在内网时，它会询问（或 `-y` 自动）建隧道，并把代理环境写到 `~/.mini-harness/proxy.env`，驾驶舱/脚本会自动读取。
 详见 `tunnel/tunnel.sh` 头部注释。
 
 ## 维护

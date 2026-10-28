@@ -59,6 +59,7 @@ function buildPrompt(t) {
   if (t.plannerModel) lines.push(`plannerModel: ${t.plannerModel}`);
   if (t.reviewerModel) lines.push(`reviewerModel: ${t.reviewerModel}`);
   if (t.useReviewer === false) lines.push("useReviewer: false");
+  if (t.worktree) lines.push("worktree: true");
   lines.push("不要向用户提问；运行时会自动验证、失败自动进入下一轮。");
   if (t.instructions) lines.push("", "具体要求/命令：", t.instructions);
   return lines.join("\n");
@@ -111,6 +112,10 @@ function runTask(file) {
 }
 
 let running = false;
+let active = 0;
+const CONCURRENCY = Math.max(1, Number(process.env.WATCH_CONCURRENCY || 1));
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function scanOnce() {
   if (running) return;
@@ -122,6 +127,8 @@ async function scanOnce() {
       .map((n) => path.join(INBOX, n))
       .sort();
     for (const f of files) {
+      // 并发上限：槽满则等待
+      while (active >= CONCURRENCY) await sleep(500);
       // 先原子改名，避免重复处理
       const claimed = f.replace(/\.json$/, ".processing.json");
       try {
@@ -129,13 +136,16 @@ async function scanOnce() {
       } catch {
         continue;
       }
-      await runTask(claimed);
+      active += 1;
+      runTask(claimed).finally(() => {
+        active -= 1;
+      });
     }
   } finally {
     running = false;
   }
 }
 
-log(`watcher 启动：inbox=${INBOX} interval=${INTERVAL}ms pi=${PI} runtimeRoot=${RUNTIME_ROOT}`);
+log(`watcher 启动：inbox=${INBOX} interval=${INTERVAL}ms pi=${PI} runtimeRoot=${RUNTIME_ROOT} concurrency=${CONCURRENCY}`);
 await scanOnce();
 setInterval(scanOnce, INTERVAL);

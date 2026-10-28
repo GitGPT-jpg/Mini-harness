@@ -499,15 +499,16 @@ async function runReview(ctx, st, v, pi) {
       parsed = parse(text);
     }
     if (!parsed) {
-      return { verdict: 'error', reasons: ['reviewer output is not valid JSON after retry'] };
+      return { verdict: 'error', reasons: ['reviewer output is not valid JSON after retry'], diff };
     }
-    return parsed;
+    return { ...parsed, diff };
   } catch (e) {
-    return { verdict: 'error', reasons: [String(e?.message || e)] };
+    return { verdict: 'error', reasons: [String(e?.message || e)], diff };
   }
 }
 
 function advanceOrStop(pi, st, v, feedback, event) {
+  writeRoundReview(st, v, null, '');
   if (st.round < st.maxRounds) {
     const failedRound = st.round;
     st.round += 1;
@@ -536,8 +537,10 @@ async function handleVerdict(pi, ctx, st, v) {
   if (v.pass) {
     const review = await runReview(ctx, st, v, pi);
     st.lastReview = review;
+    st.lastDiff = review.diff || '';
     saveState(st);
     journal(st, 'review', { verdict: review.verdict, reasons: review.reasons });
+    writeRoundReview(st, v, review, review.diff);
     if (review.verdict === 'block') {
       notify(
         ctx,
@@ -551,6 +554,26 @@ async function handleVerdict(pi, ctx, st, v) {
     st.status = 'done';
     saveState(st);
     journal(st, 'validate-pass', { code: v.code, review: review.verdict });
+    if (st.worktreeDir && st.worktreeBranch && !st.worktreeCommitted) {
+      try {
+        await pi.exec('git', ['-C', st.worktreeDir, 'add', '-A'], { cwd: st.worktreeDir, timeout: 60000 });
+        const d = await pi.exec('git', ['-C', st.worktreeDir, 'diff', '--cached', '--quiet'], {
+          cwd: st.worktreeDir,
+          timeout: 60000,
+        });
+        if (d.code !== 0) {
+          await pi.exec('git', ['-C', st.worktreeDir, 'commit', '-m', `mini-harness run ${st.runId}`], {
+            cwd: st.worktreeDir,
+            timeout: 60000,
+          });
+        }
+        st.worktreeCommitted = true;
+        saveState(st);
+        journal(st, 'worktree-commit', { branch: st.worktreeBranch, dir: st.worktreeDir });
+      } catch (e) {
+        journal(st, 'worktree-commit-error', { error: String(e?.message || e) });
+      }
+    }
     notify(
       ctx,
       `✅ mini-harness：第 ${st.round} 轮验证通过` +
@@ -573,6 +596,80 @@ async function handleVerdict(pi, ctx, st, v) {
     return;
   }
   advanceOrStop(pi, st, v, '', 'validate-fail');
+}
+
+// ---------- Review 报告 / 时间线 ----------
+
+function writeRoundReview(st, v, review, diff) {
+  try {
+    const lines = [
+      `# mini-harness 运行报告 · ${st.runId}`,
+      `- round: ${st.round} | stage: ${st.stage}`,
+      `- goal: ${st.goal}`,
+      `- verdict: ${v?.pass ? 'PASS' : 'FAIL'}${v?.code != null ? `（exit ${v.code}）` : ''}`,
+      review ? `- reviewer: ${review.verdict}` : '',
+      ...(review?.reasons?.length ? ['- reviewer reasons:', ...review.reasons.map((r) => `  - ${r}`)] : []),
+      '',
+      '## 执行者自述',
+      st.summary || '(空)',
+      '',
+      '## 计划',
+      st.plan || '(空)',
+      '',
+      '## validator 输出',
+      '```',
+      tail(v?.output || '', 4000),
+      '```',
+    ];
+    if (diff) lines.push('', '## 变更（工作区/产物快照）', '```', tail(diff, 8000), '```');
+    fs.mkdirSync(path.join(runDir(st.runId), 'evidence'), { recursive: true });
+    fs.writeFileSync(
+      path.join(runDir(st.runId), 'evidence', `round-${st.round}-review.md`),
+      lines.filter(Boolean).join('\n') + '\n',
+    );
+  } catch {}
+}
+
+function readJournal(st) {
+  try {
+    return fs
+      .readFileSync(path.join(runDir(st.runId), 'journal.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map((l) => {
+        try {
+          return JSON.parse(l);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function buildTimelineText(st) {
+  const lines = [`# mini-harness 时间线 · ${st.runId}`, ''];
+  for (const e of readJournal(st)) {
+    const at = String(e.at || '').replace('T', ' ').slice(0, 19);
+    lines.push(`- ${at}  [round ${e.round}]  ${e.event}`);
+  }
+  lines.push('', `终态：stage=${st.stage} / status=${st.status} / round=${st.round}/${st.maxRounds}`);
+  return lines.join('\n');
+}
+
+function buildReviewText(st) {
+  try {
+    const f = path.join(runDir(st.runId), 'evidence', `round-${st.round}-review.md`);
+    if (fs.existsSync(f)) return fs.readFileSync(f, 'utf8');
+  } catch {}
+  return (
+    `# mini-harness 运行报告 · ${st.runId}\n` +
+    `stage=${st.stage} round=${st.round}\n` +
+    `最近验证：${st.lastVerdict}（exit ${st.lastCode}）\n` +
+    tail(st.lastEvidence || '', 2000)
+  );
 }
 
 // ---------- 扩展入口 ----------
@@ -618,6 +715,9 @@ export default function miniHarnessRuntime(pi) {
       ),
       useReviewer: Type.Optional(
         Type.Boolean({ description: '是否启用 reviewer 否决层，默认 true（有可用模型时）' }),
+      ),
+      worktree: Type.Optional(
+        Type.Boolean({ description: '若 workspace 是 git 仓库，则在新 git worktree 中执行（隔离并行任务，验证通过后提交到独立分支）' }),
       ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -687,10 +787,38 @@ export default function miniHarnessRuntime(pi) {
 
       const runId = newRunId();
       const maxRounds = Math.max(1, Math.min(20, Number(params.maxRounds) || DEFAULT_MAX_ROUNDS));
+
+      // worktree 隔离：可选，在 git 仓库里开一个独立 worktree，避免并行任务互相污染
+      let baseWorkspace = real(ctx?.cwd || process.cwd());
+      let worktreeDir = null;
+      let worktreeBranch = null;
+      if (params.worktree) {
+        try {
+          const inside = await pi.exec('git', ['-C', baseWorkspace, 'rev-parse', '--is-inside-work-tree'], {
+            cwd: baseWorkspace,
+            timeout: 15000,
+          });
+          if ((inside.stdout || '').trim() === 'true') {
+            worktreeDir = path.join(ROOT, runId, 'worktree');
+            worktreeBranch = `mini-harness/${runId}`;
+            const add = await pi.exec(
+              'git', ['-C', baseWorkspace, 'worktree', 'add', '-b', worktreeBranch, worktreeDir],
+              { cwd: baseWorkspace, timeout: 60000 },
+            );
+            if (add.code === 0) baseWorkspace = real(worktreeDir);
+            else { worktreeDir = null; worktreeBranch = null; }
+          }
+        } catch {}
+      }
+
       const st = {
         runId,
         goal: String(params.goal || '').trim(),
-        workspace: real(ctx?.cwd || process.cwd()),
+        workspace: baseWorkspace,
+        baseWorkspace: real(ctx?.cwd || process.cwd()),
+        worktreeDir,
+        worktreeBranch,
+        worktreeCommitted: false,
         harnessRoot: params.harnessRoot || null,
         artifactRoots: Array.isArray(params.artifactRoots) ? params.artifactRoots.map((x) => real(String(x))) : [],
         validateCmd: params.validateCmd || null,
@@ -763,6 +891,9 @@ export default function miniHarnessRuntime(pi) {
               `主模型家族：${mainFam}；` +
               `planner：${st.plannerModel ? `${st.plannerModel.family}/${st.plannerModel.id}` : '(无)'}；` +
               `reviewer：${st.reviewerModel ? `${st.reviewerModel.family}/${st.reviewerModel.id}` : '(无)'}。\n` +
+              (st.worktreeBranch
+                ? `worktree 隔离：已在新分支 ${st.worktreeBranch} 的独立工作树中执行（验证通过后自动提交）。\n`
+                : '') +
               '下一步：先调用 loop_plan 写出计划（会自动进入 run 阶段），' +
               '然后直接修改工作区。\n' +
               '完成时调用 loop_done(summary)；运行时会自动执行 validator，' +
@@ -863,15 +994,25 @@ export default function miniHarnessRuntime(pi) {
       st.lastCode = v.code;
       st.lastEvidence = v.output;
       st.history.push({ round: st.round, verdict: st.lastVerdict, code: v.code, at: now(), evidence: v.evidence });
-      // 不在这里判 done：交给 agent_end 统一处理（validator → reviewer → done/next）
-      if (!v.pass) {
-        st.stage = 'run';
-      }
-      saveState(st);
       journal(st, 'manual-validate', { pass: v.pass, code: v.code });
+      if (v.pass) {
+        // 通过：同步跑 reviewer 并完结，避免 headless/print 模式下 agent_end 早退导致 reviewer 被跳过
+        await handleVerdict(pi, ctx, st, v);
+      } else {
+        // 失败：交给 agent_end 统一推进下一轮（带证据 followUp）
+        st.stage = 'run';
+        saveState(st);
+      }
       return {
-        content: [{ type: 'text', text: `${v.pass ? 'PASS' : 'FAIL'}（exit ${v.code}）\n${tail(v.output, 2000)}` }],
-        details: { runId: st.runId, pass: v.pass, code: v.code, evidence: v.evidence },
+        content: [
+          {
+            type: 'text',
+            text:
+              `${v.pass ? 'PASS' : 'FAIL'}（exit ${v.code}）\n${tail(v.output, 2000)}` +
+              (v.pass ? `\nreviewer: ${st.lastReview?.verdict ?? 'n/a'}` : ''),
+          },
+        ],
+        details: { runId: st.runId, pass: v.pass, code: v.code, evidence: v.evidence, review: st.lastReview?.verdict },
       };
     },
   });
@@ -916,6 +1057,38 @@ export default function miniHarnessRuntime(pi) {
       saveState(st);
       journal(st, 'stop', { reason: st.stopReason });
       return { content: [{ type: 'text', text: `已停止运行 ${st.runId}。` }], details: { runId: st.runId } };
+    },
+  });
+
+  // ---- 工具：loop_review ----
+  pi.registerTool({
+    name: 'loop_review',
+    label: 'Loop Review',
+    description: '查看当前（或指定）运行的审阅报告：goal/自述/计划/validator 输出/变更快照/reviewer 结论。',
+    parameters: Type.Object({ runId: Type.Optional(Type.String()) }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const st = params.runId ? loadState(params.runId) : findActiveRun(ctx) || listRuns().sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))[0];
+      if (!st) return { content: [{ type: 'text', text: '没有找到运行。' }], details: {} };
+      return {
+        content: [{ type: 'text', text: buildReviewText(st) }],
+        details: { runId: st.runId, round: st.round, verdict: st.lastVerdict, review: st.lastReview?.verdict },
+      };
+    },
+  });
+
+  // ---- 工具：loop_timeline ----
+  pi.registerTool({
+    name: 'loop_timeline',
+    label: 'Loop Timeline',
+    description: '查看当前（或指定）运行的事件时间线（start/plan/validate/review/…）。',
+    parameters: Type.Object({ runId: Type.Optional(Type.String()) }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const st = params.runId ? loadState(params.runId) : findActiveRun(ctx) || listRuns().sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))[0];
+      if (!st) return { content: [{ type: 'text', text: '没有找到运行。' }], details: {} };
+      return {
+        content: [{ type: 'text', text: buildTimelineText(st) }],
+        details: { runId: st.runId, stage: st.stage, status: st.status },
+      };
     },
   });
 

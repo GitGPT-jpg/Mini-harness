@@ -33,12 +33,26 @@ intake → plan → run → validate ──pass──→ done
 
 | 工具 | 作用 |
 |---|---|
-| `loop_start(goal, validateCmd?, harnessRoot?, artifactRoots?, maxRounds?, auto?, plannerModel?, reviewerModel?, useReviewer?)` | 创建运行（含家族校验与 planner） |
+| `loop_start(goal, validateCmd?, harnessRoot?, artifactRoots?, maxRounds?, auto?, plannerModel?, reviewerModel?, useReviewer?, worktree?)` | 创建运行（含家族校验与 planner；可选 worktree 隔离） |
 | `loop_plan(plan)` | 记录计划，进入 `run` |
 | `loop_done(summary)` | 声明本轮完成，触发运行时验证 |
-| `loop_validate()` | 手动执行 validator（通常由运行时自动调用） |
+| `loop_validate()` | 手动执行 validator（通过时同步跑 reviewer 并完结） |
 | `loop_status(runId?)` | 查看状态/最近证据 |
+| `loop_review(runId?)` | 查看审阅报告（goal/自述/计划/validator 输出/变更快照/reviewer 结论） |
+| `loop_timeline(runId?)` | 查看事件时间线（start/plan/validate/review/…） |
 | `loop_stop(reason?)` | 停止运行 |
+
+## 并行 + worktree 隔离
+
+- `loop_start(..., worktree: true)`：在 git 仓库里开一个独立 `git worktree`（分支 `mini-harness/<runId>`），
+  任务在隔离工作树中执行，**验证通过后自动提交到该分支**（不自动合并，留给你 review 后 merge）。
+  适合并行跑多个任务、互不污染主 checkout。
+- watcher 支持并发：`WATCH_CONCURRENCY=N`（默认 1）。任务 JSON 可加 `"worktree": true`。
+
+## 审阅与时间线（可读证据）
+
+- 每轮自动写 `evidence/round-<n>-review.md`：goal / 自述 / 计划 / validator 输出 / 变更快照 / reviewer 结论。
+- `loop_review` / `loop_timeline` 工具可随时把最新报告和时间线拉出来看。
 
 ## watcher（最小任务队列）
 

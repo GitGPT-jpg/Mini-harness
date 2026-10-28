@@ -17,7 +17,7 @@ die(){ printf '[tunnel] 错误: %s\n' "$*" >&2; exit 1; }
 
 load_cfg(){
   if [ ! -f "$CFG" ]; then
-    die "缺少配置 $CFG。请先：mkdir -p ~/.mini-harness && cp tunnel/tunnel.env.example ~/.mini-harness/tunnel.env，再按自己的堡垒机填写。"
+    die "缺少配置 ${CFG}。请先：mkdir -p ~/.mini-harness && cp tunnel/tunnel.env.example ~/.mini-harness/tunnel.env，再按自己的堡垒机填写。"
   fi
   # shellcheck disable=SC1090
   . "$CFG"
@@ -88,11 +88,54 @@ check(){
   return 1
 }
 
+proxy_env_file(){ echo "$HOME/.mini-harness/proxy.env"; }
+
+# 判断是否已在内网（kubectl 不经过代理也能直连集群 → 大概率就在堡垒机/VPN 上）
+detect_inside(){
+  command -v kubectl >/dev/null 2>&1 || return 1
+  kubectl get nodes --request-timeout=8 >/dev/null 2>&1
+}
+
+# 一键打通：已在内网则什么都不做；否则（询问后或 -y 自动）建隧道并写出代理环境文件
+auto(){
+  local pfile; pfile="$(proxy_env_file)"
+  if detect_inside; then
+    rm -f "$pfile"
+    say "已在内网（kubectl 直连成功），无需隧道。"
+    return 0
+  fi
+  if [ ! -f "$CFG" ]; then
+    rm -f "$pfile"
+    say "不在内网，且缺少 ${CFG}。请先：cp tunnel/tunnel.env.example ~/.mini-harness/tunnel.env 并填 BASTION，再运行 tunnel.sh auto。"
+    return 1
+  fi
+  load_cfg
+  local doit=0
+  if [ "${AUTO_TUNNEL:-0}" = "1" ] || [ "${1:-}" = "-y" ]; then
+    doit=1
+  else
+    printf '检测到不在内网，是否通过堡垒机(%s)建立隧道？[y/N] ' "$BASTION" >&2
+    read -r ans || true
+    case "$ans" in y|Y) doit=1 ;; esac
+  fi
+  if [ "$doit" = "1" ]; then
+    start || return 1
+    { echo "export HTTPS_PROXY=$(socks_url)"; echo "export ALL_PROXY=$(socks_url)"; echo "export NO_PROXY=localhost,127.0.0.1,::1"; } > "$pfile"
+    say "代理环境已写入 $pfile（start-hardened.sh / 桌面启动器会自动读取）。"
+    check
+    return $?
+  fi
+  rm -f "$pfile"
+  say "已跳过隧道（本次会话内网工具可能不可用）。"
+  return 1
+}
+
 case "${1:-help}" in
   start) start ;;
   stop) stop ;;
   status) status ;;
   check) check ;;
   env) env ;;
-  *) echo "用法: $0 {start|stop|status|check|env}"; exit 0 ;;
+  auto) auto "${2:-}" ;;
+  *) echo "用法: $0 {start|stop|status|check|env|auto [-y]}"; exit 0 ;;
 esac

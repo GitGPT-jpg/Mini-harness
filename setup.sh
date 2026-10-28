@@ -167,6 +167,10 @@ cat <<DONE
    页面会弹出「首次配置」门禁 —— 到 设置 → 模型服务商，
    Base URL 已预填 https://oneapi-comate.baidu-int.com/v1，
    填入你自己的 One API Key 并保存即可。Key 仅存本机，不入库。
+ 连接内网（可选）：
+   若本机不在内网、需要经堡垒机访问 K8s/pod：
+     "$HERE/tunnel/tunnel.sh" auto
+   （已在内网会自动跳过；不在内网会询问后建 SSH 隧道）
 ============================================================
 DONE
 

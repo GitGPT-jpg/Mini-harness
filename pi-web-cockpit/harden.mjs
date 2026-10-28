@@ -254,6 +254,8 @@ export PI_WEB_TOKEN="$(cat "$HOME/.pi-web/pi-web-token")"
 export PI_WEB_LOCALE="zh"
 export PI_WEB_ENGINE="pi"
 export PI_WEB_MANAGED="1"
+# 若已建堡垒机隧道（~/.mini-harness/proxy.env 存在），继承代理环境，子进程 kubectl 才能连内网
+[ -f "$HOME/.mini-harness/proxy.env" ] && . "$HOME/.mini-harness/proxy.env"
 exec "$HERE/node_modules/.bin/pi-web-ui" --host 127.0.0.1 --port 8787 --cwd "$BASE" --no-browser "$@"
 `,
   { mode: 0o700 },
