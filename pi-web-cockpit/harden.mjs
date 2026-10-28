@@ -643,7 +643,8 @@ try {
     `\t\t\t}\n` +
     `\t\t\tfunction tick(){relabel();ensureBtn();}\n` +
     `\t\t\tif(!window.__mhTickBound){window.__mhTickBound=true;document.addEventListener('click',function(){setTimeout(tick,80);},true);}\n` +
-    `\t\t\tif(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){setTimeout(tick,700);});else setTimeout(tick,700);\n` +
+    `\t\t\tif(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){setTimeout(tick,700);setTimeout(showStatusCard,900);});else setTimeout(tick,700);\n` +
+    `\t\t\tsetTimeout(showStatusCard,900);\n` +
     `\t\t\tsetInterval(tick,1200);\n` +
     `\t\t}catch(e){}})();\n` +
     `\t\t</script>\n\t`;
