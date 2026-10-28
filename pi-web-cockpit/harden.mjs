@@ -288,6 +288,8 @@ try {
     `\t\t\t[data-bar-item="host:new-ephemeral-chat"] { display: none !important; }\n` +
     `\t\t\t/* 底栏引擎切换器：锁定单引擎 pi，关掉"点击切换智能体引擎"入口 */\n` +
     `\t\t\t[data-bar-item="host:engine"] { display: none !important; }\n` +
+    `\t\t\t/* 顶栏「更多功能与布局」菜单里的 GitHub 入口 */\n` +
+    `\t\t\ta.chip.github, [role="menuitem"].chip.github { display: none !important; }\n` +
     `\t\t\t/* 富媒体音视频播放：砍播放器，保留图片(<img>)与 present_files 成果卡片 */\n` +
     `\t\t\taudio, video,\n` +
     `\t\t\t.present-media-video, .present-media-audio,\n` +
