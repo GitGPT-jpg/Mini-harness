@@ -65,20 +65,12 @@ Key 仅保存在本机 `~/.pi/agent/auth.json`，**不会提交到代码库，�
 - `assets/icon.jpg` — 桌面启动器图标源
 - `资产清单.md` — 推理底座可利用资产清单
 
-## 连接内网（堡垒机 / K8s）
+## 连接内网（K8s）
 
-harness 任务需要本机能 `kubectl` 访问集群。集群在内网，推荐走 SSH 隧道，**不把堡垒机暴露公网**：
+harness 任务只需本机有 `kubectl` 和一份可用的 **kubeconfig**（`kubectl get nodes` 能通即可）。
+在堡垒机上部署时，把 kubeconfig 放好、`kubectl` 在 PATH，就无需任何额外配置；AI 直接就能连 pod。
 
-```bash
-cp tunnel/tunnel.env.example ~/.mini-harness/tunnel.env   # 按自己的堡垒机填
-./tunnel/tunnel.sh start                                   # 建立 SOCKS 隧道
-eval "$(./tunnel/tunnel.sh env)"                          # 让当前终端走代理
-./tunnel/tunnel.sh check                                   # kubectl get nodes 自检
-```
-
-隧道打通后，任何 pod 的 IP 都由内网路由解决，无需为每个 pod 单独配置。
-**两种部署形态**：已在堡垒机/内网（`kubectl` 直连成功）时，`tunnel.sh auto` 会自动跳过；不在内网时，它会询问（或 `-y` 自动）建隧道，并把代理环境写到 `~/.mini-harness/proxy.env`，驾驶舱/脚本会自动读取。
-详见 `tunnel/tunnel.sh` 头部注释。
+仅当某台机器连 `kubectl` 都到不了集群时，才需要用 SSH 隧道兜底（`tunnel/tunnel.sh auto` 会自动检测：kubectl 直连成功就跳过，否则才建隧道）。
 
 ## 维护
 
