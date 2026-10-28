@@ -191,39 +191,69 @@ if (!idx.includes(absMarker)) {
   } else log("WARN: 未找到 ABS_MARKER");
 } else log("__abs__ 已封禁（跳过）");
 
-// ---- 4b) 运行状态只读接口：GET /api/mini-harness/runs/latest（供前端代码 loop 状态卡片轮询）----
+// ---- 4b) 运行状态只读接口：GET /api/mini-harness/runs（多 loop 灵动岛轮询）----
 try {
   let idx2 = fs.readFileSync(idxFile, "utf8");
   const runMarker = "/* HARDENED:mini-harness-runs-api */";
-  if (!idx2.includes(runMarker)) {
-    const anchor = 'app.get("/api/attachment/:hash", async (req, res) => {';
-    const route =
-      `// ${runMarker} 返回最近一个活跃运行的公开状态（round/stage/verdict），仅供前端状态卡片轮询。\n` +
-      `app.get("/api/mini-harness/runs/latest", async (req, res) => {\n` +
-      `  if (!tokenOk(req)) { res.status(403).end("unauthorized"); return; }\n` +
-      `  try {\n` +
-      `    const fsM = await import("node:fs");\n` +
-      `    const pathM = await import("node:path");\n` +
-      `    const osM = await import("node:os");\n` +
-      `    const dir = pathM.join(osM.homedir(), ".mini-harness", "runs");\n` +
-      `    let best = null, bestT = 0;\n` +
-      `    for (const id of fsM.readdirSync(dir)) {\n` +
-      `      const p = pathM.join(dir, id, "state.json");\n` +
-      `      if (!fsM.existsSync(p)) continue;\n` +
-      `      const st = JSON.parse(fsM.readFileSync(p, "utf8"));\n` +
-      `      const t = Date.parse(st.updatedAt || 0) || 0;\n` +
-      `      if (t > bestT) { bestT = t; best = st; }\n` +
-      `    }\n` +
-      `    const fresh = best && (best.status === "active" || (Date.now() - bestT) < 30 * 60 * 1000);\n` +
-      `    res.json(fresh ? { runId: best.runId, stage: best.stage, round: best.round, maxRounds: best.maxRounds, status: best.status, lastVerdict: best.lastVerdict, goal: String(best.goal || "").slice(0, 200) } : null);\n` +
-      `  } catch (e) { res.status(500).end(String(e)); }\n` +
-      `});\n\n`;
-    if (idx2.includes(anchor)) {
-      idx2 = idx2.replace(anchor, route + anchor);
-      fs.writeFileSync(idxFile, idx2);
-      log("已注入运行状态只读接口 /api/mini-harness/runs/latest");
-    } else log("WARN: 未找到 attachment 路由锚点（接口未注入）");
-  } else log("运行状态接口已注入（跳过）");
+  const anchor = 'app.get("/api/attachment/:hash", async (req, res) => {';
+  const route =
+    `// ${runMarker} 返回所有活跃/近期运行的公开状态（round/stage/verdict），仅供前端状态条轮询。\n` +
+    `async function __mhCollectRuns() {\n` +
+    `  const fsM = await import("node:fs");\n` +
+    `  const pathM = await import("node:path");\n` +
+    `  const osM = await import("node:os");\n` +
+    `  const dir = pathM.join(osM.homedir(), ".mini-harness", "runs");\n` +
+    `  const out = [];\n` +
+    `  let ids = [];\n` +
+    `  try { ids = fsM.readdirSync(dir); } catch { return out; }\n` +
+    `  for (const id of ids) {\n` +
+    `    const p = pathM.join(dir, id, "state.json");\n` +
+    `    if (!fsM.existsSync(p)) continue;\n` +
+    `    let st;\n` +
+    `    try { st = JSON.parse(fsM.readFileSync(p, "utf8")); } catch { continue; }\n` +
+    `    const t = Date.parse(st.updatedAt || 0) || 0;\n` +
+    `    const active = st.status === "active";\n` +
+    `    if (!active && Date.now() - t >= 5 * 60 * 1000) continue;\n` +
+    `    const ws = String(st.baseWorkspace || st.workspace || "");\n` +
+    `    out.push({\n` +
+    `      runId: st.runId || id,\n` +
+    `      stage: st.stage,\n` +
+    `      round: st.round,\n` +
+    `      maxRounds: st.maxRounds,\n` +
+    `      status: st.status,\n` +
+    `      lastVerdict: st.lastVerdict,\n` +
+    `      goal: String(st.goal || "").slice(0, 200),\n` +
+    `      project: ws ? pathM.basename(ws) : "",\n` +
+    `      updatedAt: st.updatedAt || null,\n` +
+    `    });\n` +
+    `  }\n` +
+    `  out.sort((a, b) => ((b.status === "active") - (a.status === "active")) || ((Date.parse(b.updatedAt || 0) || 0) - (Date.parse(a.updatedAt || 0) || 0)));\n` +
+    `  return out.slice(0, 8);\n` +
+    `}\n` +
+    `app.get("/api/mini-harness/runs", async (req, res) => {\n` +
+    `  if (!tokenOk(req)) { res.status(403).end("unauthorized"); return; }\n` +
+    `  try { res.json({ runs: await __mhCollectRuns() }); } catch (e) { res.status(500).end(String(e)); }\n` +
+    `});\n` +
+    `app.get("/api/mini-harness/runs/latest", async (req, res) => {\n` +
+    `  if (!tokenOk(req)) { res.status(403).end("unauthorized"); return; }\n` +
+    `  try { res.json((await __mhCollectRuns())[0] || null); } catch (e) { res.status(500).end(String(e)); }\n` +
+    `});\n\n`;
+  const markIdx = idx2.indexOf("// " + runMarker);
+  const anchorIdx = idx2.indexOf(anchor);
+  if (anchorIdx !== -1) {
+    if (markIdx === -1) {
+      const updated = idx2.slice(0, anchorIdx) + route + idx2.slice(anchorIdx);
+      fs.writeFileSync(idxFile, updated);
+      log("已注入运行状态只读接口 /api/mini-harness/runs");
+    } else if (markIdx < anchorIdx) {
+      // 旧版只返回 latest；整段替换为多 loop 列表接口
+      const updated = idx2.slice(0, markIdx) + route + idx2.slice(anchorIdx);
+      if (updated !== idx2) {
+        fs.writeFileSync(idxFile, updated);
+        log("已更新运行状态接口（多 loop 列表）");
+      }
+    }
+  } else log("WARN: 未找到 attachment 路由锚点（接口未注入）");
 } catch (e) {
   log("WARN: 运行状态接口注入失败", e.message);
 }
@@ -497,13 +527,16 @@ try {
     `\t\t\t#mh-code-loop-modal .cl-start:disabled{opacity:.45;cursor:not-allowed;}\n` +
     `\t\t\t#mh-code-loop-modal .cl-start.loading{pointer-events:none;}\n` +
     `\t\t\t#mh-toast{position:fixed;left:50%;bottom:32px;transform:translateX(-50%);z-index:2147483600;background:#181b22;color:#e7e9ee;border:1px solid #333a45;border-radius:10px;padding:10px 16px;font-size:13px;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.5);animation:mhClPop .18s ease-out;}\n` +
-    `\t\t\t.mh-loop-pill{position:fixed;left:14px;bottom:14px;z-index:2147483540;display:none;align-items:center;gap:7px;height:30px;padding:0 12px;border-radius:999px;background:rgba(24,26,32,.9);backdrop-filter:blur(8px);border:1px solid #333a45;color:#e7e9ee;font-size:12px;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.45);cursor:pointer;animation:mhClPop .2s ease-out;overflow:hidden;}\n` +
+    `\t\t\t#mh-loop-stack{position:fixed;left:14px;bottom:14px;z-index:2147483540;display:none;flex-direction:column-reverse;align-items:flex-start;gap:6px;max-height:70vh;}\n` +
+    `\t\t\t.mh-loop-pill{position:relative;display:flex;align-items:center;gap:7px;height:30px;max-width:min(340px,80vw);padding:0 12px;border-radius:999px;background:rgba(24,26,32,.9);backdrop-filter:blur(8px);border:1px solid #333a45;color:#e7e9ee;font-size:12px;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.45);cursor:pointer;animation:mhClPop .2s ease-out;overflow:hidden;}\n` +
+    `\t\t\t.mh-loop-pill .lp-name{max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#9aa3b2;font-size:11px;flex:none;}\n` +
+    `\t\t\t.mh-loop-pill .lp-text{white-space:nowrap;}\n` +
     `\t\t\t.mh-loop-pill .lp-dot{width:8px;height:8px;border-radius:50%;background:#a855f7;flex:none;}\n` +
     `\t\t\t.mh-loop-pill.running .lp-dot{animation:mhPulse 1.1s ease-in-out infinite;}\n` +
     `\t\t\t.mh-loop-pill.done .lp-dot{background:#34d399;}\n` +
     `\t\t\t.mh-loop-pill.stopped .lp-dot{background:#f87171;}\n` +
     `\t\t\t.mh-loop-pill .lp-bar{position:absolute;left:0;bottom:0;height:3px;border-radius:999px;background:linear-gradient(90deg,#a855f7,#7c3aed);transition:width .4s ease;}\n` +
-    `\t\t\t.mh-loop-pop{position:fixed;left:14px;bottom:52px;z-index:2147483530;width:260px;background:#1b1e24;color:#e7e9ee;border:1px solid #333a45;border-radius:12px;padding:12px 14px;font-size:12px;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;box-shadow:0 12px 40px rgba(0,0,0,.5);animation:mhClPop .18s ease-out;}\n` +
+    `\t\t\t.mh-loop-pop{position:fixed;left:14px;bottom:52px;z-index:2147483530;width:280px;max-height:60vh;overflow:auto;background:#1b1e24;color:#e7e9ee;border:1px solid #333a45;border-radius:12px;padding:12px 14px;font-size:12px;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;box-shadow:0 12px 40px rgba(0,0,0,.5);animation:mhClPop .18s ease-out;}\n` +
     `\t\t\t.mh-loop-pop .sc-title{display:flex;align-items:center;gap:6px;font-weight:600;margin-bottom:6px;}\n` +
     `\t\t\t.mh-loop-pop .sc-line{color:#9aa3b2;line-height:1.6;}\n` +
     `\t\t\t.mh-loop-pop .sc-ok{color:#34d399;}\n` +
@@ -546,49 +579,76 @@ try {
     `\t\t\t}\n` +
     `\t\t\tfunction escapeHtml(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML;}\n` +
     `\t\t\tfunction showToast(msg){var t=document.getElementById('mh-toast');if(!t){t=document.createElement('div');t.id='mh-toast';document.body.appendChild(t);}t.textContent=msg;t.style.display='block';clearTimeout(t.__tm);t.__tm=setTimeout(function(){t.style.display='none';},2600);}\n` +
-    `\t\t\tvar __mhLastRun=null;\n` +
-    `\t\t\tfunction hidePop(){var p=document.getElementById('mh-loop-pop');if(p)p.remove();window.__mhPillOpen=false;}\n` +
+    `\t\t\tvar __mhRuns={},__mhOpenRunId=null,__mhDismissed={};\n` +
+    `\t\t\tfunction hidePop(){var p=document.getElementById('mh-loop-pop');if(p)p.remove();window.__mhPillOpen=false;__mhOpenRunId=null;}\n` +
+    `\t\t\tfunction ensureStack(){var s=document.getElementById('mh-loop-stack');if(!s){s=document.createElement('div');s.id='mh-loop-stack';document.body.appendChild(s);}return s;}\n` +
+    `\t\t\tfunction pillFor(runId){var s=document.getElementById('mh-loop-stack');return s?s.querySelector('.mh-loop-pill[data-run="'+runId+'"]'):null;}\n` +
+    `\t\t\tfunction positionPop(){var p=document.getElementById('mh-loop-pop'),s=document.getElementById('mh-loop-stack');if(!p||!s)return;var r=s.getBoundingClientRect();p.style.bottom=Math.max(40,Math.round(window.innerHeight-r.top+8))+'px';}\n` +
     `\t\t\tfunction renderPop(st){\n` +
-    `\t\t\t\tvar p=document.getElementById('mh-loop-pop');if(!p)return;\n` +
+    `\t\t\t\tvar p=document.getElementById('mh-loop-pop');if(!p||!st)return;\n` +
     `\t\t\t\tvar v=st.lastVerdict==='pass'?'<span class="sc-ok">已通过</span>':(st.lastVerdict==='fail'?'<span class="sc-bad">未通过</span>':'—');\n` +
     `\t\t\t\tvar ok=st.status==='done', stop=st.status==='stopped';\n` +
-    `\t\t\t\tp.innerHTML='<div class="sc-title"><span class="lp-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:'+(ok?'#34d399':stop?'#f87171':'#a855f7')+'"></span>'+(ok?'代码 loop 已完成':stop?'代码 loop 已停止':'代码 loop 运行中')+'</div>'+'<div class="sc-line">第 '+st.round+'/'+st.maxRounds+' 轮 · '+st.stage+' · 校验 '+v+'</div>'+(st.goal?('<div class="sc-line" style="color:#6b7280">'+escapeHtml(st.goal)+'</div>'):'');\n` +
+    `\t\t\t\tp.innerHTML='<div class="sc-title"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:'+(ok?'#34d399':stop?'#f87171':'#a855f7')+'"></span>'+(ok?'代码 loop 已完成':stop?'代码 loop 已停止':'代码 loop 运行中')+'</div>'+\n` +
+    `\t\t\t\t\t'<div class="sc-line">项目：'+escapeHtml(st.project||'未知')+'</div>'+\n` +
+    `\t\t\t\t\t'<div class="sc-line">第 '+st.round+'/'+st.maxRounds+' 轮 · '+escapeHtml(String(st.stage||''))+' · 校验 '+v+'</div>'+\n` +
+    `\t\t\t\t\t(st.goal?('<div class="sc-line" style="color:#6b7280">'+escapeHtml(st.goal)+'</div>'):'');\n` +
     `\t\t\t}\n` +
-    `\t\t\tfunction togglePop(){\n` +
-    `\t\t\t\tif(window.__mhPillOpen){hidePop();return;}\n` +
-    `\t\t\t\tif(!__mhLastRun)return;\n` +
-    `\t\t\t\twindow.__mhPillOpen=true;\n` +
+    `\t\t\tfunction togglePop(runId){\n` +
+    `\t\t\t\tif(__mhOpenRunId===runId){hidePop();return;}\n` +
+    `\t\t\t\tvar st=__mhRuns[runId];if(!st)return;\n` +
+    `\t\t\t\thidePop();\n` +
+    `\t\t\t\t__mhOpenRunId=runId;window.__mhPillOpen=true;\n` +
     `\t\t\t\tvar p=document.createElement('div');p.id='mh-loop-pop';p.className='mh-loop-pop';document.body.appendChild(p);\n` +
-    `\t\t\t\trenderPop(__mhLastRun);\n` +
+    `\t\t\t\trenderPop(st);positionPop();\n` +
     `\t\t\t}\n` +
-    `\t\t\tfunction schedulePoll(ms){var pill=document.getElementById('mh-loop-pill');if(!pill)return;clearTimeout(pill.__poll);pill.__poll=setTimeout(pollStatus,ms);}\n` +
+    `\t\t\tfunction makePill(runId){\n` +
+    `\t\t\t\tvar el=document.createElement('div');el.className='mh-loop-pill';el.setAttribute('data-run',runId);\n` +
+    `\t\t\t\tel.innerHTML='<span class="lp-dot"></span><span class="lp-name"></span><span class="lp-text">Loop …</span><span class="lp-bar"></span>';\n` +
+    `\t\t\t\tel.addEventListener('click',function(){togglePop(runId);});\n` +
+    `\t\t\t\treturn el;\n` +
+    `\t\t\t}\n` +
+    `\t\t\tfunction updatePill(el,st){\n` +
+    `\t\t\t\tvar ok=st.status==='done',stop=st.status==='stopped';\n` +
+    `\t\t\t\tel.className='mh-loop-pill '+(ok?'done':stop?'stopped':'running');\n` +
+    `\t\t\t\tvar nm=el.querySelector('.lp-name');\n` +
+    `\t\t\t\tif(nm){nm.textContent=st.project||'';nm.style.display=st.project?'inline':'none';}\n` +
+    `\t\t\t\tvar v=st.lastVerdict==='pass'?'通过':(st.lastVerdict==='fail'?'未通过':'—');\n` +
+    `\t\t\t\tel.querySelector('.lp-text').textContent=(ok?'完成 ✓':stop?'停止 ✗':(st.round+'/'+st.maxRounds+' · '+v));\n` +
+    `\t\t\t\tvar bar=el.querySelector('.lp-bar');if(bar)bar.style.width=(ok||stop?'100%':(Math.min(100,Math.round((st.round||1)/(st.maxRounds||1)*100))+'%'));\n` +
+    `\t\t\t\tel.title=(st.goal||'')+(st.project?('（'+st.project+'）'):'');\n` +
+    `\t\t\t}\n` +
+    `\t\t\tfunction schedulePoll(ms){var s=document.getElementById('mh-loop-stack');if(!s)return;clearTimeout(s.__poll);s.__poll=setTimeout(pollStatus,ms);}\n` +
     `\t\t\tfunction pollStatus(){\n` +
-    `\t\t\t\tvar pill=document.getElementById('mh-loop-pill');if(!pill)return;\n` +
-    `\t\t\t\tif(pill.__busy)return;pill.__busy=true;\n` +
-    `\t\t\t\tif(document.hidden){pill.__busy=false;schedulePoll(30000);return;}\n` +
+    `\t\t\t\tvar stack=ensureStack();\n` +
+    `\t\t\t\tif(stack.__busy)return;stack.__busy=true;\n` +
+    `\t\t\t\tif(document.hidden){stack.__busy=false;schedulePoll(30000);return;}\n` +
     `\t\t\t\tvar tok=new URLSearchParams(location.search).get('token')||'';\n` +
-    `\t\t\t\tfetch('/api/mini-harness/runs/latest'+(tok?('?token='+encodeURIComponent(tok)):''),{headers:tok?{'x-pi-token':tok}:{}})\n` +
+    `\t\t\t\tfetch('/api/mini-harness/runs'+(tok?('?token='+encodeURIComponent(tok)):''),{headers:tok?{'x-pi-token':tok}:{}})\n` +
     `\t\t\t\t\t.then(function(r){return r.ok?r.json():null;})\n` +
-    `\t\t\t\t\t.then(function(st){\n` +
-    `\t\t\t\t\t\tpill.__busy=false;\n` +
-    `\t\t\t\t\t\tif(!st){pill.style.display='none';hidePop();__mhLastRun=null;schedulePoll(10000);return;}\n` +
-    `\t\t\t\t\t\t__mhLastRun=st;\n` +
-    `\t\t\t\t\t\tvar ok=st.status==='done', stop=st.status==='stopped';\n` +
-    `\t\t\t\t\t\tpill.style.display='flex';\n` +
-    `\t\t\t\t\t\tpill.className='mh-loop-pill '+(ok?'done':stop?'stopped':'running');\n` +
-    `\t\t\t\t\t\tvar v=st.lastVerdict==='pass'?'通过':(st.lastVerdict==='fail'?'未通过':'—');\n` +
-    `\t\t\t\t\t\tpill.querySelector('.lp-text').textContent=(ok?'Loop 完成 ✓':stop?'Loop 停止 ✗':('Loop '+st.round+'/'+st.maxRounds+' · '+v));\n` +
-    `\t\t\t\t\t\tvar bar=pill.querySelector('.lp-bar');if(bar)bar.style.width=(ok||stop?'100%':(Math.min(100,Math.round((st.round||1)/(st.maxRounds||1)*100))+'%'));\n` +
-    `\t\t\t\t\t\tif(ok||stop){clearTimeout(pill.__hide);pill.__hide=setTimeout(function(){pill.style.display='none';hidePop();},8000);schedulePoll(10000);}\n` +
-    `\t\t\t\t\t\telse{clearTimeout(pill.__hide);schedulePoll(3000);}\n` +
-    `\t\t\t\t\t\tif(window.__mhPillOpen)renderPop(st);\n` +
-    `\t\t\t\t\t}).catch(function(){pill.__busy=false;schedulePoll(8000);});\n` +
+    `\t\t\t\t\t.then(function(j){\n` +
+    `\t\t\t\t\t\tstack.__busy=false;\n` +
+    `\t\t\t\t\t\tvar list=(j&&Array.isArray(j.runs))?j.runs:[];\n` +
+    `\t\t\t\t\t\tif(!list.length){stack.style.display='none';stack.innerHTML='';__mhRuns={};hidePop();schedulePoll(10000);return;}\n` +
+    `\t\t\t\t\t\tvar seen={},anyActive=false;\n` +
+    `\t\t\t\t\t\tlist.forEach(function(st){\n` +
+    `\t\t\t\t\t\t\tif(!st||!st.runId||__mhDismissed[st.runId])return;\n` +
+    `\t\t\t\t\t\t\tseen[st.runId]=1;__mhRuns[st.runId]=st;\n` +
+    `\t\t\t\t\t\t\tvar el=pillFor(st.runId);\n` +
+    `\t\t\t\t\t\t\tif(!el){el=makePill(st.runId);stack.appendChild(el);}\n` +
+    `\t\t\t\t\t\t\tupdatePill(el,st);\n` +
+    `\t\t\t\t\t\t\tvar ok=st.status==='done',stop=st.status==='stopped';\n` +
+    `\t\t\t\t\t\t\tif(ok||stop){\n` +
+    `\t\t\t\t\t\t\t\tif(!el.__hide){el.__hide=setTimeout(function(){__mhDismissed[st.runId]=1;delete __mhRuns[st.runId];if(__mhOpenRunId===st.runId)hidePop();if(el.parentNode)el.remove();var s2=document.getElementById('mh-loop-stack');if(s2&&!s2.children.length)s2.style.display='none';},8000);}\n` +
+    `\t\t\t\t\t\t\t}else{anyActive=true;clearTimeout(el.__hide);el.__hide=null;}\n` +
+    `\t\t\t\t\t\t});\n` +
+    `\t\t\t\t\t\tArray.prototype.slice.call(stack.children).forEach(function(el){if(!seen[el.getAttribute('data-run')])el.remove();});\n` +
+    `\t\t\t\t\t\tif(stack.children.length){stack.style.display='flex';}else{stack.style.display='none';}\n` +
+    `\t\t\t\t\t\tif(__mhOpenRunId&&__mhRuns[__mhOpenRunId]){renderPop(__mhRuns[__mhOpenRunId]);positionPop();}else if(__mhOpenRunId){hidePop();}\n` +
+    `\t\t\t\t\t\tschedulePoll(anyActive?3000:10000);\n` +
+    `\t\t\t\t\t}).catch(function(){stack.__busy=false;schedulePoll(8000);});\n` +
     `\t\t\t}\n` +
-    `\t\t\tfunction showStatusCard(){\n` +
-    `\t\t\t\tvar pill=document.getElementById('mh-loop-pill');\n` +
-    `\t\t\t\tif(!pill){pill=document.createElement('div');pill.id='mh-loop-pill';pill.className='mh-loop-pill running';pill.innerHTML='<span class="lp-dot"></span><span class="lp-text">Loop …</span><span class="lp-bar"></span>';document.body.appendChild(pill);pill.addEventListener('click',togglePop);}\n` +
-    `\t\t\t\tpill.__started=true;pollStatus();\n` +
-    `\t\t\t}\n` +
+    `\t\t\twindow.addEventListener('resize',function(){if(__mhOpenRunId)positionPop();});\n` +
+    `\t\t\tfunction showStatusCard(){ensureStack();pollStatus();}\n` +
     `\t\t\tfunction openModal(){\n` +
     `\t\t\t\tif(document.getElementById('mh-code-loop-modal'))return;\n` +
     `\t\t\t\tvar o=document.createElement('div');o.id='mh-code-loop-modal';\n` +
