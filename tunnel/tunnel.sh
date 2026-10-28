@@ -96,7 +96,18 @@ detect_inside(){
   kubectl get nodes --request-timeout=8 >/dev/null 2>&1
 }
 
-# 一键打通：已在内网则什么都不做；否则（询问后或 -y 自动）建隧道并写出代理环境文件
+# 交互填写/更新堡垒机配置（每次部署到新机器时由用户自己填）
+configure(){
+  local bastion
+  printf '请输入你的堡垒机地址（user@host）: ' >&2
+  read -r bastion || true
+  [ -n "$bastion" ] || { say "未输入，未改动。"; return 1; }
+  mkdir -p "$HOME/.mini-harness"
+  printf 'BASTION=%s\nBASTION_PORT=22\nSOCKS_PORT=1080\n' "$bastion" > "$CFG"
+  say "已写入 $CFG"
+}
+
+# 一键打通：已在内网则什么都不做；否则引导用户填堡垒机并（默认）建隧道、写出代理环境文件
 auto(){
   local pfile; pfile="$(proxy_env_file)"
   if detect_inside; then
@@ -104,19 +115,28 @@ auto(){
     say "已在内网（kubectl 直连成功），无需隧道。"
     return 0
   fi
-  if [ ! -f "$CFG" ]; then
-    rm -f "$pfile"
-    say "不在内网，且缺少 ${CFG}。请先：cp tunnel/tunnel.env.example ~/.mini-harness/tunnel.env 并填 BASTION，再运行 tunnel.sh auto。"
-    return 1
+  # 不在内网：先确保有堡垒机配置，没有就现场问用户填
+  local bastion=""
+  [ -f "$CFG" ] && { . "$CFG" 2>/dev/null; bastion="${BASTION:-}"; }
+  if [ -z "$bastion" ]; then
+    if [ "${AUTO_TUNNEL:-0}" = "1" ] || [ "${1:-}" = "-y" ]; then
+      rm -f "$pfile"
+      say "不在内网且未配置堡垒机，无法自动建隧道；请先运行 tunnel.sh configure 或交互式 tunnel.sh auto 填写。"
+      return 1
+    fi
+    printf '未检测到内网。请输入你的堡垒机地址（user@host）: ' >&2
+    read -r bastion || true
+    if [ -z "$bastion" ]; then rm -f "$pfile"; say "未输入，已跳过。"; return 1; fi
+    mkdir -p "$HOME/.mini-harness"
+    printf 'BASTION=%s\nBASTION_PORT=22\nSOCKS_PORT=1080\n' "$bastion" > "$CFG"
+    say "已写入 $CFG"
   fi
   load_cfg
-  local doit=0
-  if [ "${AUTO_TUNNEL:-0}" = "1" ] || [ "${1:-}" = "-y" ]; then
-    doit=1
-  else
-    printf '检测到不在内网，是否通过堡垒机(%s)建立隧道？[y/N] ' "$BASTION" >&2
-    read -r ans || true
-    case "$ans" in y|Y) doit=1 ;; esac
+  local doit=1
+  if [ "${AUTO_TUNNEL:-0}" != "1" ] && [ "${1:-}" != "-y" ]; then
+    printf '是否现在通过堡垒机(%s)建立隧道？[Y/n] ' "$BASTION" >&2
+    read -r ans || ans=y
+    case "$ans" in n|N) doit=0 ;; esac
   fi
   if [ "$doit" = "1" ]; then
     start || return 1
@@ -137,5 +157,6 @@ case "${1:-help}" in
   check) check ;;
   env) env ;;
   auto) auto "${2:-}" ;;
-  *) echo "用法: $0 {start|stop|status|check|env|auto [-y]}"; exit 0 ;;
+  configure) configure ;;
+  *) echo "用法: $0 {start|stop|status|check|env|auto [-y]|configure}"; exit 0 ;;
 esac
