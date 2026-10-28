@@ -256,6 +256,12 @@ export PI_WEB_ENGINE="pi"
 export PI_WEB_MANAGED="1"
 # 若已建堡垒机隧道（~/.mini-harness/proxy.env 存在），继承代理环境，子进程 kubectl 才能连内网
 [ -f "$HOME/.mini-harness/proxy.env" ] && . "$HOME/.mini-harness/proxy.env"
+# Finder/LaunchServices 双击启动时 PATH 很精简，可能找不到 node；补上常见位置
+for d in "$HOME/.local/share/pi-node/current/bin" /usr/local/bin /opt/homebrew/bin; do
+  [ -x "$d/node" ] && PATH="$d:$PATH"
+done
+export PATH
+command -v node >/dev/null 2>&1 || { echo "错误：未找到 node（需要 Node.js 22.19+）。" >&2; exit 1; }
 exec "$HERE/node_modules/.bin/pi-web-ui" --host 127.0.0.1 --port 8787 --cwd "$BASE" --no-browser "$@"
 `,
   { mode: 0o700 },
