@@ -40,14 +40,15 @@ Key 仅保存在本机 `~/.pi/agent/auth.json`，**不会提交到代码库，�
 ## 做了哪些定制（全部可逆，集中在 `pi-web-cockpit/harden.mjs`）
 
 - **只保留 pi 引擎**：前端引擎清单裁为 pi-only；底栏引擎切换器隐藏；模型服务商留给用户自填 One API。
-- **推理场景精简**：关闭沙盒 / Goal Mode / Delegate / Plan / 子代理原生入口、多模态音视频、Page Picker、codemode 扩展；工具懒加载开启（省 token、稳 prompt cache 前缀）；仅保留 `present_files` 成果卡片。
+- **推理场景精简**：关闭沙盒 / Delegate / Plan / 子代理原生入口、多模态音视频、Page Picker、codemode 扩展；工具懒加载开启（省 token、稳 prompt cache 前缀）；仅保留 `present_files` 成果卡片。
 - **安全加固**：关 remoteSsh、封禁 `__abs__` 任意文件读、禁 `eval`/`browser_page`、关插件市场与自更新（`PI_WEB_MANAGED=1`）。
 - **品牌**：左上角为 icon1111 图标 + 「训推引擎组 Harness」；浏览器页签标题同名、favicon 为紫色 C；并停用 PWA Service Worker（避免旧缓存导致界面不更新）。
 - **领域身份**：覆盖组合模板的 `{{soul}}` token，注入推理服务 agent 身份、工作准则与安全红线（其余脚手架 token 不动）。
-- **提示词模板**：隐藏 25 个 pi 内置模板，灌入 7 个从 harness + Ku 沉淀、可直接用的推理模板。
+- **提示词模板**：隐藏 25 个 pi 内置模板，灌入 8 个从 harness + Ku 沉淀、可直接用的推理模板。
 - **子代理**：保留 explore/review/implement，新增 5 个推理 workflow 子代理。
 - **知识库**：内置 `pi-llm-wiki` 扩展（已做安全审查、移除高危可选依赖子树），后台自动召回/沉淀、无感维护，纯本地不外联。
-- **薄运行时（`mini-harness-runtime`）**：任务状态机 `intake→plan→run→validate`，**以 validate.py 为唯一准入门禁**，失败自动带证据进入下一轮，达到最大轮数停止，状态落盘可断点续跑。可选 **跨家族 planner / reviewer**：planner 产出可验证的验收条件；reviewer 只能否决、不能放行（validator 通过才算完成）。支持 **worktree 隔离 + watcher 并行**，并提供 `loop_review`/`loop_timeline` 可读证据与时间线。对应"公共运行时"那一块，**不依赖模型自觉**。
+- **薄运行时（`mini-harness-runtime`）**：任务状态机 `intake→plan→run→validate`，**以 validate.py 为唯一准入门禁**，失败自动带证据进入下一轮，达到最大轮数停止，状态落盘可断点续跑。可选 **跨家族 planner / reviewer**：planner 产出可验证的验收条件；reviewer 只能否决、不能放行（validator 通过才算完成）。配套 **watcher 任务队列**（投递 JSON 任务即可无人值守执行）。对应"公共运行时"那一块，**不依赖模型自觉**。
+- **双 Loop 入口**：顶栏「LLM loop」（AI 自评，适合开放式任务）+「代码 loop」（validator 门禁，自动验证 / 迭代 / 续跑）。
 - **One API Key 门禁**：首次打开弹窗引导配置（见上）。
 
 ## 仓库结构
@@ -64,6 +65,10 @@ Key 仅保存在本机 `~/.pi/agent/auth.json`，**不会提交到代码库，�
 - `skills/` — 7 个领域 skill（安装到 `~/.pi/agent/skills`）
 - `assets/icon.jpg` — 桌面启动器图标源
 - `资产清单.md` — 推理底座可利用资产清单
+- `install.sh` — 命令行安装入口（等价 `setup.sh`）
+- `build/package.sh` + `build/dmg-background.png` — 打包脚本（产出 tarball 与 macOS DMG）
+- `VERSION` — 语义版本号
+- `tunnel/` — 可选 SSH 隧道兜底脚本（仅当 kubectl 都到不了集群时用）
 
 ## 连接内网（K8s）
 
@@ -71,6 +76,16 @@ harness 任务只需本机有 `kubectl` 和一份可用的 **kubeconfig**（`kub
 在堡垒机上部署时，把 kubeconfig 放好、`kubectl` 在 PATH，就无需任何额外配置；AI 直接就能连 pod。
 
 仅当某台机器连 `kubectl` 都到不了集群时，才需要用 SSH 隧道兜底（`tunnel/tunnel.sh auto` 会自动检测：kubectl 直连成功就跳过，否则才建隧道）。
+
+## 安装包
+
+```bash
+bash build/package.sh
+```
+
+- macOS：`dist/Mini-Harness-<版本>.dmg` —— 双击挂载，把「训推引擎组 Harness」拖入 Applications；首次打开自动安装，之后双击即启动。
+- Linux / 通用：`dist/mini-harness-<版本>.tar.gz` —— 解压后 `./install.sh`。
+- 版本号：优先 `git tag`，其次仓库根 `VERSION` 文件，可用 `VERSION=x.y.z` 覆盖。
 
 ## 维护
 
