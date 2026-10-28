@@ -92,10 +92,10 @@ say "驾驶舱加固完成。"
 if [ ! -f "$HOME/.pi-web/client-state.json" ]; then
   say "首次安装：预热驾驶舱以生成运行时配置…"
   ( cd "$COCKPIT" && nohup ./start-hardened.sh >/tmp/pi-web-warmup.log 2>&1 & )
-  for i in $(seq 1 40); do lsof -ti tcp:8787 >/dev/null 2>&1 && break; sleep 0.5; done
+  for i in $(seq 1 40); do lsof -nP -iTCP:8787 -sTCP:LISTEN -t >/dev/null 2>&1 && break; sleep 0.5; done
   for i in $(seq 1 30); do [ -f "$HOME/.pi-web/client-state.json" ] && break; sleep 0.5; done
   sleep 1
-  pids="$(lsof -ti tcp:8787 2>/dev/null || true)"; [ -n "$pids" ] && kill $pids 2>/dev/null || true
+  pids="$(lsof -nP -iTCP:8787 -sTCP:LISTEN -t 2>/dev/null || true)"; [ -n "$pids" ] && kill $pids 2>/dev/null || true
   sleep 1
   say "重放加固（应用客户端态开关与领域身份）…"
   ( cd "$COCKPIT" && node harden.mjs >/dev/null 2>&1 ) || warn "二次加固失败，请手动在 pi-web-cockpit 跑 node harden.mjs"
@@ -126,10 +126,10 @@ build_mac_app(){
 #!/bin/bash
 COCKPIT="$COCKPIT"
 TOKENF="\$HOME/.pi-web/pi-web-token"
-if ! lsof -ti tcp:8787 >/dev/null 2>&1; then
+if ! lsof -nP -iTCP:8787 -sTCP:LISTEN -t >/dev/null 2>&1; then
   nohup "\$COCKPIT/start-hardened.sh" >/tmp/pi-web-harness.log 2>&1 &
 fi
-for i in \$(seq 1 30); do lsof -ti tcp:8787 >/dev/null 2>&1 && break; sleep 0.5; done
+for i in \$(seq 1 30); do lsof -nP -iTCP:8787 -sTCP:LISTEN -t >/dev/null 2>&1 && break; sleep 0.5; done
 TOKEN="\$(cat "\$TOKENF" 2>/dev/null)"
 open "http://localhost:8787/?token=\${TOKEN}"
 LAUNCH

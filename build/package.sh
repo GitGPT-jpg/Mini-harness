@@ -67,10 +67,10 @@ fi
 cd "$DEST"
 ./setup.sh
 [ -f "$HOME/.mini-harness/proxy.env" ] && . "$HOME/.mini-harness/proxy.env"
-if ! lsof -ti tcp:8787 >/dev/null 2>&1; then
+if ! lsof -nP -iTCP:8787 -sTCP:LISTEN -t >/dev/null 2>&1; then
   nohup "$DEST/pi-web-cockpit/start-hardened.sh" >/tmp/pi-web-harness.log 2>&1 &
 fi
-for i in $(seq 1 30); do lsof -ti tcp:8787 >/dev/null 2>&1 && break; sleep 0.5; done
+for i in $(seq 1 30); do lsof -nP -iTCP:8787 -sTCP:LISTEN -t >/dev/null 2>&1 && break; sleep 0.5; done
 TOKEN="$(cat "$HOME/.pi-web/pi-web-token" 2>/dev/null)"
 open "http://localhost:8787/?token=${TOKEN}"
 echo
@@ -87,10 +87,10 @@ if [ ! -f "$DEST/pi-web-cockpit/start-hardened.sh" ]; then
   exit 0
 fi
 [ -f "$HOME/.mini-harness/proxy.env" ] && . "$HOME/.mini-harness/proxy.env"
-if ! lsof -ti tcp:8787 >/dev/null 2>&1; then
+if ! lsof -nP -iTCP:8787 -sTCP:LISTEN -t >/dev/null 2>&1; then
   nohup "$DEST/pi-web-cockpit/start-hardened.sh" >/tmp/pi-web-harness.log 2>&1 &
 fi
-for i in $(seq 1 30); do lsof -ti tcp:8787 >/dev/null 2>&1 && break; sleep 0.5; done
+for i in $(seq 1 30); do lsof -nP -iTCP:8787 -sTCP:LISTEN -t >/dev/null 2>&1 && break; sleep 0.5; done
 TOKEN="$(cat "$HOME/.pi-web/pi-web-token" 2>/dev/null)"
 open "http://localhost:8787/?token=${TOKEN}"
 LAUNCH
