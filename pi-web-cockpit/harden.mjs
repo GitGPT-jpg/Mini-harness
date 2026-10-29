@@ -256,6 +256,53 @@ try {
     `  if (!tokenOk(req)) { res.status(403).end("unauthorized"); return; }\n` +
     `  try { res.json({ models: await __mhCollectModels() }); } catch (e) { res.status(500).end(String(e)); }\n` +
     `});\n` +
+    `// 任务台：读执行者会话（session jsonl）尾部，返回工具调用时间线（只读）\n` +
+    `app.get("/api/mini-harness/task", async (req, res) => {\n` +
+    `  if (!tokenOk(req)) { res.status(403).end("unauthorized"); return; }\n` +
+    `  try {\n` +
+    `    const fsT = await import("node:fs");\n` +
+    `    const pathT = await import("node:path");\n` +
+    `    const osT = await import("node:os");\n` +
+    `    const sid = String((req.query && req.query.session) || "").replace(/[^A-Za-z0-9-]/g, "");\n` +
+    `    if (!sid) { res.status(400).json({ error: "session required" }); return; }\n` +
+    `    const root = pathT.join(osT.homedir(), ".pi", "agent", "sessions");\n` +
+    `    let file = "";\n` +
+    `    try {\n` +
+    `      for (const d of fsT.readdirSync(root)) {\n` +
+    `        const hit = fsT.readdirSync(pathT.join(root, d)).find((n) => n.includes("_" + sid + ".jsonl"));\n` +
+    `        if (hit) { file = pathT.join(root, d, hit); break; }\n` +
+    `      }\n` +
+    `    } catch {}\n` +
+    `    if (!file) { res.json({ found: false, events: [] }); return; }\n` +
+    `    let lines = [];\n` +
+    `    try { lines = fsT.readFileSync(file, "utf8").trim().split("\\n").slice(-500); } catch {}\n` +
+    `    const calls = new Map();\n` +
+    `    const events = [];\n` +
+    `    for (const l of lines) {\n` +
+    `      let o; try { o = JSON.parse(l); } catch { continue; }\n` +
+    `      const m = o && o.message; if (!m) continue;\n` +
+    `      if (m.role === "assistant" && Array.isArray(m.content)) {\n` +
+    `        for (const b of m.content) {\n` +
+    `          if (b && b.type === "toolCall") {\n` +
+    `            const a = b.arguments || {};\n` +
+    `            const brief = String(a.command || a.path || a.file_path || a.pattern || a.query || a.url || a.goal || "").replace(/\\s+/g, " ").slice(0, 180);\n` +
+    `            const ev = { id: b.id, name: b.name, arg: brief, at: o.timestamp || null, status: "running", ms: null, out: "" };\n` +
+    `            calls.set(b.id, ev); events.push(ev);\n` +
+    `          }\n` +
+    `        }\n` +
+    `      } else if (m.role === "toolResult") {\n` +
+    `        const ev = calls.get(m.toolCallId);\n` +
+    `        if (ev) {\n` +
+    `          ev.status = m.isError ? "error" : "done";\n` +
+    `          ev.ms = m.durationMs || null;\n` +
+    `          const t = (Array.isArray(m.content) ? m.content : []).map((c) => (c && c.text) || "").join(" ").replace(/\\s+/g, " ").trim();\n` +
+    `          ev.out = t.slice(0, 240);\n` +
+    `        }\n` +
+    `      }\n` +
+    `    }\n` +
+    `    res.json({ found: true, events: events.slice(-40) });\n` +
+    `  } catch (e) { res.status(500).end(String(e)); }\n` +
+    `});\n` +
     `app.get("/api/mini-harness/runs", async (req, res) => {\n` +
     `  if (!tokenOk(req)) { res.status(403).end("unauthorized"); return; }\n` +
     `  try { res.json({ runs: await __mhCollectRuns() }); } catch (e) { res.status(500).end(String(e)); }\n` +
@@ -789,6 +836,9 @@ try {
     `\t\t\t\t\tvar btn=document.createElement('button');btn.type='button';btn.className='mh-code-loop-btn';btn.textContent='代码 loop';btn.title='启动受控代码 Loop（自动验证，可断点续跑）';\n` +
     `\t\t\t\t\tbtn.addEventListener('click',openModal);\n` +
     `\t\t\t\t\trow.appendChild(btn);\n` +
+    `\t\t\t\t\tvar tb=document.createElement('button');tb.type='button';tb.className='mh-code-loop-btn mh-task-btn';tb.textContent='任务台';tb.title='查看 Loop 进度与工具调用，可暂停/继续';\n` +
+    `\t\t\t\t\ttb.addEventListener('click',function(){if(window.__mhOpenTask)window.__mhOpenTask();});\n` +
+    `\t\t\t\t\trow.appendChild(tb);\n` +
     `\t\t\t\t}catch(e){}\n` +
     `\t\t\t}\n` +
     `\t\t\tfunction tick(){relabel();ensureBtn();}\n` +
@@ -862,6 +912,177 @@ try {
   else log(ok ? "目标调研向导：已是先提问 + 计划确认（跳过）" : "WARN: 目标调研向导锚点未命中（pi-web-ui 可能升级，需重新适配）");
 } catch (e) {
   log("WARN: 目标调研向导加固失败", e.message);
+}
+
+// ---- 7h) Loop 任务台后端：暂停/继续 + 执行者工具调用时间线 ----
+// 目标模式 2.0 里执行者是独立对话，只有切过去才能看到工具调用；这里补：① pause/resume 消息；
+// ② 读执行者 session jsonl 的只读接口，供任务台轮询工具调用。
+try {
+  const gsFile2 = path.join(DIST, "goal-service.js");
+  let gs2 = fs.readFileSync(gsFile2, "utf8");
+  const before2 = gs2;
+  // 1) pause/resume 方法：插在 clearGoal 前
+  const clearAnchor = "    /** Clear the active goal (cancels the review loop AND aborts a running\n     *  goal wizard — truly terminating its in-flight dialog + agent run). */\n    async clearGoal() {";
+  const pauseMethods = [
+    "    /** HARDENED:goal-pause 暂停：停掉当前执行回合，保留目标与产物，不再自动派下一轮。 */",
+    "    async pauseGoal() {",
+    "        const conv = this.host.activeConv();",
+    "        const g = conv && conv.goal;",
+    "        if (!conv || !g || !g.goal) return;",
+    "        g.paused = true;",
+    "        g.reviewing = false;",
+    "        g.phase = \"paused\";",
+    "        g.status = \"已暂停（点继续接着跑）\";",
+    "        g.statusEn = \"Paused\";",
+    "        this.emitGoalStatus();",
+    "        const execId = conv.roleExec && conv.roleExec.convId;",
+    "        if (execId) { try { await this.host.stopRoleAgent?.(execId); } catch { } }",
+    "        this.host.emit({ type: \"notice\", level: \"info\", text: \"⏸ 已暂停：当前回合已停止，目标与产物保留。\", textEn: \"Paused: current turn stopped, goal and artifacts kept.\" });",
+    "    }",
+    "    /** HARDENED:goal-pause 继续：解除暂停并从当前轮次接着派活。 */",
+    "    async resumeGoal() {",
+    "        const conv = this.host.activeConv();",
+    "        const g = conv && conv.goal;",
+    "        if (!conv || !g || !g.goal || !g.paused) return;",
+    "        g.paused = false;",
+    "        g.phase = \"executing\";",
+    "        g.status = \"继续执行…\";",
+    "        this.emitGoalStatus();",
+    "        this.host.emit({ type: \"notice\", level: \"info\", text: \"▶ 继续执行。\", textEn: \"Resumed.\" });",
+    "        this.startDelegatedLoop(conv, conv.goalGeneration, g.goal);",
+    "    }",
+  ].join("\n") + "\n";
+  if (!gs2.includes("HARDENED:goal-pause") && gs2.includes(clearAnchor)) {
+    gs2 = gs2.replace(clearAnchor, pauseMethods + clearAnchor);
+  }
+  // 2) 循环顶部：暂停态不派活
+  const loopHead = "            const g = conv.goal;\n            // quiesce（服务排空）：中途不再派单";
+  const loopHeadNew = "            const g = conv.goal;\n            if (g.paused) { g.phase = \"paused\"; g.status = \"已暂停（点继续接着跑）\"; g.reviewing = false; this.emitGoalStatus(); return; }\n            // quiesce（服务排空）：中途不再派单";
+  if (!gs2.includes("if (g.paused) { g.phase") && gs2.includes(loopHead)) gs2 = gs2.split(loopHead).join(loopHeadNew);
+  // 3) 执行者被暂停停掉（canceled）→ 记为暂停而不是受阻
+  const cancelBranch = "                if (outcome === \"gone\" || outcome === \"canceled\") {";
+  const cancelBranchNew = "                if (conv.goal.paused) { conv.goal.phase = \"paused\"; conv.goal.status = \"已暂停（点继续接着跑）\"; conv.goal.reviewing = false; this.emitGoalStatus(); return; }\n" + cancelBranch;
+  if (!gs2.includes("if (conv.goal.paused) { conv.goal.phase") && gs2.includes(cancelBranch)) gs2 = gs2.split(cancelBranch).join(cancelBranchNew);
+  // 4) 执行者 sessionId 进 goal_status.roles：任务台据此找 session 文件
+  const roleLine = "        g.roles = { ...g.roles, executor: { ...role, streaming, activity, activityEn } };";
+  const roleLineNew = "        let __sid = null; try { __sid = this.host.getConv?.(execId)?.session?.sessionId ?? null; } catch { }\n" + roleLine.replace("{ ...role, streaming, activity, activityEn }", "{ ...role, streaming, activity, activityEn, sessionId: __sid }");
+  if (!gs2.includes("sessionId: __sid") && gs2.includes(roleLine)) gs2 = gs2.split(roleLine).join(roleLineNew);
+  if (gs2 !== before2) { fs.writeFileSync(gsFile2, gs2); log("任务台后端：pause/resume + 执行者 sessionId 已注入"); }
+  else log(gs2.includes("HARDENED:goal-pause") ? "任务台后端：已是最新（跳过）" : "WARN: 任务台后端锚点未命中");
+
+  // 5) ClientSession 代理
+  const asFile = path.join(DIST, "agent-service.js");
+  let as = fs.readFileSync(asFile, "utf8");
+  const asAnchor = "    async setGoal(goalText, opts) {\n        return this.goalSvc.setGoal(goalText, opts);\n    }";
+  const asProxy = asAnchor + "\n    async pauseGoal() {\n        return this.goalSvc.pauseGoal();\n    }\n    async resumeGoal() {\n        return this.goalSvc.resumeGoal();\n    }";
+  if (!as.includes("async pauseGoal()") && as.includes(asAnchor)) { as = as.replace(asAnchor, asProxy); fs.writeFileSync(asFile, as); log("任务台后端：ClientSession.pauseGoal/resumeGoal 已注入"); }
+
+  // 6) WS 消息分发
+  const dhFile = path.join(DIST, "dispatch-domain-handlers.js");
+  let dh = fs.readFileSync(dhFile, "utf8");
+  const dhAnchor = "        case \"clear_goal\":\n            void cs.clearGoal();\n            return true;";
+  const dhNew = dhAnchor + "\n        case \"pause_goal\":\n            void cs.pauseGoal();\n            return true;\n        case \"resume_goal\":\n            void cs.resumeGoal();\n            return true;";
+  if (!dh.includes("case \"pause_goal\"") && dh.includes(dhAnchor)) { dh = dh.replace(dhAnchor, dhNew); fs.writeFileSync(dhFile, dh); log("任务台后端：pause_goal/resume_goal 消息已注册"); }
+} catch (e) {
+  log("WARN: 任务台后端注入失败", e.message);
+}
+
+// ---- 7i) Loop 任务台（前端）：目标条「任务台」按钮 + 右侧任务面板（进度 / 工具调用 / 暂停）----
+try {
+  let htmlTask = fs.readFileSync(htmlFile, "utf8");
+  const taskMarker = "HARDENED:task-panel";
+  const taskBlock =
+    `\t\t<!-- ${taskMarker} Loop 任务台：进度、实时工具调用、暂停/继续/停止。 -->\n` +
+    `\t\t<style id="mh-task-style">\n` +
+    `\t\t\t#mh-task{position:fixed;top:0;right:0;height:100vh;width:min(460px,92vw);z-index:2147483560;display:none;flex-direction:column;background:#15181e;border-left:1px solid #2b313b;box-shadow:-18px 0 60px rgba(0,0,0,.5);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;color:#e7e9ee;}\n` +
+    `\t\t\t#mh-task.open{display:flex;}\n` +
+    `\t\t\t#mh-task .tk-head{display:flex;align-items:center;gap:8px;padding:14px 16px;border-bottom:1px solid #262c35;}\n` +
+    `\t\t\t#mh-task .tk-title{font-size:14px;font-weight:700;flex:1;}\n` +
+    `\t\t\t#mh-task .tk-x{background:transparent;border:none;color:#8b93a1;font-size:18px;cursor:pointer;}\n` +
+    `\t\t\t#mh-task .tk-body{padding:14px 16px;overflow:auto;flex:1;}\n` +
+    `\t\t\t#mh-task .tk-goal{font-size:13px;line-height:1.6;background:#11141a;border:1px solid #262c35;border-radius:8px;padding:10px 12px;}\n` +
+    `\t\t\t#mh-task .tk-meta{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0;font-size:11.5px;color:#9aa3b2;}\n` +
+    `\t\t\t#mh-task .tk-chip{background:#1b1f26;border:1px solid #2b313b;border-radius:999px;padding:2px 9px;}\n` +
+    `\t\t\t#mh-task .tk-steps{display:flex;gap:4px;margin:12px 0 14px;}\n` +
+    `\t\t\t#mh-task .tk-step{flex:1;text-align:center;font-size:10.5px;color:#6b7280;padding-top:7px;border-top:3px solid #2b313b;}\n` +
+    `\t\t\t#mh-task .tk-step.on{color:#c4b5fd;border-top-color:#a855f7;}\n` +
+    `\t\t\t#mh-task .tk-step.done{color:#34d399;border-top-color:#34d399;}\n` +
+    `\t\t\t#mh-task .tk-sec{font-size:11.5px;color:#7f8897;margin:14px 0 6px;display:flex;justify-content:space-between;}\n` +
+    `\t\t\t#mh-task .tk-ev{border-left:2px solid #2b313b;padding:4px 0 6px 10px;margin-left:2px;font-size:12px;line-height:1.5;}\n` +
+    `\t\t\t#mh-task .tk-ev .nm{color:#8fd0ff;font-weight:600;}\n` +
+    `\t\t\t#mh-task .tk-ev .ar{color:#9aa3b2;word-break:break-all;}\n` +
+    `\t\t\t#mh-task .tk-ev .out{color:#6b7280;font-size:11px;word-break:break-all;}\n` +
+    `\t\t\t#mh-task .tk-ev.run{border-left-color:#a855f7;}\n` +
+    `\t\t\t#mh-task .tk-ev.err{border-left-color:#f87171;}\n` +
+    `\t\t\t#mh-task .tk-ev.ok{border-left-color:#34d399;}\n` +
+    `\t\t\t#mh-task .tk-acts{display:flex;gap:8px;padding:12px 16px;border-top:1px solid #262c35;}\n` +
+    `\t\t\t#mh-task .tk-btn{flex:1;font-size:12.5px;border-radius:8px;padding:8px 10px;cursor:pointer;border:1px solid #3a414d;background:#2b313b;color:#e7e9ee;}\n` +
+    `\t\t\t#mh-task .tk-btn.pri{background:#a855f7;border-color:#a855f7;color:#fff;}\n` +
+    `\t\t\t#mh-task .tk-btn.danger{background:transparent;border-color:#f87171;color:#f87171;}\n` +
+    `\t\t\t#mh-task .tk-btn:disabled{opacity:.4;cursor:not-allowed;}\n` +
+    `\t\t\t#mh-task .tk-empty{color:#7f8897;font-size:12.5px;line-height:1.7;padding:10px 0;}\n` +
+    `\t\t</style>\n` +
+    `\t\t<script id="mh-task-script">\n` +
+    `\t\t(function(){try{\n` +
+    `\t\t\t// 只读观测：挂住页面 WS，拿到服务端广播的 goal_status（不改任何业务数据）\n` +
+    `\t\t\tif(!window.__mhWsHooked){var O=window.WebSocket;if(O){var H=function(u,p){var ws=new O(u,p);(window.__mhWsList=window.__mhWsList||[]).push(ws);try{ws.addEventListener('message',function(ev){try{var j=JSON.parse(ev.data);if(j&&j.type==='goal_status'){window.__mhGoal=j.status;if(window.__mhTaskTick)window.__mhTaskTick();}}catch(_){}});}catch(_){}return ws;};H.prototype=O.prototype;['CONNECTING','OPEN','CLOSING','CLOSED'].forEach(function(k){try{H[k]=O[k];}catch(_){}});window.WebSocket=H;window.__mhWsHooked=1;}}\n` +
+    `\t\t\tfunction send(o){var L=window.__mhWsList||[];for(var i=L.length-1;i>=0;i--){try{if(L[i].readyState===1){L[i].send(JSON.stringify(o));return true;}}catch(_){}}return false;}\n` +
+    `\t\t\tfunction tok(){return new URLSearchParams(location.search).get('token')||'';}\n` +
+    `\t\t\tfunction esc(s){var d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML;}\n` +
+    `\t\t\tfunction el(){var p=document.getElementById('mh-task');\n` +
+    `\t\t\t\tif(!p){p=document.createElement('div');p.id='mh-task';p.innerHTML='<div class="tk-head"><span class="tk-title">Loop 任务台</span><button class="tk-x" title="关闭">✕</button></div><div class="tk-body"></div><div class="tk-acts"></div>';document.body.appendChild(p);p.querySelector('.tk-x').addEventListener('click',close);}\n` +
+    `\t\t\t\treturn p;}\n` +
+    `\t\t\tvar timer=null,evTimer=null,sessionId=null;\n` +
+    `\t\t\tfunction open(){var p=el();p.classList.add('open');render();pollEvents();if(!evTimer)evTimer=setInterval(function(){if(p.classList.contains('open'))pollEvents();},1500);timer=setInterval(render,1500);}\n` +
+    `\t\t\tfunction close(){var p=document.getElementById('mh-task');if(p)p.classList.remove('open');clearInterval(timer);timer=null;clearInterval(evTimer);evTimer=null;}\n` +
+    `\t\t\twindow.__mhOpenTask=open;window.__mhTaskTick=function(){var p=document.getElementById('mh-task');if(p&&p.classList.contains('open'))render();};\n` +
+    `\t\t\tfunction phaseOf(g){var ph=String(g.phase||'');var st=String(g.status||'');if(/暂停/.test(st)||ph==='paused')return 'paused';if(ph==='reviewing')return 'reviewing';if(ph==='executing')return 'executing';if(ph==='done'||/完成|通过/.test(st))return 'done';if(ph==='blocked'||ph==='exhausted')return 'blocked';if(g.wizard&&g.wizard.active)return 'surveying';return 'idle';}\n` +
+    `\t\t\tfunction render(){var p=document.getElementById('mh-task');if(!p)return;var g=window.__mhGoal;var body=p.querySelector('.tk-body'),acts=p.querySelector('.tk-acts');\n` +
+    `\t\t\t\tvar runsHtml='<div class="tk-sec"><span>代码 loop 运行</span></div><div id="mh-tk-runs"><div class="tk-empty">无</div></div>';\n` +
+    `\t\t\t\tif(!g||(!g.goal&&!(g.wizard&&g.wizard.active))){body.innerHTML='<div class="tk-empty">当前没有进行中的 LLM loop。<br>在目标条里开始一个，或点「代码 loop」跑受控任务。</div>'+runsHtml;acts.innerHTML='';sessionId=null;fetchRuns();return;}\n` +
+    `\t\t\t\tvar ph=phaseOf(g);var steps=[['调研','surveying'],['执行','executing'],['审查','reviewing'],['完成','done']];var idx={idle:-1,surveying:0,executing:1,reviewing:2,done:3,blocked:3,paused:-1}[ph];if(idx==null)idx=-1;\n` +
+    `\t\t\t\tvar stepHtml='';steps.forEach(function(s,i){stepHtml+='<div class="tk-step '+(idx>i?'done':(idx===i?'on':''))+'">'+s[0]+'</div>';});\n` +
+    `\t\t\t\tvar rounds=(g.round||0)+'/'+((g.maxRounds>0)?g.maxRounds:'不限');\n` +
+    `\t\t\t\tbody.innerHTML='<div class="tk-goal">'+esc(g.goal||g.wizard&&g.wizard.draft||'')+'</div>'+\n` +
+    `\t\t\t\t\t'<div class="tk-meta"><span class="tk-chip">'+esc(g.status||ph)+'</span><span class="tk-chip">轮次 '+rounds+'</span>'+(g.execModel?'<span class="tk-chip">执行 '+esc(g.execModel.split('/').pop())+'</span>':'')+(g.reviewModel?'<span class="tk-chip">评审 '+esc(g.reviewModel.split('/').pop())+'</span>':'')+'</div>'+\n` +
+    `\t\t\t\t\t'<div class="tk-steps">'+stepHtml+'</div>'+\n` +
+    `\t\t\t\t\t'<div class="tk-sec"><span>工具调用</span><span id="mh-tk-count"></span></div><div id="mh-tk-events"><div class="tk-empty">等待执行者动作…</div></div>'+runsHtml;\n` +
+    `\t\t\t\tvar paused=ph==='paused'||/暂停/.test(String(g.status||''));\n` +
+    `\t\t\t\tacts.innerHTML='<button class="tk-btn pri" data-act="pause">'+(paused?'继续':'暂停')+'</button><button class="tk-btn danger" data-act="stop">停止 Loop</button>';\n` +
+    `\t\t\t\tacts.querySelector('[data-act=pause]').addEventListener('click',function(){send({type:paused?'resume_goal':'pause_goal'});});\n` +
+    `\t\t\t\tacts.querySelector('[data-act=stop]').addEventListener('click',function(){if(confirm('停止这个 Loop？目标会被清除，产物保留。'))send({type:'clear_goal'});});\n` +
+    `\t\t\t\tvar r=(g.roles&&g.roles.executor)||null;if(r&&r.sessionId){sessionId=r.sessionId;}else if(!r||!r.spawned){sessionId=null;}\n` +
+    `\t\t\t\tfetchRuns();\n` +
+    `\t\t\t}\n` +
+    `\t\t\tvar runsBusy=false;\n` +
+    `\t\t\tfunction fetchRuns(){var box=document.getElementById('mh-tk-runs');if(!box||runsBusy)return;runsBusy=true;var t=tok();\n` +
+    `\t\t\t\tfetch('/api/mini-harness/runs'+(t?('?token='+encodeURIComponent(t)):''),{headers:t?{'x-pi-token':t}:{}}).then(function(x){return x.ok?x.json():null;}).then(function(j){\n` +
+    `\t\t\t\t\tvar list=(j&&Array.isArray(j.runs))?j.runs:[];if(!list.length){box.innerHTML='<div class="tk-empty">无</div>';return;}\n` +
+    `\t\t\t\t\tvar h='';list.forEach(function(r){var v=r.lastVerdict==='pass'?'通过':(r.lastVerdict==='fail'?'未通过':'—');var done=r.status!=='active';h+='<div class="tk-ev '+(done?'ok':'run')+'"><span class="nm">'+esc(r.project||'未知')+'</span> <span class="ar">第 '+r.round+'/'+r.maxRounds+' 轮 · '+esc(r.stage||'')+'</span><div class="out">'+(done?'已结束':'运行中')+' · 校验 '+v+'</div></div>';});box.innerHTML=h;\n` +
+    `\t\t\t\t}).catch(function(){}).then(function(){runsBusy=false;});\n` +
+    `\t\t\t}\n` +
+    `\t\t\tfunction pollEvents(){var p=document.getElementById('mh-task');if(!p||!p.classList.contains('open'))return;var g=window.__mhGoal;var r=g&&g.roles&&g.roles.executor;var sid=(r&&r.sessionId)||sessionId;if(!sid)return;var t=tok();\n` +
+    `\t\t\t\tfetch('/api/mini-harness/task?session='+encodeURIComponent(sid)+(t?('&token='+encodeURIComponent(t)):''),{headers:t?{'x-pi-token':t}:{}}).then(function(x){return x.ok?x.json():null;}).then(function(j){\n` +
+    `\t\t\t\t\tif(!j||!Array.isArray(j.events))return;var box=document.getElementById('mh-tk-events');if(!box)return;var cnt=document.getElementById('mh-tk-count');if(cnt)cnt.textContent=j.events.length+' 次';\n` +
+    `\t\t\t\t\tif(!j.events.length)return;\n` +
+    `\t\t\t\t\tvar h='';j.events.slice().reverse().forEach(function(e){var cls=e.status==='running'?'run':(e.status==='error'?'err':'ok');var st=e.status==='running'?'运行中':(e.status==='error'?'失败':'完成'+(e.ms!=null?(' · '+e.ms+'ms'):''));h+='<div class="tk-ev '+cls+'"><span class="nm">'+esc(e.name)+'</span> <span class="ar">'+esc(e.arg)+'</span><div class="out">'+st+(e.out?(' · '+esc(e.out.slice(0,140))):'')+'</div></div>';});\n` +
+    `\t\t\t\t\tbox.innerHTML=h;\n` +
+    `\t\t\t\t}).catch(function(){});\n` +
+    `\t\t\t}\n` +
+    `\t\t}catch(e){try{console.error('[mh-task]',e);}catch(_){}}})();\n` +
+    `\t\t</script>\n\t`;
+  if (!htmlTask.includes(taskMarker)) {
+    htmlTask = htmlTask.replace("</head>", taskBlock + "</head>");
+    fs.writeFileSync(htmlFile, htmlTask);
+    log("已注入 Loop 任务台");
+  } else {
+    const re = /\t*<!-- HARDENED:task-panel[\s\S]*?mh-task-script">[\s\S]*?<\/script>\n\t?/;
+    const upd = htmlTask.replace(re, taskBlock);
+    if (upd !== htmlTask) { fs.writeFileSync(htmlFile, upd); log("已更新 Loop 任务台"); }
+    else log("Loop 任务台已是最新（跳过）");
+  }
+} catch (e) {
+  log("WARN: Loop 任务台注入失败", e.message);
 }
 
 // ---- 8) 提示词模板：隐藏 25 个 pi 内置模板，灌入从 harness+Ku 沉淀的多个可直接用模板 ----
