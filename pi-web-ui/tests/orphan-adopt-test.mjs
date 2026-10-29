@@ -1,0 +1,316 @@
+// 浏览器关闭重开后残留会话认领（orphan adoption，零 token）。
+//
+// 复现用户报障：只开一个标签页聊着（run 进行中），关掉浏览器再打开 ——
+// clientId 存 sessionStorage，关闭即失；服务端残留 ClientSession 的运行中对话
+// 会变成左栏“另一处”只读行，既看不了也操作不了（switch/prompt 守卫按
+// owner.isStreaming 照拦，不看 owner 是否还连着）。
+//
+// 期望：无其他在线浏览器时，新标签整体认领最近断开的残留会话 ——
+// 同 conversationId、有历史消息、streaming 继续可见、收到认领 notice、
+// steer 照常工作；而有其他在线标签时不认领（issue #10 隔离保留）。
+//
+// 零 token：mock SSE 模型（SLOW 分支盖住“关闭→认领”窗口），纯 WS 协议。
+// Usage: npm run build && node tests/orphan-adopt-test.mjs [port]
+import { createServer } from "node:http";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { realpathSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { setTimeout as sleep } from "node:timers/promises";
+import WebSocket from "ws";
+
+// 8981 已被 elsewhere-lifecycle-test / plugin-http-test 占用（串行跑不冲突，
+// 但并行化会撞车），这里用独立端口；MOCK_PORT = PORT+1 也需空闲（8910 同样空闲）。
+const PORT = Number(process.argv[2] || 8909);
+const MOCK_PORT = PORT + 1;
+const base = mkdtempSync(join(tmpdir(), "pi-web-orphan-adopt-"));
+const workdir = join(base, "work");
+const dataDir = join(base, "data");
+const agentDir = join(base, "agent");
+mkdirSync(workdir, { recursive: true });
+mkdirSync(dataDir, { recursive: true });
+mkdirSync(agentDir, { recursive: true });
+
+const mock = createServer(async (req, res) => {
+	let body = "";
+	for await (const chunk of req) body += chunk;
+	let payload;
+	try {
+		payload = JSON.parse(body);
+	} catch {
+		res.writeHead(400).end("bad json");
+		return;
+	}
+	const last = payload.messages?.at(-1);
+	const prompt =
+		typeof last?.content === "string"
+			? last.content
+			: (last?.content
+					?.filter?.((part) => part.type === "text")
+					.map((part) => part.text)
+					.join(" ") ?? "");
+	// FROMB：B 认领后 steer 的专属回执（与 A 的历史回执可区分）。
+	const fromB = prompt.includes("FROMB");
+	const slow = !fromB && prompt.includes("SLOW");
+	const first = fromB ? "answer-" : slow ? "background-" : "seed-";
+	const lastChunk = fromB ? "for-B" : slow ? "finished" : "message";
+	res.writeHead(200, {
+		"content-type": "text/event-stream",
+		"cache-control": "no-cache",
+	});
+	res.write(
+		`data: ${JSON.stringify({
+			id: "orphan-adopt-test",
+			object: "chat.completion.chunk",
+			created: Date.now(),
+			model: payload.model,
+			choices: [{ index: 0, delta: { content: first }, finish_reason: null }],
+		})}\n\n`,
+	);
+	// SLOW 盖住 A 关闭 → B 认领 → C 上线的整个窗口（认领时 run 必须还在跑）。
+	if (slow) await sleep(12000);
+	res.write(
+		`data: ${JSON.stringify({
+			id: "orphan-adopt-test",
+			object: "chat.completion.chunk",
+			created: Date.now(),
+			model: payload.model,
+			choices: [{ index: 0, delta: { content: lastChunk }, finish_reason: null }],
+		})}\n\n`,
+	);
+	res.write(
+		`data: ${JSON.stringify({
+			id: "orphan-adopt-test",
+			object: "chat.completion.chunk",
+			created: Date.now(),
+			model: payload.model,
+			choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+		})}\n\n`,
+	);
+	res.write("data: [DONE]\n\n");
+	res.end();
+});
+await new Promise((resolve) => mock.listen(MOCK_PORT, "127.0.0.1", resolve));
+
+writeFileSync(join(agentDir, "auth.json"), JSON.stringify({ main: { type: "api_key", key: "orphan-adopt-test" } }));
+writeFileSync(
+	join(agentDir, "models.json"),
+	JSON.stringify({
+		providers: {
+			main: {
+				api: "openai-completions",
+				baseUrl: `http://127.0.0.1:${MOCK_PORT}`,
+				apiKey: "orphan-adopt-test",
+				models: [
+					{
+						id: "orphan-mock",
+						name: "Orphan Adopt Mock",
+						input: ["text"],
+						contextWindow: 32000,
+						maxTokens: 4096,
+					},
+				],
+			},
+		},
+	}),
+);
+
+const repoRoot = realpathSync(new URL("../", import.meta.url));
+const server = spawn(process.execPath, ["dist/server/index.js"], {
+	cwd: repoRoot,
+	env: {
+		...process.env,
+		PI_WEB_PORT: String(PORT),
+		PI_WEB_DATA_DIR: dataDir,
+		PI_WEB_CWD: workdir,
+		PI_CODING_AGENT_DIR: agentDir,
+		// 显式清空：测试必须与 ambient shell 的 PI_WEB_TOKEN 无关（置空=无鉴权）。
+		PI_WEB_TOKEN: "",
+	},
+	stdio: "ignore",
+	windowsHide: true,
+});
+
+const waitForPort = async (port, timeout = 15000) => {
+	const started = Date.now();
+	while (Date.now() - started < timeout) {
+		try {
+			// /api/health 恒开放（无鉴权）；根路径回退在设 token 时会 401，不能做探针。
+			const response = await fetch(`http://127.0.0.1:${port}/api/health`);
+			if (response.ok) return;
+		} catch {
+			/* starting */
+		}
+		await sleep(100);
+	}
+	throw new Error(`server did not start on ${port}`);
+};
+
+class Client {
+	constructor(ws, name) {
+		this.ws = ws;
+		this.name = name;
+		this.received = [];
+		this.state = null;
+		this.messages = [];
+		this.conversations = [];
+		this.elsewhere = [];
+		ws.on("message", (data) => {
+			const message = JSON.parse(data.toString());
+			this.received.push(message);
+			if (message.type === "snapshot") {
+				this.state = message.state;
+				this.messages = message.state.messages ?? [];
+			} else if (
+				message.type === "snapshot_delta" &&
+				this.state &&
+				this.state.rev === message.baseRev &&
+				message.conversationId === this.state.conversationId
+			) {
+				this.state = { ...this.state, ...message.state };
+				this.messages = [...this.messages, ...message.appended];
+			} else if (message.type === "message_delta" && this.state) {
+				// 流式增量只补计数（文本内容以快照为准，不断言逐字）。
+				this.sawDelta = true;
+			} else if (message.type === "conversations") {
+				this.conversations = message.conversations;
+				this.elsewhere = message.elsewhere ?? [];
+			}
+		});
+	}
+	send(message) {
+		this.ws.send(JSON.stringify(message));
+	}
+	async waitForType(type, predicate = () => true, timeout = 15000) {
+		const started = Date.now();
+		while (Date.now() - started < timeout) {
+			for (let i = 0; i < this.received.length; i++) {
+				const message = this.received[i];
+				if (message.type !== type || !predicate(message)) continue;
+				this.received.splice(i, 1);
+				return message;
+			}
+			await sleep(50);
+		}
+		throw new Error(`[${this.name}] timeout waiting for ${type}`);
+	}
+	async waitForState(predicate, timeout = 15000) {
+		const started = Date.now();
+		while (Date.now() - started < timeout) {
+			if (this.state && predicate(this.state)) return this.state;
+			await sleep(50);
+		}
+		throw new Error(`[${this.name}] timeout waiting for state`);
+	}
+	async waitForMessage(predicate, timeout = 25000) {
+		const started = Date.now();
+		while (Date.now() - started < timeout) {
+			const message = this.messages.find(predicate);
+			if (message) return message;
+			await sleep(50);
+		}
+		throw new Error(`[${this.name}] timeout waiting for message`);
+	}
+}
+
+let clientA;
+let clientB;
+let clientC;
+const noticeText = (m) => `${m.text ?? ""} ${m.textEn ?? ""}`;
+try {
+	await waitForPort(PORT);
+
+	const openClient = async (clientId, withModel = true) => {
+		const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
+		await new Promise((resolve, reject) => {
+			ws.once("open", resolve);
+			ws.once("error", reject);
+		});
+		const c = new Client(ws, clientId);
+		c.send({ type: "hello", clientId });
+		await c.waitForType("ready");
+		// 真前端 ready 后即 get_state；认领路径不经过 bindSession 的自动快照，
+		// 必须显式拉一次（这也是生产行为）。
+		c.send({ type: "get_state" });
+		await c.waitForState((s) => Boolean(s.conversationId));
+		if (withModel) {
+			c.send({ type: "set_model", modelId: "main/orphan-mock" });
+			await c.waitForState((s) => s.model?.id === "orphan-mock");
+		}
+		return c;
+	};
+
+	// A：唯一的标签页，先一条普通消息（命名 + 落历史），再开 SLOW run（保持 streaming）。
+	clientA = await openClient("orphan-A");
+	clientA.send({ type: "prompt", text: "orphan seed hello" });
+	await clientA.waitForMessage(
+		(m) => m.role === "assistant" && JSON.stringify(m.content).includes("seed-message"),
+		25000,
+	);
+	clientA.send({ type: "prompt", text: "SLOW orphan run" });
+	await clientA.waitForState((s) => s.isStreaming, 15000);
+	const convA = clientA.state.conversationId;
+	console.log(`✓ A 正在跑（conv=${convA}），模拟关闭浏览器`);
+	clientA.ws.close();
+	clientA.ws.terminate();
+	await sleep(1000); // 等服务端 detach，把残留记成“断开”
+
+	// B：全新 clientId（新浏览器），无人在线 → 应整体认领 A 的残留会话。
+	clientB = await openClient("orphan-B", false);
+	await clientB.waitForType("notice", (m) => noticeText(m).includes("关闭浏览器前"), 15000);
+	console.log("✓ B 收到认领 notice");
+	if (clientB.state.conversationId !== convA)
+		throw new Error(`B 没有认领 A 的会话（${clientB.state.conversationId} ≠ ${convA}）——仍是“另一处”`);
+	console.log("✓ B 落在 A 的同一对话上（同 conversationId）");
+	const rowB = clientB.conversations.find((c) => c.id === convA);
+	if (!rowB || rowB.messageCount < 2) throw new Error("B 的运行列表里没有 A 的对话（含历史消息）");
+	if (!rowB.isStreaming) throw new Error("B 看不到该对话正在跑");
+	console.log("✓ B 的运行列表里有该对话（含历史、streaming 中）");
+	if (clientB.elsewhere.length !== 0)
+		throw new Error(`B 还有 elsewhere 行（${JSON.stringify(clientB.elsewhere)}）——认领后不应再有“另一处”`);
+	console.log("✓ B 没有 elsewhere 行（不是只读感知，是真接管）");
+	if (!clientB.messages.some((m) => JSON.stringify(m.content ?? "").includes("orphan seed hello")))
+		throw new Error("B 看不到 A 的历史消息");
+	console.log("✓ B 能看到 A 的历史消息");
+	if (clientB.state.model?.id !== "orphan-mock") throw new Error("B 没继承 A 的模型（会话不连续）");
+	console.log("✓ B 继承了 A 的模型（同一会话对象）");
+
+	// C：全新 clientId，但 B 还在线 → 不认领（issue #10 隔离保留），走空白 + elsewhere 感知。
+	clientC = await openClient("orphan-C", false);
+	await clientC.waitForType("notice", (m) => noticeText(m).includes("停在了新对话"), 15000);
+	console.log("✓ C（B 在线时上线）走空白新对话，不抢认领");
+	if (clientC.messages.length !== 0) throw new Error("C 的默认对话不是空白的");
+	if (!clientC.elsewhere.some((w) => w.isStreaming)) throw new Error("C 的 elsewhere 看不到 B 正在跑（跨端感知缺失）");
+	console.log("✓ C 在 elsewhere 只读看到 B 正在跑（issue #145 行为保留）");
+	clientC.ws.close();
+	clientC.ws.terminate();
+	await sleep(500);
+
+	// B steer：认领来的 streaming 对话照常可操作（SLOW 跑完后插队生效）。
+	clientB.send({ type: "prompt", text: "hello FROMB" });
+	await clientB.waitForMessage(
+		(m) => m.role === "assistant" && JSON.stringify(m.content).includes("answer-for-B"),
+		30000,
+	);
+	console.log("✓ B 对认领来的对话 steer 成功（可操作，不只是可看）");
+
+	console.log("\nALL PASS");
+} catch (error) {
+	console.error(`✗ ${error.message}`);
+	for (const c of [clientA, clientB, clientC]) {
+		if (!c) continue;
+		console.error(
+			`[${c.name}] state=isStreaming:${c.state?.isStreaming} conv:${c.state?.conversationId} msgs:${c.messages.length} received:[${c.received.map((m) => m.type).join(",")}]`,
+		);
+		for (const m of c.received.filter((m) => m.type === "notice").slice(-5))
+			console.error(`[${c.name}] leftover notice: ${noticeText(m).slice(0, 200)}`);
+	}
+	process.exitCode = 1;
+} finally {
+	clientA?.ws.close();
+	clientB?.ws.close();
+	clientC?.ws.close();
+	server.kill();
+	mock.close();
+}

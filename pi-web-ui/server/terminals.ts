@@ -1,0 +1,2663 @@
+/**
+ * TerminalManager — conversation-owned PTY sessions (node-pty) bridged over
+ * the WebSocket protocol, plus the user command list persisted in
+ * `<workspaceRoot>/.pi/commands.json`.
+ *
+ * Each conversation gets its own manager; terminals are shared across browser
+ * tabs through the session emit. A socket drop does not kill them: the
+ * conversation owns their lifecycle and releases them on disposal.
+ *
+ * Commands file format:
+ *   { "commands": [ { "name": "dev", "command": "npm run dev", "cwd": "${pwd}" } ] }
+ * `${pwd}` inside cwd/command resolves to the agent session's current working
+ * directory (the same directory the agent operates in — see set_cwd).
+ */
+import { randomBytes } from "node:crypto";
+import { chmodSync, existsSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
+// MUST run before node-pty is required: rewrites the installed node-pty copies
+// so their worker/agent handlers tolerate Node `--watch`'s IPC traffic (see the
+// module itself for details).
+import "./patch-node-pty.js";
+import { spawn, type IPty } from "node-pty";
+import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import type { CommandDef, ServerMessage, TerminalInfo } from "./protocol.js";
+import { BASH_DESCRIPTION, BASH_PARAMETERS, BASH_PROMPT_GUIDELINES, BASH_PROMPT_SNIPPET } from "./tool-prompts.js";
+import { pick, type ServerLang } from "./i18n.js";
+import {
+	getGlobalRemoteSshService,
+	isRemoteWorkspaceUri,
+	parseRemoteWorkspaceUri,
+	resolveWorkspaceSessionDir,
+} from "./remote-ssh-service.js";
+
+// ---------------------------------------------------------------------------
+// .pi/commands.json
+// ---------------------------------------------------------------------------
+
+export interface CommandsFile {
+	commands: CommandDef[];
+}
+
+/** Location of the command list for a project: <workspaceRoot>/.pi/commands.json */
+export function commandsFilePath(workspaceRoot: string): string {
+	if (isRemoteWorkspaceUri(workspaceRoot)) {
+		const dataDir = process.env.PI_WEB_DATA_DIR || join(homedir(), ".pi-web");
+		return join(resolveWorkspaceSessionDir(dataDir, workspaceRoot), ".pi", "commands.json");
+	}
+	return join(workspaceRoot, ".pi", "commands.json");
+}
+
+/** Expand ${pwd} (and ~) in a cwd/command string against the session's cwd. */
+export function expandPwd(input: string, pwd: string): string {
+	let out = input.replace(/\$\{pwd\}/g, pwd);
+	if (out === "~") return homedir();
+	if (out.startsWith("~/")) out = join(homedir(), out.slice(2));
+	return out;
+}
+
+/** Resolve a command's directory: default to the session cwd, expand ${pwd}/~, resolve relative paths. */
+export function resolveCommandCwd(cwd: string | undefined, pwd: string): string {
+	if (!cwd || cwd.trim() === "" || cwd.trim() === "${pwd}") return pwd;
+	if (isRemoteWorkspaceUri(pwd)) return pwd;
+	const expanded = expandPwd(cwd.trim(), pwd);
+	return isAbsolute(expanded) ? expanded : resolve(pwd, expanded);
+}
+
+/** Read the command list; missing file → empty list; malformed → empty list + warning text. */
+export async function loadCommands(
+	workspaceRoot: string,
+): Promise<{ commands: CommandDef[]; path: string; warning?: string; warningEn?: string }> {
+	const path = commandsFilePath(workspaceRoot);
+	const { commands, warning, warningEn } = await readCommandsFile(path);
+	return { commands, path, warning, warningEn };
+}
+
+async function readCommandsFile(
+	path: string,
+): Promise<{ commands: CommandDef[]; warning?: string; warningEn?: string }> {
+	if (!existsSync(path)) return { commands: [] };
+	let raw: string;
+	try {
+		raw = await readFile(path, "utf8");
+	} catch (err) {
+		return {
+			commands: [],
+			warning: `读取命令文件失败：${(err as Error).message}`,
+			warningEn: `Failed to read commands file: ${(err as Error).message}`,
+		};
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch {
+		return {
+			commands: [],
+			warning: `命令文件不是有效 JSON：${path}`,
+			warningEn: `Commands file is not valid JSON: ${path}`,
+		};
+	}
+	if (Array.isArray(parsed)) {
+		// Tolerate a bare array: [{name, command, cwd}]
+		return {
+			commands: parsed
+				.filter(
+					(c): c is CommandDef =>
+						typeof c === "object" &&
+						c !== null &&
+						typeof (c as CommandDef).name === "string" &&
+						typeof (c as CommandDef).command === "string",
+				)
+				.map((c) => ({ name: c.name, command: c.command, cwd: c.cwd })),
+		};
+	}
+	const obj = parsed as { commands?: unknown };
+	if (obj && Array.isArray(obj.commands)) {
+		return {
+			commands: obj.commands
+				.filter(
+					(c): c is CommandDef =>
+						typeof c === "object" &&
+						c !== null &&
+						typeof (c as CommandDef).name === "string" &&
+						typeof (c as CommandDef).command === "string",
+				)
+				.map((c) => ({ name: c.name, command: c.command, cwd: c.cwd })),
+		};
+	}
+	return { commands: [], warning: `命令文件格式不正确：${path}`, warningEn: `Commands file has a bad format: ${path}` };
+}
+
+/** Persist the command list, creating .pi/ if needed. */
+export async function saveCommandsFile(
+	workspaceRoot: string,
+	commands: CommandDef[],
+): Promise<{ path: string; error?: string; errorEn?: string }> {
+	const path = commandsFilePath(workspaceRoot);
+	try {
+		await mkdir(join(workspaceRoot, ".pi"), { recursive: true });
+		const payload: CommandsFile = { commands };
+		await writeFile(path, JSON.stringify(payload, null, 2) + "\n", "utf8");
+		return { path };
+	} catch (err) {
+		return {
+			path,
+			error: `保存命令文件失败：${(err as Error).message}`,
+			errorEn: `Failed to save commands file: ${(err as Error).message}`,
+		};
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TerminalManager
+// ---------------------------------------------------------------------------
+
+interface TermEntry {
+	id: string;
+	pty: IPty;
+	title: string;
+	cwd: string;
+	cols: number;
+	rows: number;
+	exited: boolean;
+	exitCode: number | null;
+	command?: CommandDef;
+	/** Append-only output window. The cursor is an absolute character offset. */
+	output: string;
+	outputOffset: number;
+	waiters: Set<() => void>;
+	/** Coalesced outbound output (see OUTPUT_FLUSH_MS) not yet sent to the browser. */
+	pendingOut: string;
+	/** Timer for the coalescing window; null = nothing pending. */
+	flushTimer: ReturnType<typeof setTimeout> | null;
+	// ---- 终端活力检测（liveness watchdog，仅 agent 工具路径参与）----
+	/** true = 该终端被 agent 的 terminal_create/input/key 触碰过（用户手开的
+	 *  终端永远不参与静默提醒）。同时也是「当前纪元仍武装」的标志：看门狗
+	 *  触发一次后清零，下次 agent 触碰重新开始计时。 */
+	agentTouched: boolean;
+	/** 最后一次 PTY 输出 / 输入写入的时刻——静默时长以它为基准。 */
+	lastActivityAt: number;
+	/** 静默看门狗 timer；null = 未武装。 */
+	idleTimer: ReturnType<typeof setTimeout> | null;
+	/** 输出观察器（终端接管 bash 的完成检测）：注册后在 appendOutput 里累积
+	 *  新数据并匹配正则；命中或终端退出时回调一次即移除。buf 从注册时刻累积。 */
+	watches: { re: RegExp; buf: string; cb: (m: RegExpMatchArray | null) => void }[];
+	/** true = 终端接管 bash 刚发出一条带哨兵的命令且尚未结束（terminal_wait
+	 *  用它区分「有命令在跑」和「shell 空闲在提示符」——后者等哨兵永远等不到）。 */
+	sentinelPending?: boolean;
+	/** true = 终端接管 bash 的持久终端（'ai-bash'）：不计入 MAX_TERMINALS，
+	 *  前端单独归到「AI bash」折叠分组。 */
+	agentBash: boolean;
+	/** true = 该终端被真正“用过”（用户敲过键盘 / 跑过命令 / agent 触碰过 /
+	 *  ai-bash）：这类终端可能有前台任务或 shell 状态，关闭对话时需要拦截确认。
+	 *  刚自动建出来、一次都没动过的空 shell 为 false——切对话/✕ 移出时不计入
+	 *  保留，跟着对话一起释放（用户点开终端 tab 自动建的那个就是这种）。 */
+	used: boolean;
+	/** UI locale at creation ("en" = English exit banner, else Chinese). */
+	locale?: string;
+}
+
+const isWindows = process.platform === "win32";
+const MAX_TERMINALS = 16;
+/** Coalescing window for terminal_output WS messages (one animation frame). */
+const OUTPUT_FLUSH_MS = 16;
+const MAX_TERMINAL_HISTORY = 32;
+const MAX_OUTPUT = 200_000;
+const MAX_INPUT = 64 * 1024;
+const MAX_ID = 80;
+
+/**
+ * 终端活力检测阈值：agent 触碰过的终端连续静默这么久且该对话正在运行时，
+ * 通过 onAgentIdle 回调通知宿主（宿主注入一条 steer 消息唤醒 AI 去检查）。
+ * PI_WEB_TERMINAL_IDLE_MS 覆盖；0 = 关闭检测。每次调用时读取（测试可注入）。
+ */
+export function terminalIdleNotifyMs(): number {
+	const raw = Number(process.env.PI_WEB_TERMINAL_IDLE_MS);
+	return Number.isFinite(raw) && raw >= 0 ? raw : 15_000;
+}
+
+/** 静默解阻时默认回送的最近输出行数（仅用于把已有输出截到可读量）。
+ *  PI_WEB_TERMINAL_IDLE_LINES 覆盖；0 = 不截；限制在 1..500。每次调用时读取。 */
+export function terminalIdleNotifyLines(): number {
+	const raw = Number(process.env.PI_WEB_TERMINAL_IDLE_LINES);
+	const n = Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 10;
+	return Math.max(1, Math.min(n, 500));
+}
+
+// ---------------------------------------------------------------------------
+// 终端接管 bash（terminal-backed bash tool）
+// ---------------------------------------------------------------------------
+
+/** 哨兵行：命令执行完后由 shell 打印，形如 `[pi-exit-<nonce>:<退出码>]`。
+ *  nonce 每次调用随机生成（12 位 hex）：回显里的 printf 格式串（`%s`）、真实输出里
+ *  的 `[pi-exit:42]` 之类字面量都不会与本次哨兵混淆（#572）。 */
+const SENTINEL_NONCE_SRC = "[0-9a-f]{12}";
+/** 任意 nonce 的哨兵（终端级通用等待用）。bash 工具自己的完成判定请用 sentinelReFor。 */
+const BASH_SENTINEL_RE = new RegExp(`\\[pi-exit-${SENTINEL_NONCE_SRC}:(\\d+)\\]`, "g");
+/** 本次调用的哨兵 nonce。 */
+export function newSentinelNonce(): string {
+	return randomBytes(6).toString("hex");
+}
+/** 只匹配本次 nonce 的哨兵（bash 工具的完成判定只认自己注入的那一个）。 */
+function sentinelReFor(nonce: string): RegExp {
+	return new RegExp(`\\[pi-exit-${nonce}:(\\d+)\\]`, "g");
+}
+
+/** bash 阻塞循环 collected 的累积上限：超限丢最旧一半（见 bash 工具执行循环）。 */
+const BASH_COLLECT_MAX = 2 * 1024 * 1024;
+
+/**
+ * 把任意命令（含多行脚本）构造成一行交互 shell 命令：执行 + 捕获退出码。
+ *
+ * 单行很关键：整行先被 shell 完整解析再执行，命令中途读 stdin 也不会吃掉
+ * 后续哨兵；也避开交互 shell 的 bracketed-paste 对多行输入的特殊处理。
+ * 多行脚本用 `$'...'` ANSI-C 引号转义后交给 eval（bash/zsh/busybox ash 都支持）。
+ */
+export function buildTerminalBashLine(
+	command: string,
+	tailFile?: { file: string; lines: number },
+	nonce: string = newSentinelNonce(),
+): string {
+	const trimmed = command.replace(/\s+$/, "");
+	// 退出码取【第一个】命令（真正干活的那个）而非管道末尾命令：`head`/`grep`/`tail`
+	// 在管道末尾会把退出码吞成自己的（head 恒 0、grep 无命恒 1）。`${PIPESTATUS:-$?}`
+	// 在 bash 里取 PIPESTATUS[0]（首命令），busybox ash/dash 无 PIPESTATUS 时退化为 `$?`。
+	// SIGPIPE(141) 归 0：`cmd | head` 里 head 读够 N 行就主动关管道，把首命令“截断杀掉”
+	// 留下的 141 不是真失败，而是“按要求截断=成功”。只有恰好 141 才转 0，真失败照报。
+	// tailFile：`cmd > log 2>&1 | tail -N`——拆掉 tail 后 stdout 进文件、终端为空；
+	// 在哨兵前补一个 `tail -N log` 让模型看到日志尾部，退出码仍是底层命令的。
+	const tailPart = tailFile
+		? `; tail -n ${Math.max(1, Math.floor(tailFile.lines))} -- '${tailFile.file.replace(/'/g, `'\\''`)}'`
+		: "";
+	// eslint-disable-next-line no-useless-escape -- \$? must reach the shell literally
+	const sentinel = `__pi_rc=\${PIPESTATUS:-\$?}; [ "$__pi_rc" -eq 141 ] && __pi_rc=0${tailPart}; printf '\\n[pi-exit-${nonce}:%s]\\n' "$__pi_rc"`;
+
+	if (trimmed.includes("\n")) {
+		// 多行路径（行为保持）：$'...' 转义后是一行物理输入，引号/换行全部字面化，
+		// 以 `'` 收尾——`; ` 同行拼接哨兵不会被尾注释/尾管道/续行吞掉。
+		const body = `eval $'${trimmed
+			.replace(/\\/g, "\\\\")
+			.replace(/'/g, "\\'")
+			.replace(/\r/g, "\\r")
+			.replace(/\n/g, "\\n")
+			.replace(/\t/g, "\\t")}'`;
+		return `${body}; ${sentinel}`;
+	}
+
+	// 单行路径：哨兵独占一行追加。行内 `; ` 拼接会被常见形态吞掉——
+	// 尾注释（`cmd # note; printf…` 整段进注释）、尾管道（`cmd |; …` 语法错误）。
+	// 独占一行后这两类安全；尾随续行符/未闭合引号仍会把哨兵行并入命令或吞进
+	// 字符串——这类形态无法安全续行，直接拒注入（调用方按无退出码模式执行并注明）。
+	if (sentinelUnsafeReason(trimmed)) return trimmed;
+	return `${trimmed}\n${sentinel}`;
+}
+
+/**
+ * 判定命令能否安全追加「独占一行的退出码哨兵」；返回拒注入原因或 null（可注入）。
+ *
+ * - 尾随续行符 `\`：下一行被并入本命令，哨兵行成为命令的一部分。
+ * - 未闭合引号：哨兵行被吞进字符串字面量，永远不会作为代码执行。
+ * - 未闭合的 `{}` / `()` 组：shell 停在 PS2 续行，哨兵永远不会执行（#573）。
+ * - 未闭合的 heredoc（`<<`，非 `<<<`）：哨兵行被当成 heredoc 正文吞掉，shell
+ *   停在 PS2 等 EOF——不仅本条零执行，持久 shell 的后续命令也会连环被吞。
+ * - 未闭合的 if/for/while/until/case 块：同样停在 PS2 等续行。
+ * - 多行命令：经 `$'...'` 转义单行化后引号/换行全部字面化，总是安全 → null。
+ *
+ * 扫描按 POSIX 引号语义跟踪 `'`/`"`/`` ` `` 三种引号与转义；`$'...'`（ANSI-C
+ * 引号）内 `\'` 不闭合引号，也一并识别。
+ */
+export function sentinelUnsafeReason(
+	command: string,
+): "trailing_backslash" | "unclosed_quote" | "unclosed_group" | "unclosed_heredoc" | "unclosed_block" | null {
+	const trimmed = command.replace(/\s+$/, "");
+	if (trimmed.includes("\n")) return null;
+	let quote: "'" | '"' | "`" | null = null;
+	// 当前单引号是否 $' 开头（ANSI-C 引号，内含转义语义）
+	let ansiC = false;
+	let escaped = false;
+	// `{` 未闭合深度：残句（如 `{ a; b | tail -3`）注入后 shell 停在 PS2、哨兵永不执行（#573）
+	let depth = 0;
+	// `(` 栈：区分普通组与算术上下文（`(())`）——算术里的 `<<` 是左移不是 heredoc
+	const parenStack: Array<"group" | "arith"> = [];
+	// 关键字块计数（命令位置的 if / for|while|until|select / case）
+	let ifDepth = 0;
+	let loopDepth = 0;
+	let caseDepth = 0;
+	let heredoc = false;
+	// [[ ]] 内是测试表达式，单词不是命令
+	let inDoubleBracket = false;
+	// 当前累积的词；wordCmdPos 记录该词是否处于命令位置
+	// （行首/`;|&(`/`{`/`}`/then|else|do 之后）——`echo if` 的 `if` 是参数不是关键字
+	let word = "";
+	let wordCmdPos = false;
+	let cmdPos = true;
+	const flushWord = (): void => {
+		if (!word) return;
+		if (word === "[[") inDoubleBracket = true;
+		else if (word === "]]") inDoubleBracket = false;
+		else if (!inDoubleBracket && parenStack[parenStack.length - 1] !== "arith") {
+			if (wordCmdPos) {
+				if (word === "if") ifDepth++;
+				else if (word === "fi") ifDepth = Math.max(0, ifDepth - 1);
+				else if (word === "for" || word === "while" || word === "until" || word === "select") loopDepth++;
+				else if (word === "done") loopDepth = Math.max(0, loopDepth - 1);
+				else if (word === "case") caseDepth++;
+				else if (word === "esac") caseDepth = Math.max(0, caseDepth - 1);
+				else if (word === "then" || word === "else" || word === "elif" || word === "do") cmdPos = true;
+			}
+		}
+		word = "";
+	};
+	for (let i = 0; i < trimmed.length; i++) {
+		const ch = trimmed[i];
+		if (quote) {
+			if (escaped) {
+				escaped = false;
+				continue;
+			}
+			// POSIX 单引号内 `\` 是普通字符；ANSI-C/双引号/反引号内 `\` 转义下一字符
+			if (ch === "\\" && (quote !== "'" || ansiC)) {
+				escaped = true;
+				continue;
+			}
+			if (ch === quote) quote = null;
+			continue;
+		}
+		if (escaped) {
+			// 引号外的转义：被转义字符原样跳过（`\"` 不开引号等）
+			escaped = false;
+			continue;
+		}
+		if (ch === "#" && (i === 0 || /\s/.test(trimmed[i - 1]))) break; // 注释到行尾，不再计引号/括号
+		if (ch === "\\") {
+			escaped = true;
+			continue;
+		}
+		if (/[A-Za-z0-9_#]/.test(ch)) {
+			if (!word) {
+				wordCmdPos = cmdPos;
+				cmdPos = false;
+			}
+			word += ch;
+			continue;
+		}
+		if (ch === "'" || ch === '"' || ch === "`") {
+			flushWord();
+			quote = ch;
+			ansiC = ch === "'" && i > 0 && trimmed[i - 1] === "$";
+			continue;
+		}
+		if (ch === "<" && trimmed[i + 1] === "<") {
+			flushWord();
+			cmdPos = false;
+			if (trimmed[i + 2] === "<") {
+				i += 2; // `<<<` here-string：不等待后续行，安全
+			} else if (parenStack[parenStack.length - 1] !== "arith" && !inDoubleBracket) {
+				heredoc = true;
+				break; // 哨兵行必然被当 heredoc 正文吞掉
+			} else {
+				i += 1; // 算术左移 / [[ 内：非 heredoc
+			}
+			continue;
+		}
+		if (ch === "(") {
+			flushWord();
+			cmdPos = true;
+			if (trimmed[i + 1] === "(") {
+				parenStack.push("arith");
+				i += 1;
+			} else {
+				parenStack.push("group");
+			}
+			continue;
+		}
+		if (ch === ")") {
+			flushWord();
+			const top = parenStack[parenStack.length - 1];
+			if (top === "arith" && trimmed[i + 1] === ")") {
+				parenStack.pop();
+				i += 1;
+			} else if (top === "group") {
+				parenStack.pop();
+			}
+			// 栈空/不匹配的 `)`（case 模式 `a)`、算术残留）保持忽略
+			cmdPos = true;
+			continue;
+		}
+		if (ch === "[" && trimmed[i + 1] === "[") {
+			flushWord();
+			inDoubleBracket = true;
+			i += 1;
+			continue;
+		}
+		if (ch === "]" && trimmed[i + 1] === "]" && inDoubleBracket) {
+			flushWord();
+			inDoubleBracket = false;
+			i += 1;
+			continue;
+		}
+		if (ch === "{") {
+			flushWord();
+			depth++;
+			cmdPos = true;
+			continue;
+		}
+		if (ch === "}") {
+			flushWord();
+			depth = Math.max(0, depth - 1);
+			cmdPos = true;
+			continue;
+		}
+		// 其余字符（空白/`;|&`/`$`/`!` 等）结束当前词
+		flushWord();
+		if (ch === ";" || ch === "|" || ch === "&" || ch === "!") cmdPos = true;
+		else if (ch !== "$" && !/\s/.test(ch)) cmdPos = false;
+	}
+	flushWord();
+	if (quote !== null) return "unclosed_quote";
+	// 扫描结束仍在转义态 = 最后一个字符是引号外的 `\`（尾随续行符）
+	if (escaped) return "trailing_backslash";
+	if (heredoc) return "unclosed_heredoc";
+	if (ifDepth > 0 || loopDepth > 0 || caseDepth > 0) return "unclosed_block";
+	if (depth > 0) return "unclosed_group";
+	if (parenStack.length > 0) return "unclosed_group";
+	return null;
+}
+
+/** 顶层（引号/反引号/转义外、且不在 `()` / `{}` 组内）按 `|` 拆分的管道元素。
+ *  组内的 `|`（`{ a; b | tail; }`）属于组本身，不是顶层管道（#573）。 */
+export function splitTopLevelPipes(cmd: string): string[] {
+	return scanTopLevel(cmd).parts;
+}
+
+/** 顶层管道扫描：引号 / ANSI-C 引号 / 转义 / `||` 不拆；`()` `{}` 组内的 `|` 不拆。
+ *  openGroups > 0 = 结尾仍有未闭合的组（调用方据此放弃拆管 / 拒注入）。 */
+function scanTopLevel(cmd: string): { parts: string[]; openGroups: number } {
+	const parts: string[] = [];
+	let cur = "";
+	let quote: "'" | '"' | "`" | null = null;
+	// 当前单引号是否 $' 开头（ANSI-C 引号：内含 \' 等转义，不闭合引号）
+	let ansiC = false;
+	let depth = 0;
+	for (let i = 0; i < cmd.length; i++) {
+		const ch = cmd[i];
+		if (quote) {
+			cur += ch;
+			if (ch === "\\" && quote !== "`" && (quote !== "'" || ansiC) && i + 1 < cmd.length) cur += cmd[++i];
+			else if (ch === quote) quote = null;
+			continue;
+		}
+		if (ch === "#" && (i === 0 || /\s/.test(cmd[i - 1]))) {
+			// 词首的 # 注释到行尾：之后的 | 和引号都不是 shell 结构（否则 `echo hi # don't` 会被当成未闭合引号）
+			cur += cmd.slice(i);
+			break;
+		}
+		if (ch === "\\" && i + 1 < cmd.length) {
+			// 引号外的转义：被转义字符原样保留（`\|` 是字面竖线，不是管道）
+			cur += ch + cmd[++i];
+			continue;
+		}
+		if (ch === "'" || ch === '"' || ch === "`") {
+			quote = ch;
+			ansiC = ch === "'" && i > 0 && cmd[i - 1] === "$";
+			cur += ch;
+			continue;
+		}
+		if (ch === "(" || ch === "{") depth++;
+		else if ((ch === ")" || ch === "}") && depth > 0) depth--;
+		if (ch === "|" && cmd[i + 1] === "|") {
+			// `||` 是逻辑或，不是管道
+			cur += "||";
+			i++;
+			continue;
+		}
+		if (ch === "|" && depth === 0) {
+			parts.push(cur.trimEnd());
+			cur = "";
+			continue;
+		}
+		cur += ch;
+	}
+	parts.push(cur.trimEnd());
+	return { parts, openGroups: depth };
+}
+
+type LimiterKind = "tail" | "less" | "more" | "cat";
+
+/** 从 tail 参数里解析行数：`-n 15` / `-n15` / `-15` / `--lines=15` / `--lines 15`。 */
+function parseTailLines(rest: string): number | null {
+	const m = rest.match(/--lines(?:=|\s+)(\d+)|-n\s*(\d+)|(?:^|\s)-(\d+)/);
+	if (!m) return null;
+	return Number(m[1] ?? m[2] ?? m[3]);
+}
+
+/**
+ * 识别命令**末尾**用来「限制输出量」的管道：`| tail [-n N|-N]`（不含 -f）、`| less`、
+ * `| more`、`| cat`。这类管道会 ①缓冲输出（可见终端全程哑火、无法感知实时进度）②把
+ * 退出码变成**管道最后一个命令**（tail 恒 0）——掩盖底层真实失败 ③需 stdin 的管道
+ * （尤其长驻命令）出错后可能一直挂到超时。
+ *
+ * 识别后由调用方拆掉它：底层命令直跑（实时可见 + 真实退出码），只在返回给模型时取
+ * 末尾 N 行（tail）或全部输出。
+ *
+ * - **只拆末尾单个纯“限输出/透传”**；`| grep`/`| head`/`| awk`/`| sed`/`| sort`/`| uniq`
+ *   （真过滤/变换，拆掉会丢语义或崩出海量未过滤输出）与 `| tee`（写文件副作用）都**不拆**。
+ * - `tail -f` / `tail --follow`（长驻观察）也不拆。
+ */
+export function detectTrailingLimiter(
+	command: string,
+): { base: string; kind: LimiterKind; lines: number | null; segment: string } | null {
+	// 含命令替换（$() / 反引号）的命令保守跳过拆管：splitTopLevelPipes 只跟踪引号
+	// 与顶层 `|`，不解析括号嵌套——`cmd $(x | y)` 里替换内的管道会被误判为顶层
+	// 管道段，拆掉后直接破坏命令语义。保守正确优先，宁可少优化。
+	if (/\$\(|`/.test(command)) return null;
+	const { parts, openGroups } = scanTopLevel(command);
+	// 结尾仍有未闭合的 `{` / `(`：这条命令本身就是残的，拆管只会把组截断（#573）。
+	if (parts.length < 2 || openGroups > 0) return null;
+	// 管道分隔处可能在 `|` 后留前导空白（`| tail`），trim 掉再匹配。
+	const last = parts[parts.length - 1].trim();
+	const m = last.match(/^(tail|less|more|cat)\b(.*)$/i);
+	if (!m) return null;
+	const kind = m[1].toLowerCase() as LimiterKind;
+	const rest = m[2].trim();
+	if (kind === "tail") {
+		// 长驻观察：tail -f / tail --follow —— 不拆。
+		if (/(?:^|\s)(?:-f|--follow(?:=|\b))/.test(rest)) return null;
+		const lines = parseTailLines(rest) ?? 10; // 裸 `| tail` 默认 10 行
+		return {
+			base: parts
+				.slice(0, -1)
+				.map((s) => s.trim())
+				.join(" | "),
+			kind,
+			lines,
+			segment: last,
+		};
+	}
+	// less / more / cat：纯透传，拆掉只为修正退出码 + 避免交互分页器在 PTY 里挂起。
+	return {
+		base: parts
+			.slice(0, -1)
+			.map((s) => s.trim())
+			.join(" | "),
+		kind,
+		lines: null,
+		segment: last,
+	};
+}
+
+/** 识别命令里把 stdout 重定向到文件的 `> file` / `>> file`（忽略 2>N / >&N / /dev/null）。
+ *  用于 `cmd > log 2>&1 | tail -N`：拆掉 tail 后输出进文件，终端为空——补一个 tail 文件
+ *  让模型能看到日志尾部与真实退出码。返回文件路径；复杂/带引号目标暂不处理。 */
+export function detectStdoutRedirect(command: string): { file: string } | null {
+	const all = [...command.matchAll(/(?:^|[\s;&|])(>>|>)\s*([^\s;|&]+)/g)];
+	for (let i = all.length - 1; i >= 0; i--) {
+		const file = all[i][2];
+		if (/^(?:&[0-9]+|[0-9]+)$/.test(file) || file === "/dev/null" || /["'`]/.test(file)) return null;
+		return { file };
+	}
+	return null;
+}
+
+export interface TerminalQuery {
+	/** 只看开头 N 行。 */
+	head?: number;
+	/** 只看结尾 N 行。 */
+	tail?: number;
+	/** 搜索关键词（忽略大小写），返回每个匹配行 + 周围 `context` 行。 */
+	search?: string;
+	/** 搜索匹配行的上下文行数（默认 3）。 */
+	context?: number;
+}
+
+/** 对终端输出缓冲做快照查询：head / tail / search(+context)。返回带 1-based 行号的
+ *  人类可读文本，便于 AI 定位后继续按行查看/搜索。纯函数（单测可覆盖）。 */
+export function queryTerminalOutput(
+	output: string,
+	q: TerminalQuery,
+	running = false,
+	exitCode: number | null = null,
+): { text: string; running: boolean; exitCode: number | null; matches?: { line: number; text: string }[] } {
+	const lines = stripAnsi(output)
+		.replace(/\r(?!\n)/g, "")
+		.split("\n")
+		.filter((l) => {
+			const t = l.trim();
+			return (
+				!/^\[pi-exit:\d+\]$/.test(t) &&
+				!/^\[pi-term-exit:-?\d+\]$/.test(t) &&
+				!t.startsWith("[进程已退出") &&
+				!t.startsWith("[Process exited") &&
+				!/^\[.*(已退出|exited)/.test(t)
+			);
+		});
+	while (lines.length > 0 && !lines[lines.length - 1].trim()) lines.pop();
+	const numbered = (arr: string[], start: number): string => arr.map((l, i) => `${start + i + 1}: ${l}`).join("\n");
+	if (q.search) {
+		const ctx = Math.max(0, q.context ?? 3);
+		const needle = q.search.toLowerCase();
+		const matches: { line: number; text: string }[] = [];
+		const out: string[] = [];
+		let i = 0;
+		while (i < lines.length) {
+			if (lines[i].toLowerCase().includes(needle)) {
+				matches.push({ line: i + 1, text: lines[i] });
+				const s = Math.max(0, i - ctx);
+				const e = Math.min(lines.length - 1, i + ctx);
+				out.push(`── 匹配行 ${i + 1} ──`);
+				for (let j = s; j <= e; j++) out.push(`${j + 1}: ${lines[j]}`);
+				out.push("");
+				i = e + 1;
+			} else {
+				i++;
+			}
+		}
+		return {
+			text: out.join("\n").trim() || "（无匹配）",
+			running,
+			exitCode,
+			matches: matches.length ? matches : undefined,
+		};
+	}
+	if (q.head !== undefined && q.head >= 0) {
+		const arr = lines.slice(0, q.head);
+		return { text: numbered(arr, 0), running, exitCode };
+	}
+	if (q.tail !== undefined && q.tail >= 0) {
+		const n = Math.max(1, q.tail);
+		const arr = lines.slice(-n);
+		return { text: numbered(arr, lines.length - arr.length), running, exitCode };
+	}
+	return { text: numbered(lines, 0), running, exitCode };
+}
+
+/** 去掉 ANSI 转义序列（OSC/CSI/其余 ESC 序列）与孤立 CR（进度条重绘），
+ *  让 PTY 回显变成 bash 工具风格的纯文本。 */
+export function stripAnsi(s: string): string {
+	return s
+		.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "") // OSC（标题/超链接等）
+		.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "") // CSI（颜色/光标/清屏等）
+		.replace(/\x1b[@-_]/g, "") // 其余单字符 ESC 序列
+		.replace(/\r(?!\n)/g, ""); // 孤立 CR（进度条原地重绘）
+}
+
+/** 截断过长的工具结果：保留头尾，中间省略。 */
+function truncateMiddle(text: string, max = 30_000): string {
+	if (text.length <= max) return text;
+	const head = Math.floor(max * 0.3);
+	const tail = max - head;
+	return `${text.slice(0, head)}\n…（中间省略 ${text.length - max} 字符）…\n${text.slice(-tail)}`;
+}
+
+/** `-i` makes bash interactive; cmd.exe / powershell.exe are interactive on their own. */
+function bashArgs(shell: string): string[] {
+	return /[\\/]bash(\.exe)?$/i.test(shell) ? ["-i"] : [];
+}
+
+/**
+ * Interactive shell for PTYs.
+ * - Windows: prefer bash — it matches the SDK's bash tool, so the agent and
+ *   the terminal speak the same shell language (no more PowerShell/bash
+ *   混用 that leaves heredocs / `&&` / `<<` hanging or erroring). Order:
+ *   1. PI_WEB_SHELL (explicit override)
+ *   2. $SHELL when it exists on disk (user launched from a Git Bash session)
+ *   3. Git Bash install paths (ProgramFiles / ProgramFiles(x86))
+ *   4. busybox-w32 fallback in <home>/.pi-web/bin/bash.exe (ensure-bash.ts
+ *      downloads it automatically when 2–3 are absent)
+ *   5. $COMSPEC (cmd.exe — always set)
+ *   6. powershell.exe (last resort)
+ * - POSIX: the user's login shell, falling back to bash.
+ * Resolved per terminal spawn (not at module load) so a busybox download that
+ * finishes after startup is picked up by the next terminal.
+ */
+function resolveShell(): { shell: string; args: string[] } {
+	if (isWindows) {
+		const explicit = process.env.PI_WEB_SHELL;
+		if (explicit) return { shell: explicit, args: bashArgs(explicit) };
+		const she = process.env.SHELL;
+		if (she && existsSync(she)) return { shell: she, args: bashArgs(she) };
+		const pf = process.env.ProgramFiles;
+		const pf86 = process.env["ProgramFiles(x86)"];
+		for (const cand of [
+			pf ? join(pf, "Git", "bin", "bash.exe") : "",
+			pf86 ? join(pf86, "Git", "bin", "bash.exe") : "",
+		]) {
+			if (cand && existsSync(cand)) return { shell: cand, args: ["-i"] };
+		}
+		const busybox = join(homedir(), ".pi-web", "bin", "bash.exe");
+		if (existsSync(busybox)) return { shell: busybox, args: ["-i"] };
+		return { shell: process.env.COMSPEC || "powershell.exe", args: [] };
+	}
+	return { shell: process.env.SHELL || "bash", args: ["-i"] };
+}
+
+/**
+ * Shell for the terminal-backed bash tool ('ai-bash'): ALWAYS bash, never the
+ * user's login shell (often zsh on macOS, whose `read -p` etc. diverge from
+ * the bash semantics models write). Windows already prefers Git Bash/busybox
+ * bash; on posix pick $SHELL when it is bash, else plain `bash`.
+ */
+function resolveBashShell(): { shell: string; args: string[] } {
+	if (isWindows) {
+		const explicit = process.env.PI_WEB_SHELL;
+		if (explicit && existsSync(explicit)) return { shell: explicit, args: ["-i"] };
+		const she = process.env.SHELL;
+		if (she && existsSync(she) && she.toLowerCase().includes("bash")) return { shell: she, args: ["-i"] };
+		const pf = process.env.ProgramFiles;
+		const pf86 = process.env["ProgramFiles(x86)"];
+		for (const cand of [
+			pf ? join(pf, "Git", "bin", "bash.exe") : "",
+			pf86 ? join(pf86, "Git", "bin", "bash.exe") : "",
+		]) {
+			if (cand && existsSync(cand)) return { shell: cand, args: ["-i"] };
+		}
+		const busybox = join(homedir(), ".pi-web", "bin", "bash.exe");
+		if (existsSync(busybox)) return { shell: busybox, args: ["-i"] };
+	}
+	const she = process.env.SHELL;
+	if (she && (she.endsWith("bash") || she.endsWith("bash.exe")) && existsSync(she)) {
+		return { shell: she, args: ["-i"] };
+	}
+	return { shell: "bash", args: ["-i"] };
+}
+
+/**
+ * Environment for spawned shells. System services (launchd/systemd) run with
+ * no locale variables, which puts the shell in the C locale: its line editor
+ * then renders UTF-8 continuation bytes 0x80–0x9F as C1 control characters
+ * (e.g. `�<0091><0098>` for 员), garbling Chinese input in the terminal.
+ * Default a UTF-8 locale so multibyte text round-trips.
+ */
+function shellEnv(): Record<string, string> {
+	const env: Record<string, string> = {
+		...process.env,
+		TERM: "xterm-256color",
+	};
+	if (!env.LANG && !env.LC_ALL) env.LANG = "en_US.UTF-8";
+	return env;
+}
+
+// ---------------------------------------------------------------------------
+// node-pty ConoutConnection warning noise (Node --watch)
+// ---------------------------------------------------------------------------
+// node-pty's ConoutConnection warns about every unknown message from its ConPTY
+// worker thread. Under `node --watch` (the dev server: `node --watch --import
+// tsx`), Node's watch mode pushes `watch:require` / `watch:import` messages over
+// the worker's message channel to track module dependencies; node-pty doesn't
+// recognize them and logs one `Unexpected ConoutWorkerMessage { … }` per message
+// — hundreds of lines per terminal (the SCM panel's hidden query PTY triggers it
+// on every git-view open). The messages are harmless: the worker only ever sends
+// its READY sentinel, which the handler does process. Filter that exact warning
+// at the console boundary so dev output stays readable. Production runs without
+// --watch and never produces these.
+const originalWarn = console.warn.bind(console);
+console.warn = (...args: unknown[]) => {
+	if (args[0] === "Unexpected ConoutWorkerMessage") return;
+	originalWarn(...args);
+};
+
+// ---------------------------------------------------------------------------
+// spawn-helper permission repair (node-pty macOS prebuilds)
+// ---------------------------------------------------------------------------
+// node-pty 1.1.0 publishes its macOS prebuilds with `spawn-helper` lacking the
+// execute bit (mode 0644 in the npm tarball), so posix_spawn fails with EACCES
+// and node-pty throws the generic "posix_spawnp failed". Locally-built
+// copies (build/Release) are fine; every `npm install` that picks the prebuild
+// — e.g. `npm i -g pi-web-ui`, which is what system-service installs run — is
+// broken until the bit is restored. Self-heal at startup AND lazily before
+// every spawn (an `npm i -g` while the server is running replaces the helper
+// under the running process, so the startup-only repair misses it).
+// Best-effort: a read-only node_modules just keeps the old failure.
+
+const require = createRequire(import.meta.url);
+
+/** Absolute paths of every node-pty spawn-helper this install can exec. */
+function spawnHelperPaths(): string[] {
+	try {
+		// require.resolve("node-pty") → <pkg>/lib/index.js → package root is two up.
+		const pkgDir = dirname(dirname(require.resolve("node-pty")));
+		const out: string[] = [];
+		const built = join(pkgDir, "build", "Release", "spawn-helper");
+		if (existsSync(built)) out.push(built);
+		const prebuildsDir = join(pkgDir, "prebuilds");
+		if (existsSync(prebuildsDir)) {
+			for (const entry of readdirSync(prebuildsDir)) {
+				const p = join(prebuildsDir, entry, "spawn-helper");
+				if (existsSync(p)) out.push(p);
+			}
+		}
+		return out;
+	} catch {
+		return [];
+	}
+}
+
+/** Restore the +x bit on node-pty's spawn-helper binaries (idempotent). */
+function repairSpawnHelperPermissions(): void {
+	if (isWindows) return;
+	for (const p of spawnHelperPaths()) {
+		try {
+			if ((statSync(p).mode & 0o111) === 0) chmodSync(p, 0o755);
+		} catch {
+			// best-effort; a read-only node_modules just keeps the old failure
+		}
+	}
+}
+repairSpawnHelperPermissions();
+
+/** Path of a still-broken helper, for the error hint ("" when none). */
+function brokenSpawnHelper(): string {
+	if (isWindows) return "";
+	for (const p of spawnHelperPaths()) {
+		try {
+			if ((statSync(p).mode & 0o111) === 0) return p;
+		} catch {
+			// ignore
+		}
+	}
+	return "";
+}
+
+// ---------------------------------------------------------------------------
+// macOS TCC camera/mic warning (launchd-spawned servers)
+// ---------------------------------------------------------------------------
+// TCC attributes camera/mic access to the process chain's "responsible
+// process". When pi-web-ui runs as a launchd LaunchAgent (node ← launchd),
+// the responsible process is node itself — a bare CLI binary with no app
+// bundle / Info.plist / NSCameraUsageDescription — so TCC silently denies
+// camera access (no prompt, nothing to tick in System Settings) and
+// ffmpeg-style grabbers hang on frame capture. The identical command works
+// from a terminal app that already holds the camera grant. Detect the
+// "no GUI ancestor" case (ppid === 1 on macOS) and warn in the terminal.
+const TCC_HINT =
+	[
+		"\x1b[33m[提示] 本终端由后台服务（launchd）启动，macOS 隐私权限（相机/麦克风/屏幕录制等）对此类进程不可用。\x1b[0m",
+		"\x1b[90m  · 需要隐私权限的命令会被系统静默拒绝：不弹授权窗，系统设置里也无法勾选，表现多为卡死或无输出。",
+		"  · 这类任务请在你自己已授权的前台终端里运行。",
+		"  · 本终端内可运行不需要隐私权限的命令（如文件处理、网络请求、远程设备流）。",
+		"  · 若改在前台终端里运行 pi-web-ui，本提示即不再出现。\x1b[0m",
+	].join("\r\n") + "\r\n";
+
+/** True when this server was spawned by launchd (or orphaned) on macOS — no GUI app in the ancestry, so camera/mic TCC grants are unavailable. */
+function launchdSpawnedOnMac(): boolean {
+	return process.platform === "darwin" && process.ppid === 1;
+}
+
+// ---------------------------------------------------------------------------
+// Key encoding (pure — byte-exact assertions live in terminal-smoke-test.mjs)
+// ---------------------------------------------------------------------------
+/** A key translated to the exact byte sequence for the PTY, or an error. */
+export type TerminalKeyEncoding = { data: string } | { error: string };
+
+/**
+ * Translate a logical key (named key or single character) plus modifiers into
+ * the exact byte sequence a PTY expects. Named keys are routed by NAME, so a
+ * Ctrl/Alt combo is NEVER derived from the key's first letter: Ctrl+ArrowUp
+ * must produce `ESC[1;5A`, not Ctrl+A, and Ctrl+Enter `ESC[13;5u`, not Ctrl+E.
+ *  - arrows / F1–F4 / Home / End keep their plain form when unmodified and
+ *    gain the xterm modifier parameter (`ESC[1;<m>X`) under Shift/Alt/Ctrl;
+ *  - other named keys (Enter/Tab/Backspace/Escape/Insert/Delete/PageUp/PageDown)
+ *    fall back to the CSI-u form (`ESC[<code>;<m>u`) once modified;
+ *  - plain characters: Ctrl maps A–Z to 0x01–0x1A (error for non-letters),
+ *    Shift uppercases, Alt prefixes with ESC.
+ */
+export function encodeTerminalKey(
+	key: string,
+	modifiers: { ctrl?: boolean; alt?: boolean; shift?: boolean } = {},
+): TerminalKeyEncoding {
+	const named: Record<string, string> = {
+		Enter: "\r",
+		Return: "\r",
+		Tab: "\t",
+		Backspace: "\x7f",
+		Escape: "\x1b",
+		Up: "\x1b[A",
+		ArrowUp: "\x1b[A",
+		Down: "\x1b[B",
+		ArrowDown: "\x1b[B",
+		Left: "\x1b[D",
+		ArrowLeft: "\x1b[D",
+		Right: "\x1b[C",
+		ArrowRight: "\x1b[C",
+		Home: "\x1b[H",
+		End: "\x1b[F",
+		Delete: "\x1b[3~",
+		Insert: "\x1b[2~",
+		PageUp: "\x1b[5~",
+		PageDown: "\x1b[6~",
+		F1: "\x1bOP",
+		F2: "\x1bOQ",
+		F3: "\x1bOR",
+		F4: "\x1bOS",
+	};
+	let data = named[key] ?? (key.length === 1 ? key : "");
+	if (!data) return { error: `不支持的终端按键：${key}` };
+	// xterm modifier encoding: 1=plain, 2=Shift, 3=Alt, 5=Ctrl,
+	// 6=Ctrl+Shift, 7=Ctrl+Alt, 8=Ctrl+Alt+Shift.
+	const modifier = 1 + (modifiers.shift ? 1 : 0) + (modifiers.alt ? 2 : 0) + (modifiers.ctrl ? 4 : 0);
+	const arrow = /^\x1b\[([A-DHF])$/.exec(data);
+	const functionKey = /^\x1bO([P-S])$/.exec(data);
+	const namedCode: Record<string, number> = {
+		Enter: 13,
+		Return: 13,
+		Tab: 9,
+		Backspace: 127,
+		Escape: 27,
+		Insert: 2,
+		Delete: 3,
+		Home: 1,
+		End: 4,
+		PageUp: 5,
+		PageDown: 6,
+	};
+	if (arrow && modifier !== 1) {
+		data = `\x1b[1;${modifier}${arrow[1]}`;
+	} else if (functionKey && modifier !== 1) {
+		data = `\x1b[1;${modifier}${functionKey[1]}`;
+	} else if (namedCode[key] !== undefined && modifier !== 1) {
+		// CSI-u keeps named keys identifiable. In particular, Ctrl+Enter and
+		// Ctrl+Tab must not be derived from the first letter of "Enter"/"Tab".
+		data = `\x1b[${namedCode[key]};${modifier}u`;
+	} else {
+		if (modifiers.ctrl) {
+			if (key.length !== 1) return { error: `Ctrl 组合键无效：${key}` };
+			const code = key.toUpperCase().charCodeAt(0);
+			if (code >= 64 && code <= 95) data = String.fromCharCode(code - 64);
+			else return { error: `Ctrl 组合键无效：${key}` };
+		} else if (modifiers.shift && key.length === 1) {
+			data = key.toUpperCase();
+		}
+		if (modifiers.alt) data = "\x1b" + data;
+	}
+	return { data };
+}
+
+/**
+ * Owns one or more PTYs for a conversation. All output is forwarded as
+ * `terminal_output` messages through the provided emit (broadcast to every
+ * socket attached to the client session). Failed spawns emit an error notice and
+ * terminal_exit instead of throwing into the WebSocket dispatcher.
+ */
+export class TerminalManager {
+	/** Live PTYs only. Exited entries move to history so they no longer consume
+	 * the live-terminal limit while their output remains readable/replayable. */
+	private terms = new Map<string, TermEntry>();
+	private history = new Map<string, TermEntry>();
+	private seq = 0;
+	private tccHintShown = false;
+
+	/** 宿主回调：AI 触碰过的终端静默 ≥ 阈值时触发（一次性/纪元语义见
+	 *  noteAgentActivity）。宿主自行判断会话是否在运行并决定是否注入。 */
+	onAgentIdle: ((terminalId: string, idleMs: number, title: string, lastLines: string) => void) | null = null;
+
+	constructor(
+		private emit: (msg: ServerMessage) => void,
+		private readonly workspaceRoot: string,
+		// issue #91：按键/输入校验错误按客户端 UI 语言出中英（英文默认）。
+		private readonly lang?: () => ServerLang,
+	) {}
+
+	/** 过户：对话整体搬到另一个 ClientSession 时，把输出/退出事件改发给新宿主。
+	 *  PTY 本体不动（进程不重启，输出缓冲保留），只换投递地址. */
+	rebindEmit(emit: (msg: ServerMessage) => void): void {
+		this.emit = emit;
+	}
+
+	/** Start a plain interactive shell in the given directory. */
+	create(
+		id: string,
+		cwd: string,
+		cols: number,
+		rows: number,
+		fallbackCwd: string,
+		title?: string,
+		opts?: { forceBash?: boolean; agentBash?: boolean; locale?: string },
+	): TerminalInfo | null {
+		const valid = this.validateId(id);
+		if (valid) {
+			this.fail(id, valid.text, valid.textEn);
+			return null;
+		}
+		if (this.terms.has(id)) return this.info(this.terms.get(id)!);
+		// Every spawn path shares the same admission rule (ensureSpawnAllowed):
+		// a NEW live PTY needs a free slot under the cap. Reusing an exited name
+		// starts a fresh PTY and discards its old history — but only after the
+		// slot check, so a rejected request keeps its retained output.
+		// 重建已退出终端时继承其原有身份：前端刷新/重挂载会为 history 里的每条
+		// 记录重发 terminal_create，旧消息体不带 agentBash——不继承的话 AI 终端
+		// 会被降级为用户终端并占满 16 个名额（issue #147）。history.delete 位于
+		// 检查之后，故此处仍可取到旧 entry。
+		const priorAgentBash = opts?.agentBash ?? this.history.get(id)?.agentBash ?? false;
+		if (!this.ensureSpawnAllowed(id, priorAgentBash)) return null;
+		this.history.delete(id);
+		const safeCwd = this.safeCwd(cwd || fallbackCwd);
+		if (!safeCwd) {
+			this.fail(
+				id,
+				pick(
+					this.lang?.() ?? "en",
+					"终端工作目录必须位于当前工作区内",
+					"Terminal cwd must be inside the current workspace",
+					"terminals.cwd.outside.workspace",
+				),
+				"Terminal cwd must be inside the current workspace",
+			);
+			return null;
+		}
+		if (
+			this.spawnShell(
+				id,
+				safeCwd,
+				cols,
+				rows,
+				title || `终端 ${++this.seq}`,
+				undefined,
+				opts?.forceBash,
+				priorAgentBash,
+				opts?.locale,
+			)
+		) {
+			this.maybeEmitTccHint(id);
+			this.emitList();
+			return this.info(this.terms.get(id)!);
+		}
+		return null;
+	}
+
+	/** Warn about unavailable camera/mic TCC grants in a fresh terminal, once per client. */
+	private maybeEmitTccHint(id: string): void {
+		if (this.tccHintShown || !launchdSpawnedOnMac()) return;
+		this.tccHintShown = true;
+		this.writeOut(id, TCC_HINT);
+	}
+
+	/**
+	 * Start a shell in the command's directory and run the command in it.
+	 *
+	 * If a terminal with this id already exists it is RESTARTED in place: the
+	 * running process is killed and a fresh shell runs the command again in the
+	 * same terminal (used when re-running a command by clicking its entry).
+	 */
+	runCommand(id: string, def: CommandDef, cols: number, rows: number, pwd: string, locale?: string): void {
+		const invalidId = this.validateId(id);
+		if (invalidId) {
+			this.fail(id, invalidId.text, invalidId.textEn);
+			return;
+		}
+		const existing = this.terms.get(id);
+		// Same admission rule as create(): a live terminal may be restarted in
+		// place, but a NEW live PTY needs a free slot — an id sitting in history
+		// (exited) does NOT grant one, or re-running exited terminals while at
+		// the cap could push the live count past MAX_TERMINALS.
+		if (!existing && !this.ensureSpawnAllowed(id)) return;
+		const rawDir = resolveCommandCwd(def.cwd, pwd);
+		const dir = this.safeCwd(rawDir);
+		const command = expandPwd(def.command.trim(), pwd);
+		const title = def.name || command || `终端 ${++this.seq}`;
+		if (!dir) {
+			this.fail(
+				id,
+				pick(
+					this.lang?.() ?? "en",
+					"终端工作目录必须位于当前工作区内",
+					"Terminal cwd must be inside the current workspace",
+					"terminals.cwd.outside.workspace",
+				),
+				"Terminal cwd must be inside the current workspace",
+			);
+			return;
+		}
+
+		if (existing) {
+			// Re-run in place: interrupt the current process (kill the PTY's
+			// process group) and start a fresh shell with the same id. Keep the
+			// last known size so the replacement matches the xterm's dimensions.
+			if (!existing.exited) {
+				this.flushPending(existing);
+				this.killNative(existing);
+			}
+			cols = existing.cols || cols;
+			rows = existing.rows || rows;
+			this.terms.delete(id);
+		}
+		this.history.delete(id);
+
+		const keepLocale = locale ?? existing?.locale;
+		const ok = this.spawnShell(id, dir, cols, rows, title, def, undefined, false, keepLocale);
+		if (!ok) return;
+		this.emitList();
+		// Clear the previous run's output, then show a banner and run the command
+		// once the fresh shell is ready to read (see writeWhenReady).
+		const banner = "\x1b[2J\x1b[3J\x1b[H" + `\x1b[90m> ${command}\x1b[0m  \x1b[90m(${dir})\x1b[0m\r\n`;
+		const fresh = this.terms.get(id);
+		if (fresh) this.appendOutput(fresh, banner);
+		this.writeOut(id, banner);
+		this.maybeEmitTccHint(id);
+		if (command) this.writeWhenReady(id, command + "\r");
+	}
+
+	/**
+	 * Type text into a freshly spawned shell once it is ready to read.
+	 *
+	 * Input written to a brand-new PTY before its shell is reading can lose
+	 * the first bytes (Windows ConPTY is the usual victim — the classic
+	 * symptom is `pi-web-ui` arriving as `i-web-ui`). The shell's first
+	 * output is the readiness signal; a timeout covers shells that start
+	 * silent. Stale entries (restarted/killed while waiting) are skipped.
+	 */
+	private writeWhenReady(id: string, text: string, timeoutMs = 1500): void {
+		const entry = this.terms.get(id);
+		if (!entry || entry.exited) return;
+		let sent = false;
+		let disp: { dispose(): void } | undefined;
+		const send = () => {
+			if (sent) return;
+			sent = true;
+			clearTimeout(timer);
+			try {
+				disp?.dispose();
+			} catch {
+				// PTY already gone — the stale-entry guard below no-ops.
+			}
+			const live = this.terms.get(id);
+			if (!live || live !== entry || live.exited) return;
+			this.input(id, text);
+		};
+		const timer = setTimeout(send, timeoutMs);
+		timer.unref?.();
+		try {
+			disp = entry.pty.onData(() => send());
+		} catch {
+			// Spawn failed between the lookup and now — timer fallback no-ops.
+		}
+	}
+
+	/** Spawn the user's shell as a PTY. Returns false when the spawn failed. */
+	private spawnShell(
+		id: string,
+		cwd: string,
+		cols: number,
+		rows: number,
+		title: string,
+		command?: CommandDef,
+		forceBash?: boolean,
+		agentBash = false,
+		locale?: string,
+	): boolean {
+		let abs = cwd;
+		let shell: string;
+		let args: string[];
+		const targetUri =
+			cwd && cwd.startsWith("ssh://")
+				? cwd
+				: this.workspaceRoot && this.workspaceRoot.startsWith("ssh://")
+					? this.workspaceRoot
+					: null;
+
+		if (targetUri) {
+			const match = /^ssh:\/\/([^@]+)@([^:]+):(\d+)(\/.*)$/.exec(targetUri);
+			if (match) {
+				const username = match[1];
+				const host = match[2];
+				const port = match[3];
+				const remotePath = match[4];
+				abs = homedir();
+				shell = process.platform === "win32" ? "ssh.exe" : "ssh";
+				args = ["-t", "-p", port, `${username}@${host}`, `cd "${remotePath}" && exec bash -l || exec sh`];
+			} else {
+				if (!abs) abs = homedir();
+				else if (!isAbsolute(abs)) abs = resolve(abs);
+				const s = forceBash ? resolveBashShell() : resolveShell();
+				shell = s.shell;
+				args = s.args;
+			}
+		} else {
+			if (!abs) abs = homedir();
+			else if (!isAbsolute(abs)) abs = resolve(abs);
+			try {
+				if (!existsSync(abs) || !statSync(abs).isDirectory()) {
+					this.fail(id, `目录不存在或不是目录：${abs}`, `Directory does not exist or is not a directory: ${abs}`);
+					return false;
+				}
+			} catch {
+				this.fail(id, `无法访问终端目录：${abs}`, `Cannot access terminal directory: ${abs}`);
+				return false;
+			}
+			const s = forceBash ? resolveBashShell() : resolveShell();
+			shell = s.shell;
+			args = s.args;
+		}
+
+		// node-pty's spawn-helper may have lost its +x bit since the last repair
+		// (e.g. a global npm install replaced the helper while this server runs).
+		repairSpawnHelperPermissions();
+		let pty: IPty;
+		try {
+			const sshSvc = targetUri ? getGlobalRemoteSshService() : null;
+			if (targetUri && sshSvc) {
+				pty = sshSvc.createVirtualPty(targetUri, cols, rows);
+			} else {
+				pty = spawn(shell, args, {
+					name: "xterm-256color",
+					cols: Math.max(2, Math.floor(cols) || 80),
+					rows: Math.max(2, Math.floor(rows) || 24),
+					cwd: abs,
+					env: shellEnv(),
+				});
+			}
+		} catch (err) {
+			const helper = brokenSpawnHelper();
+			this.fail(
+				id,
+				helper
+					? `启动终端失败：${(err as Error).message}（node-pty 的 spawn-helper 缺少执行权限，请运行：chmod +x "${helper}"）`
+					: `启动终端失败：${(err as Error).message}`,
+				helper
+					? `Failed to start terminal: ${(err as Error).message} (node-pty spawn-helper is not executable, run: chmod +x "${helper}")`
+					: `Failed to start terminal: ${(err as Error).message}`,
+			);
+			return false;
+		}
+		const entry: TermEntry = {
+			id,
+			pty,
+			title,
+			cwd: abs,
+			cols: Math.max(2, Math.floor(cols) || 80),
+			rows: Math.max(2, Math.floor(rows) || 24),
+			exited: false,
+			exitCode: null,
+			command,
+			output: "",
+			outputOffset: 0,
+			waiters: new Set(),
+			pendingOut: "",
+			flushTimer: null,
+			agentTouched: false,
+			lastActivityAt: Date.now(),
+			idleTimer: null,
+			watches: [],
+			agentBash,
+			// 有命令的终端（runCommand）与 ai-bash 天生就是“用过”的；裸 shell
+			// 从 pristine 开始，第一次输入/agent 触碰时才置位（见 inputChecked /
+			// noteAgentActivity）。
+			used: agentBash || command !== undefined,
+			locale,
+		};
+		this.terms.set(id, entry);
+		// The closures capture `entry`: after a restart the map points at the
+		// replacement, so a late event from the OLD pty must be ignored.
+		pty.onData((data) => {
+			if (this.terms.get(id) !== entry) return;
+			this.appendOutput(entry, data);
+			// Coalesce instead of emitting per chunk: node-pty onData fires per
+			// ConPTY read buffer (dozens of bytes to a few KB each), so a build or
+			// `cat` of a big file used to produce hundreds/thousands of WS frames
+			// per second — each paying stringify + frame + parse + dispatch cost.
+			// A one-frame micro-batch cuts the frame rate 10-50× at ≤16ms latency
+			// (imperceptible; xterm writes batch data more efficiently anyway).
+			this.queueOut(entry, data);
+		});
+		pty.onExit(({ exitCode }) => {
+			if (this.terms.get(id) !== entry) return;
+			this.exit(id, exitCode);
+		});
+		return true;
+	}
+
+	/**
+	 * 记录一次 agent 工具触碰并启动一个新的静默纪元（terminal_create /
+	 * terminal_input / terminal_key 的工具包装层调用——浏览器路径绝不调用，
+	 * 用户自己开的终端永远不会收到静默提醒）。
+	 *
+	 * 纪元语义（防骚扰）：agentTouched 同时是「纪元武装」标志。看门狗触发
+	 * 一次后即解除武装，之后无论静默多久都不再提醒，直到 agent 再次触碰
+	 * （再发输入 = AI 又在等结果了）。纪元内的每一段输出都重置倒计时。
+	 */
+	noteAgentActivity(id: string): void {
+		const entry = this.terms.get(id);
+		if (!entry || entry.exited) return;
+		entry.agentTouched = true;
+		entry.used = true;
+		entry.lastActivityAt = Date.now();
+		this.armIdleWatch(entry);
+	}
+
+	/** 武装（或按当前 lastActivityAt 重置）静默看门狗。 */
+	private armIdleWatch(entry: TermEntry): void {
+		if (entry.idleTimer) {
+			clearTimeout(entry.idleTimer);
+			entry.idleTimer = null;
+		}
+		const idleMs = terminalIdleNotifyMs();
+		if (!entry.agentTouched || idleMs <= 0) return;
+		const delay = Math.max(0, idleMs - (Date.now() - entry.lastActivityAt));
+		entry.idleTimer = setTimeout(() => {
+			entry.idleTimer = null;
+			// 原地重启/退出后旧 entry 的事件必须忽略（与 onData/onExit 同款守卫）。
+			if (this.terms.get(entry.id) !== entry || entry.exited) return;
+			// 一次性：触发后解除武装，直到下次 agent 触碰。
+			entry.agentTouched = false;
+			// 附带最近 N 行输出（可配），便于 AI 直接看到终端当前状态。
+			const lastLines = queryTerminalOutput(entry.output, { tail: terminalIdleNotifyLines() })?.text ?? "";
+			this.onAgentIdle?.(entry.id, Date.now() - entry.lastActivityAt, entry.title, lastLines);
+		}, delay);
+		entry.idleTimer.unref?.();
+	}
+
+	/** Emit output immediately, bypassing the coalescing window (rare paths:
+	 *  one-shot hints/banners — not per-chunk data). */
+	private writeOut(id: string, data: string): void {
+		this.emit({ type: "terminal_output", terminalId: id, data });
+	}
+
+	/** Queue output for the coalescing window; flushes via flushPending. */
+	private queueOut(entry: TermEntry, data: string): void {
+		entry.pendingOut += data;
+		if (entry.flushTimer) return;
+		entry.flushTimer = setTimeout(() => {
+			entry.flushTimer = null;
+			this.flushPending(entry);
+		}, OUTPUT_FLUSH_MS);
+	}
+
+	/** Emit everything queued for this terminal (no-op when nothing pending). */
+	private flushPending(entry: TermEntry): void {
+		if (entry.flushTimer) {
+			clearTimeout(entry.flushTimer);
+			entry.flushTimer = null;
+		}
+		if (!entry.pendingOut) return;
+		const pending = entry.pendingOut;
+		entry.pendingOut = "";
+		this.emit({ type: "terminal_output", terminalId: entry.id, data: pending });
+	}
+
+	private appendOutput(entry: TermEntry, data: string): void {
+		entry.output += data;
+		if (entry.output.length > MAX_OUTPUT) {
+			const drop = entry.output.length - MAX_OUTPUT;
+			entry.output = entry.output.slice(drop);
+			entry.outputOffset += drop;
+		}
+		for (const wake of entry.waiters) wake();
+		entry.waiters.clear();
+		// 纪元内的输出重置静默倒计时。
+		entry.lastActivityAt = Date.now();
+		if (entry.idleTimer) this.armIdleWatch(entry);
+		// 输出观察器：累积匹配，命中一次即移除（终端接管 bash 的完成检测）。
+		if (entry.watches.length > 0) {
+			type Watch = (typeof entry.watches)[number];
+			const remaining: Watch[] = [];
+			const hits: { w: Watch; m: RegExpMatchArray }[] = [];
+			for (const w of entry.watches) {
+				w.buf += data;
+				if (w.buf.length > 64_000) w.buf = w.buf.slice(-32_000);
+				w.re.lastIndex = 0;
+				const m = w.re.exec(w.buf);
+				if (m)
+					hits.push({ w, m }); // 命中 → 移出（cb 在下面统一触发）
+				else remaining.push(w);
+			}
+			entry.watches = remaining;
+			for (const { w, m } of hits) w.cb(m);
+		}
+	}
+
+	private validateId(id: string): { text: string; textEn: string } | null {
+		if (!id || id.length > MAX_ID || !/^[A-Za-z0-9._:-]+$/.test(id)) {
+			return {
+				text: "终端名称无效：只能使用字母、数字、.-、_ 或 :（最长 80 字符）",
+				textEn: "Invalid terminal name: use letters, digits, .-_ or : (max 80 chars)",
+			};
+		}
+		return null;
+	}
+
+	/**
+	 * Admission control for EVERY spawn path (create / runCommand): spawning a
+	 * NEW live PTY is only allowed while the live count is below MAX_TERMINALS.
+	 * Restarting an id that is ALREADY live is always allowed (no extra slot).
+	 * History entries (exited terminals) do not reserve a slot — re-spawning
+	 * one while at the cap is rejected with the standard error feedback.
+	 * 终端接管 bash（ai-bash，agentBash=true）永远放行：它由 API 自动创建且
+	 * 常驻，不占用户的名额，也不受用户已开满上限影响。
+	 */
+	private ensureSpawnAllowed(id: string, agentBash = false): boolean {
+		if (this.terms.has(id)) return true;
+		if (agentBash) return true;
+		const liveUser = [...this.terms.values()].filter((t) => !t.agentBash).length;
+		if (liveUser >= MAX_TERMINALS) {
+			this.fail(id, `终端数量已达上限（${MAX_TERMINALS}）`, `Terminal limit reached (${MAX_TERMINALS})`);
+			return false;
+		}
+		return true;
+	}
+
+	private safeCwd(raw: string): string | null {
+		// 远程工作区的根是 ssh:// URI：下面的本地文件系统边界（realpath/relative）
+		// 无法解析它，会让远程终端的每次创建/接管命令都被「必须位于工作区内」拒掉，
+		// spawnShell 的远程分支成为死代码。远程侧的目录边界由 SSH 服务在远端校验，
+		// 这里只做同主机校验与 URI 规范化（spawnShell 的 URI 正则要求带端口）。
+		if (isRemoteWorkspaceUri(this.workspaceRoot)) {
+			const root = parseRemoteWorkspaceUri(this.workspaceRoot);
+			if (!root) return null;
+			if (isRemoteWorkspaceUri(raw)) {
+				const cand = parseRemoteWorkspaceUri(raw);
+				if (!cand) return null;
+				if (cand.username !== root.username || cand.host !== root.host || cand.port !== root.port) return null;
+				return `ssh://${cand.username}@${cand.host}:${cand.port}${cand.remotePath}`;
+			}
+			// 相对/本地写法一律挂到远程根下解析（与本地分支 resolve(root, raw) 同语义）
+			const rel = String(raw).replace(/\\/g, "/").replace(/^\/+/, "");
+			const joined = posix.normalize(`${root.remotePath}/${rel}`).replace(/\/+$/, "") || "/";
+			const prefix = root.remotePath === "/" ? "/" : `${root.remotePath}/`;
+			if (joined !== root.remotePath && !joined.startsWith(prefix)) return null;
+			return `ssh://${root.username}@${root.host}:${root.port}${joined}`;
+		}
+		try {
+			const root = realpathSync(resolve(this.workspaceRoot));
+			const candidate = realpathSync(isAbsolute(raw) ? resolve(raw) : resolve(root, raw));
+			const rel = relative(root, candidate);
+			if (rel === "" || (!rel.startsWith(".." + sep) && rel !== ".." && !isAbsolute(rel))) {
+				return candidate;
+			}
+		} catch {
+			// Missing directories and broken symlinks are rejected by the boundary.
+		}
+		return null;
+	}
+
+	private info(entry: TermEntry): TerminalInfo {
+		return {
+			id: entry.id,
+			title: entry.title,
+			cwd: entry.cwd,
+			cols: entry.cols,
+			rows: entry.rows,
+			running: !entry.exited,
+			exitCode: entry.exitCode,
+			command: entry.command,
+			agentBash: entry.agentBash,
+		};
+	}
+
+	has(id: string): boolean {
+		return this.terms.has(id) || this.history.has(id);
+	}
+
+	private find(id: string): TermEntry | undefined {
+		return this.terms.get(id) ?? this.history.get(id);
+	}
+
+	list(): TerminalInfo[] {
+		return [...this.terms.values(), ...this.history.values()].map((entry) => this.info(entry));
+	}
+
+	/** Count of LIVE PTYs only — exited terminals that merely retain their
+	 *  output for review (history) do NOT count. Conversations are kept in the
+	 *  running list while a live terminal exists; exited leftovers must not
+	 *  pin an idle conversation forever. */
+	countLive(): number {
+		let n = 0;
+		for (const entry of this.terms.values()) if (!entry.exited) n++;
+		return n;
+	}
+
+	/** Count of LIVE terminals that were actually used (typed into / ran a
+	 *  command / touched by the agent / ai-bash). Pristine shells — e.g. the
+	 *  one auto-created when the user opens the terminal tab but never types
+	 *  anything — do NOT count: they hold no foreground work and no shell
+	 *  state worth protecting, so they neither retain the conversation nor
+	 *  block its dismissal (they are killed together with the conversation).
+	 *  Retained-output history never counts either (same as countLive).
+	 *  存活且“用过”的终端数——对话保留只看这个口径（含 AI bash：切走不杀后台活）。 */
+	countBlockingLive(): number {
+		let n = 0;
+		for (const entry of this.terms.values()) if (!entry.exited && entry.used) n++;
+		return n;
+	}
+
+	/** Count of LIVE *user* terminals that were actually used. AI terminals
+	 *  (agentBash — 终端接管 bash 的一次性/持久终端) are EXCLUDED: they are
+	 *  internal execution records owned by the agent, killed together with the
+	 *  conversation on dismissal (removeConversation 里 killAll), so they must
+	 *  never block it (issue #181：残留 ai-bash-98/99 把会话永久钉在列表里)。
+	 *  只保护用户在交互式终端里的现场：用户亲手开且用过的存活终端才阻断移出。 */
+	countUserBlockingLive(): number {
+		let n = 0;
+		for (const entry of this.terms.values()) if (!entry.exited && entry.used && !entry.agentBash) n++;
+		return n;
+	}
+
+	private emitList(): void {
+		this.emit({ type: "terminal_list", terminals: this.list() });
+	}
+
+	/** Replay the retained output window after switching back to this conversation. */
+	replay(): { terminalId: string; data: string }[] {
+		return [...this.terms.values(), ...this.history.values()]
+			.filter((entry) => entry.output.length > 0)
+			.map((entry) => ({ terminalId: entry.id, data: entry.output }));
+	}
+
+	/** Read output after an absolute cursor.
+	 *  commandPending：终端接管 bash 注入的命令是否仍未见到退出码哨兵（即 shell 级 running
+	 *  之外的「这条命令结束了没有」）。手工 terminal_input 的命令没有哨兵，不计入。 */
+	read(
+		id: string,
+		cursor = 0,
+		maxBytes = 20_000,
+	): { data: string; cursor: number; running: boolean; exitCode: number | null; commandPending: boolean } | null {
+		const entry = this.find(id);
+		if (!entry) return null;
+		const start = Math.max(entry.outputOffset, Math.min(cursor, entry.outputOffset + entry.output.length));
+		const end = Math.min(start + Math.max(1, Math.floor(maxBytes) || 20_000), entry.outputOffset + entry.output.length);
+		return {
+			data: entry.output.slice(start - entry.outputOffset, end - entry.outputOffset),
+			cursor: end,
+			running: !entry.exited,
+			exitCode: entry.exitCode,
+			commandPending: entry.sentinelPending === true,
+		};
+	}
+
+	async waitForOutput(id: string, cursor: number, timeoutMs: number, signal?: AbortSignal): Promise<void> {
+		const current = this.read(id, cursor, 1);
+		if (!current || current.cursor > cursor || !current.running) return;
+		await new Promise<void>((resolvePromise) => {
+			const entry = this.find(id);
+			if (!entry) return resolvePromise();
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const done = () => {
+				if (timer) clearTimeout(timer);
+				entry.waiters.delete(done);
+				signal?.removeEventListener("abort", done);
+				resolvePromise();
+			};
+			entry.waiters.add(done);
+			timer = setTimeout(done, Math.max(0, Math.min(timeoutMs, 120_000)));
+			signal?.addEventListener("abort", done, { once: true });
+		});
+	}
+
+	inputChecked(id: string, data: string): string | null {
+		if (data.length > MAX_INPUT) return `输入过长（上限 ${MAX_INPUT} 字符） Input too long (max ${MAX_INPUT} chars)`;
+		const entry = this.terms.get(id);
+		if (!entry || entry.exited)
+			return pick(
+				this.lang?.() ?? "en",
+				"终端不存在或进程已退出",
+				"Terminal not found or its process has exited",
+				"terminals.not.found.exited",
+			);
+		// 已武装的纪元里任何人（含用户手动敲键盘）写了输入都算新活动，重置倒计时。
+		// 成功的输入同时把终端标为“用过”（见 used）：动过的 shell 才参与对话保留/
+		// 关闭拦截，没动过的空 shell 不算。
+		entry.lastActivityAt = Date.now();
+		if (entry.idleTimer) this.armIdleWatch(entry);
+		entry.pty.write(data);
+		entry.used = true;
+		return null;
+	}
+
+	key(id: string, key: string, modifiers: { ctrl?: boolean; alt?: boolean; shift?: boolean } = {}): string | null {
+		const encoded = encodeTerminalKey(key, modifiers);
+		if ("error" in encoded) return encoded.error;
+		return this.inputChecked(id, encoded.data);
+	}
+
+	/** 解除静默看门狗（退出/关闭/全部停止时）。 */
+	private disarmIdleWatch(entry: TermEntry): void {
+		if (entry.idleTimer) {
+			clearTimeout(entry.idleTimer);
+			entry.idleTimer = null;
+		}
+		entry.agentTouched = false;
+	}
+
+	/** 只拆钟不清标记（终端接管 bash 阻塞期间挂起活力提醒，避免双重通知）。 */
+	suspendIdleWatch(id: string): void {
+		const entry = this.terms.get(id);
+		if (!entry || !entry.idleTimer) return;
+		clearTimeout(entry.idleTimer);
+		entry.idleTimer = null;
+	}
+
+	/** 输出末尾的绝对 cursor（terminal-backed bash 的读取起点）。 */
+	endCursor(id: string): number | null {
+		const entry = this.find(id);
+		if (!entry) return null;
+		return entry.outputOffset + entry.output.length;
+	}
+
+	/**
+	 * 阻塞等待当前前台命令结束（哨兵行出现或终端退出）。terminal_wait 工具
+	 * 用它在静默解阻后「重新加入等待」——AI 不必反复 terminal_read 轮询。
+	 *
+	 * @param afterCursor 只认该绝对偏移之后的哨兵（排除上一条命令残留的旧标记；
+	 *                    调用方传 endCursor() 即表示「等我调用之后才出现的结束」）
+	 * @returns finished=false 表示超时/中止（命令仍在跑），可再次调用继续等
+	 */
+	async waitForCompletion(
+		id: string,
+		timeoutMs: number,
+		signal?: AbortSignal,
+		afterCursor = 0,
+	): Promise<{ finished: boolean; exitCode: number | null }> {
+		const entry = this.find(id);
+		if (!entry) return { finished: false, exitCode: null };
+		return new Promise((resolve) => {
+			// 命令可能在调用前就已结束：先扫 afterCursor 之后的存量缓冲。
+			const relStart = Math.max(0, afterCursor - entry.outputOffset);
+			const segment = entry.output.slice(relStart);
+			const scan = new RegExp(BASH_SENTINEL_RE.source, BASH_SENTINEL_RE.flags);
+			scan.lastIndex = 0;
+			const existing = [...segment.matchAll(scan)].pop();
+			if (existing) {
+				resolve({ finished: true, exitCode: Number(existing[1]) });
+				return;
+			}
+			if (entry.exited) {
+				resolve({ finished: true, exitCode: entry.exitCode });
+				return;
+			}
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			let settled = false;
+			let unwatch: () => void = () => {};
+			const onAbort = () => done({ finished: false, exitCode: null });
+			const done = (r: { finished: boolean; exitCode: number | null }) => {
+				if (settled) return;
+				settled = true;
+				if (timer) clearTimeout(timer);
+				signal?.removeEventListener("abort", onAbort);
+				unwatch();
+				resolve(r);
+			};
+			unwatch = this.watchOutput(id, BASH_SENTINEL_RE, (m) => {
+				// m=null = 终端被关闭/退出 → 命令肯定结束了（退出码未知）。
+				done({ finished: true, exitCode: m ? Number(m[1]) : null });
+			});
+			timer = setTimeout(() => done({ finished: false, exitCode: null }), Math.max(1, Math.min(timeoutMs, 600_000)));
+			timer.unref?.();
+			signal?.addEventListener("abort", onAbort, { once: true });
+		});
+	}
+
+	/** 标记/清除「哨兵待决」状态（终端接管 bash 工具专用）。 */
+	setSentinelPending(id: string, pending: boolean): void {
+		const entry = this.find(id);
+		if (entry) entry.sentinelPending = pending;
+	}
+
+	/** 是否有带哨兵的命令尚未结束（terminal_wait 的适用性判断）。 */
+	isSentinelPending(id: string): boolean {
+		return this.find(id)?.sentinelPending === true;
+	}
+
+	/** 注册一次性输出观察器：命中 re 或终端退出时回调一次。返回注销函数。 */
+	watchOutput(id: string, re: RegExp, cb: (m: RegExpMatchArray | null) => void): () => void {
+		const entry = this.find(id);
+		if (!entry) {
+			cb(null);
+			return () => {};
+		}
+		// 每个观察器独立 regex 实例（global 正则的 lastIndex 是共享可变状态）。
+		const own = new RegExp(re.source, re.flags);
+		const watch = { re: own, buf: "", cb };
+		entry.watches.push(watch);
+		return () => {
+			const cur = this.find(id);
+			if (!cur) return;
+			cur.watches = cur.watches.filter((w) => w !== watch);
+		};
+	}
+
+	/** Emit a terminal failure (bad cwd, spawn error) and mark the terminal dead. */
+	private fail(id: string, text: string, textEn?: string): void {
+		this.emit({ type: "notice", level: "error", text, textEn });
+		this.emit({
+			type: "terminal_output",
+			terminalId: id,
+			data: `\x1b[91m${text}\x1b[0m\r\n`,
+		});
+		this.emit({ type: "terminal_exit", terminalId: id, exitCode: null });
+	}
+
+	private exit(id: string, exitCode: number): void {
+		const entry = this.terms.get(id);
+		if (!entry || entry.exited) return;
+		this.disarmIdleWatch(entry);
+		// Flush queued output BEFORE the exit marker so ordering is preserved.
+		// Banner text is CLIENT-rendered (live locale); the stream carries only
+		// a machine sentinel the client strips and replaces.
+		this.flushPending(entry);
+		const marker = `\r\n[pi-term-exit:${exitCode}]\r\n`;
+		this.appendOutput(entry, marker);
+		this.emit({ type: "terminal_output", terminalId: id, data: marker });
+		entry.exited = true;
+		// 终端退出 → 未命中的输出观察器以 null 回调（宿主可据此通知「终端已关闭」）。
+		const pendingWatches = entry.watches;
+		entry.watches = [];
+		for (const w of pendingWatches) w.cb(null);
+		entry.exitCode = exitCode;
+		this.terms.delete(id);
+		// 进程已退出，立即释放底层的 PTY 句柄（Windows ConPTY / HPCON / sockets 等），
+		// 避免已退出的终端长期占用 ConPTY 与 MSYS2 控制台资源（issue #269）。
+		this.killNative(entry);
+		while (this.history.size >= MAX_TERMINAL_HISTORY) {
+			const oldest = this.history.keys().next().value;
+			if (typeof oldest !== "string") break;
+			const oldEntry = this.history.get(oldest);
+			if (oldEntry) this.killNative(oldEntry);
+			this.history.delete(oldest);
+		}
+		this.history.set(id, entry);
+		this.emit({ type: "terminal_exit", terminalId: id, exitCode });
+		this.emitList();
+	}
+
+	input(id: string, data: string): void {
+		void this.inputChecked(id, data);
+	}
+
+	resize(id: string, cols: number, rows: number): void {
+		const entry = this.terms.get(id);
+		if (!entry || entry.exited) return;
+		try {
+			entry.pty.resize(Math.max(2, Math.floor(cols) || 80), Math.max(2, Math.floor(rows) || 24));
+			// Remember the size so an in-place restart spawns at the same dims.
+			entry.cols = Math.max(2, Math.floor(cols) || 80);
+			entry.rows = Math.max(2, Math.floor(rows) || 24);
+		} catch {
+			// PTY already gone — nothing to do.
+		}
+	}
+
+	/** Kill one terminal (tab closed), including an exited terminal's retained history. */
+	kill(id: string): void {
+		const entry = this.terms.get(id);
+		if (entry) {
+			this.disarmIdleWatch(entry);
+			const killedWatches = entry.watches;
+			entry.watches = [];
+			for (const w of killedWatches) w.cb(null);
+			this.flushPending(entry);
+			this.killNative(entry);
+			this.terms.delete(id);
+			this.emit({ type: "terminal_exit", terminalId: id, exitCode: null });
+			this.emitList();
+			return;
+		}
+		const histEntry = this.history.get(id);
+		if (histEntry) {
+			this.killNative(histEntry);
+			this.history.delete(id);
+			this.emitList();
+			return;
+		}
+	}
+
+	/** Rename a terminal tab (live or retained history). Empty names ignored. */
+	rename(id: string, title: string): void {
+		const trimmed = (title ?? "").trim();
+		if (!trimmed) return;
+		const entry = this.find(id);
+		if (!entry) return;
+		entry.title = trimmed;
+		this.emitList();
+	}
+
+	/**
+	 * Kill the native PTY (issue #215：Windows ConPTY 关机死锁；issue #269：MSYS2 控制台耗尽死锁）。
+	 *
+	 * Windows 下：
+	 * 1. 若进程已经退出（entry.exited）：直接调 pty.kill() 释放 HPCON 句柄
+	 *    （子进程已死、管道见 EOF，绝不会死锁）；关机路径跳过，由 OS 回收。
+	 * 2. 若进程尚未退出（!entry.exited）：先向 PTY 写入 \x03exit\r 优雅关闭（让
+	 *    bash 正常触发清理钩子），300ms 后仍活着再调 pty.kill() 兜底——node-pty 在
+	 *    Windows 上走 console-process-list 做**全树**清理。不再使用裸
+	 *    process.kill(pid)（TerminateProcess）：它只杀 ConPTY 附着的单一进程，
+	 *    且从拿到 pid 到调用之间隔着一个 PID 复用误杀窗口。
+	 * 3. 关机（shutdown=true）：只做优雅写，跳过 pty.kill() 与 300ms 兜底，由 OS
+	 *    回收（保持 50ms 内退出的关机预算）。
+	 * 非 Windows 原样直调 pty.kill()（POSIX 下 shell 是直接子进程，pty.kill 足够，
+	 * 保持既有行为不做额外延迟）。
+	 */
+	private killNative(entry: TermEntry, shutdown = false): void {
+		if (process.platform === "win32") {
+			if (entry.exited) {
+				if (!shutdown) {
+					try {
+						entry.pty.kill();
+					} catch {
+						// already dead
+					}
+				}
+				return;
+			}
+			// 优雅关闭：先发 Ctrl+C，再发 exit\r
+			try {
+				entry.pty.write("\x03exit\r");
+			} catch {}
+			if (shutdown) return;
+			const t = setTimeout(() => {
+				if (entry.exited) return;
+				entry.exited = true;
+				try {
+					entry.pty.kill();
+				} catch {
+					// already dead
+				}
+			}, 300);
+			t.unref?.();
+			return;
+		}
+		try {
+			entry.pty.kill();
+		} catch {
+			// already dead
+		}
+	}
+
+	/**
+	 * Kill every terminal owned by this conversation.
+	 * @param opts.shutdown=true = 进程关机路径（disposeAll）：Windows 下跳过
+	 * `pty.kill()`（见 killNative），只做 TerminateProcess + 状态清理，50ms 内退出。
+	 * 日常移出对话走默认 false，必须释放 HPC 句柄。
+	 */
+	killAll(opts?: { shutdown?: boolean }): void {
+		const shutdown = opts?.shutdown === true;
+		for (const entry of this.terms.values()) {
+			this.disarmIdleWatch(entry);
+			if (entry.exited) continue;
+			this.killNative(entry, shutdown);
+		}
+		for (const entry of this.terms.values()) {
+			for (const wake of entry.waiters) wake();
+			entry.waiters.clear();
+			for (const w of entry.watches) w.cb(null);
+			entry.watches = [];
+		}
+		for (const entry of this.history.values()) {
+			this.killNative(entry, shutdown);
+		}
+		this.terms.clear();
+		this.history.clear();
+		this.emitList();
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 终端接管 bash：bash 风格工具跑在持久可见终端里
+// ---------------------------------------------------------------------------
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** 取 collected 尾部里最后一个哨兵匹配（哨兵只可能出现在新输出的尾部）。 */
+function lastSentinel(collected: string, nonce: string): RegExpMatchArray | null {
+	const tail = collected.length > 8000 ? collected.slice(-8000) : collected;
+	return [...tail.matchAll(sentinelReFor(nonce))].pop() ?? null;
+}
+
+/**
+ * 去掉注入回显、哨兵及其后的 shell 提示符垃圾与 ANSI 序列，还原 bash 风格纯文本。
+ *
+ * 清洗只依赖两个与时序无关的锚点，不再假定「哨兵回显一定在真实输出之前」——那个假定
+ * 在 Windows ConPTY 下不成立：shell 读到哨兵行才回显它，于是哨兵回显排在真实输出之后，
+ * 旧实现按它截断会把输出整段吃掉、只剩 `[exit:0]`（#572 ①）。
+ *
+ * ① 含本次 nonce 哨兵格式串的行（`printf '…[pi-exit-<nonce>:%s]…'` 的回显，
+ *    无论出现在输出前还是后）整行删除——nonce 随机，真实输出不可能与之相同。
+ * ② 命令回显：第一次出现的命令首行（及其之前的提示符）整段丢弃——它总在真实输出之前。
+ * 最后一个本次哨兵之后的内容是 shell 新提示符，整段截掉。
+ */
+export function cleanBashOutput(raw: string, nonce: string, command = ""): string {
+	const fmt = `[pi-exit-${nonce}:%s]`;
+	let lines = stripAnsi(raw)
+		.replace(/\r\n/g, "\n")
+		.split("\n")
+		.filter((line) => !line.includes(fmt));
+	const anchor = (command.split("\n")[0] ?? "").trim().slice(0, 80);
+	// 命令回显前那一行提示符（如 `user@host MINGW64 /cwd`）：收尾时用它识别「哨兵前残留的新提示符」。
+	let promptLine = "";
+	// 锚点找不到（横向滚动只回显尾部 / 回显缺失）时的回落：首个非空行若呈
+	// 提示符形状（`user@host … $ ` / `[user@host dir]$ `），按提示符+回显行剥掉，
+	// 否则命令回显与提示符会整行留在返回给模型的输出里。
+	const fallbackPromptDetect = (): void => {
+		const idx = lines.findIndex((line) => line.trim() !== "");
+		if (idx < 0) return;
+		const first = lines[idx].trim();
+		// 单行提示符：`user@host MINGW64 /tmp$ cmd`（MINGW）或 `user@host:~/p$ cmd`（Linux）
+		if (
+			/^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+[^\n]*[$#] /.test(first) ||
+			/^\[[A-Za-z0-9._-]+@[A-Za-z0-9._-]+[^\]]*\][$#] /.test(first)
+		) {
+			promptLine = first;
+			lines = lines.slice(idx + 1);
+			return;
+		}
+		// MINGW 双行提示符：`user@host MINGW64 /path` 换行后 `$ cmd`
+		if (/^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+ /.test(first) && /^[$#] /.test(lines[idx + 1]?.trim() ?? "")) {
+			promptLine = first;
+			lines = lines.slice(idx + 2);
+		}
+	};
+	if (anchor) {
+		const echoIdx = lines.findIndex((line) => line.includes(anchor));
+		if (echoIdx >= 0) {
+			for (let i = echoIdx - 1; i >= 0 && !promptLine; i--) {
+				const t = lines[i].trim();
+				if (t && t !== "$") promptLine = t;
+			}
+			// 回显折行：锚点行只含命令的前一段，后续折行若恰好逐行拼接出命令的
+			// 剩余文本，也一并剥掉（精确匹配，匹配不上即停，保守不误删输出）。
+			const firstLine = (command.split("\n")[0] ?? "").trim();
+			const echoLine = lines[echoIdx].trimEnd();
+			const anchorAt = echoLine.indexOf(anchor);
+			let pos = anchorAt >= 0 ? Math.min(echoLine.length - anchorAt, firstLine.length) : anchor.length;
+			let idx = echoIdx + 1;
+			while (pos < firstLine.length && idx < lines.length) {
+				const chunk = lines[idx].trim();
+				if (!chunk || firstLine.slice(pos, pos + chunk.length) !== chunk) break;
+				pos += chunk.length;
+				idx++;
+			}
+			lines = lines.slice(idx);
+		} else {
+			fallbackPromptDetect();
+		}
+	} else {
+		fallbackPromptDetect();
+	}
+	// 最后一个本次哨兵之后的内容全是 shell 新提示符——整段截掉。
+	const text = lines.join("\n");
+	const re = sentinelReFor(nonce);
+	let last: RegExpExecArray | null = null;
+	for (let m = re.exec(text); m; m = re.exec(text)) {
+		last = m;
+	}
+	const kept = (last ? text.slice(0, last.index) : text).split("\n").map((line) => line.trimEnd());
+	// 收尾残留：空行、裸 `$`、与命令前相同的提示符行（ConPTY 在哨兵回显前重打了一次提示符）。
+	// 提示符的 `user@host` 段：让 cd 之后路径变了的提示符也能识别。
+	const promptHead = promptLine.match(/^\S+@\S+/)?.[0] ?? "";
+	const isResidue = (line: string): boolean => {
+		const t = line.trim();
+		if (t === "" || t === "$") return true;
+		if (promptLine !== "" && t === promptLine) return true;
+		return promptHead !== "" && t.startsWith(`${promptHead} `);
+	};
+	while (kept.length > 0 && isResidue(kept[kept.length - 1])) kept.pop();
+	return truncateMiddle(kept.join("\n").trim());
+}
+
+/**
+ * 终端接管的 bash 工具：覆盖 SDK 内置 bash，执行体把命令写进可见终端并等哨兵
+ * 行拿到真实退出码。参数除 SDK 的 command + timeout 外，还多出 persist / head /
+ * tail 三个可选参数。
+ *
+ * persist=false（默认，一次性）：每次新建一个终端（agentBash、单独归「AI bash」
+ * 分组、不占用户名额），命令结束 shell 用 exit 退场（进程结束），输出保留在
+ * history 供查阅；阻塞到命令结束，不做静默解阻。
+ *
+ * persist=true（复用 'ai-bash' 持久终端）：
+ * - 默认阻塞：等到命令结束才返回完整输出（ANSI 已清理）+ 真实退出码；
+ * - 静默解阻：连续 idleMs 毫秒无新输出且未结束 → 立即返回「仍在运行」+ 已有
+ *   输出，命令留在终端里继续跑，并注册完成观察器——结束后由宿主
+ *   notifyBackgroundDone 主动通知 AI（流式中 steer / 空闲时 nextTurn）；
+ * - shell 状态跨调用保留（cd / venv activate / ssh 会话）——这是原生一次性的
+ *   bash 工具做不到的。
+ *
+ * 两者都支持 abort（AbortController 注册进 kills 集合，abort 向 PTY 发 Ctrl+C）、
+ * timeout，以及 head / tail 参数（只返回前/后 N 行，替代 `| head` / `| tail` 管道）。
+ */
+/** 一次性 bash 终端序号：非持久调用每次新建一个终端，进程结束后退出、输出
+ *  保留在 history 供查阅——故每调用独立 id，避免复用覆盖旧输出。 */
+let oneShotBashSeq = 0;
+
+/** head / tail 的运行时上限，与 bash 工具参数 schema 的 maximum 5000 一致
+ *  （agent-service.ts）——schema 只影响提示不拦运行时（issue #462）。 */
+const MAX_HEAD_TAIL_LINES = 5000;
+
+/** 应用 head / tail 参数到输出顶层行（替代 `| head` / `| tail` 管道——管道会
+ *  缓冲输出、让可见终端全程哑火，还容易白白触发静默解阻）。两者同时给时先
+ *  截头再截尾。 */
+export function applyHeadTail(text: string, head?: number, tail?: number, lang: ServerLang = "en"): string {
+	// 入口钳到 schema 上限：此前只判 >0，传 1e9 会把整段缓冲灌进单条工具结果
+	// 并持久化进转录。
+	const headN = head && head > 0 ? Math.min(Math.floor(head), MAX_HEAD_TAIL_LINES) : 0;
+	const tailN = tail && tail > 0 ? Math.min(Math.floor(tail), MAX_HEAD_TAIL_LINES) : 0;
+	// 只对真实数据行切片；省略提示行单独存，最后再包回输出，避免提示行在
+	// head+tail 组合时被当成数据行参与第二次截取（导致尾部少截一行）。
+	let data = text.split("\n");
+	let headNote: string | null = null;
+	let tailNote: string | null = null;
+	if (headN && data.length > headN) {
+		const n = data.length - headN;
+		headNote = pick(lang, `…（后 ${n} 行已省略）`, `…[${n} lines omitted below]…`, "terminals.headtail.omitted.below", {
+			n,
+		});
+		data = data.slice(0, headN);
+	}
+	if (tailN && data.length > tailN) {
+		const n = data.length - tailN;
+		tailNote = pick(lang, `…（前 ${n} 行已省略）`, `…[${n} lines omitted above]…`, "terminals.headtail.omitted.above", {
+			n,
+		});
+		data = data.slice(-tailN);
+	}
+	const parts: string[] = [];
+	if (tailNote) parts.push(tailNote);
+	parts.push(...data);
+	if (headNote) parts.push(headNote);
+	return parts.join("\n");
+}
+
+export function makeTerminalBashTool(
+	terminals: TerminalManager,
+	opts: {
+		cwd: string;
+		/** persist 未显式传时的默认值（通常来自全局「终端接管」设置）；每次调用读取。 */
+		defaultPersist: () => boolean;
+		/** 静默解阻阈值毫秒（仅 persist=true 生效）；每次调用时读取（设置即时生效）；0 = 不解阻。 */
+		idleMs: () => number;
+		/** 前台运行最长毫秒；每次调用时读取；0 = 不限。达到后自动转入后台继续执行并解阻模型。 */
+		maxForegroundMs?: () => number;
+		/** abort_bash 的控制器集合。 */
+		kills: Set<AbortController>;
+		/** 后台命令最终结束时的宿主通知（exitCode null = 终端被关闭）。 */
+		notifyBackgroundDone: (info: { terminalId: string; command: string; exitCode: number | null }) => void;
+		/** per-call 返回文本的服务端语言（默认英文）；工具 definition 为纯英文。 */
+		lang?: () => ServerLang;
+	},
+): ToolDefinition {
+	const PERSIST_ID = "ai-bash";
+
+	return defineTool({
+		name: "bash",
+		label: "Run bash command",
+		// 提示词单源：模型看到的 bash 定义由 makeAdaptiveBashTool 从 tool-prompts.ts 取，
+		// 本定义只提供终端这条执行路径（description/schema 必须与另两条一致，不另写一套）。
+		description: BASH_DESCRIPTION,
+		promptSnippet: BASH_PROMPT_SNIPPET,
+		promptGuidelines: BASH_PROMPT_GUIDELINES,
+		parameters: BASH_PARAMETERS,
+		execute: async (_id, p, signal) => {
+			const lang: ServerLang = opts.lang?.() ?? "en";
+			// 语法不完整的命令（续行符结尾 / 未闭合引号 / 未闭合括号组）：交互 shell 会停在续行提示符
+			// （PS2）零执行，且无法注入退出码哨兵——没有任何办法得知它何时结束。直接拒绝，不建终端、
+			// 不注入，避免空等 60 秒后回报「仍在后台运行」这种与事实相反的状态（#571）。
+			const incomplete = sentinelUnsafeReason(detectTrailingLimiter(p.command)?.base ?? p.command);
+			if (incomplete) {
+				const reasonZh =
+					incomplete === "trailing_backslash"
+						? "以续行符 \\ 结尾"
+						: incomplete === "unclosed_quote"
+							? "存在未闭合引号"
+							: incomplete === "unclosed_heredoc"
+								? "存在未闭合的 heredoc（<<）"
+								: incomplete === "unclosed_block"
+									? "存在未闭合的 if/for/case 块"
+									: "存在未闭合的 { } / ( ) 组";
+				const reasonEn =
+					incomplete === "trailing_backslash"
+						? "ends with a line-continuation backslash"
+						: incomplete === "unclosed_quote"
+							? "has an unclosed quote"
+							: incomplete === "unclosed_heredoc"
+								? "has an unclosed heredoc (<<)"
+								: incomplete === "unclosed_block"
+									? "has an unclosed if/for/case block"
+									: "has an unclosed { } / ( ) group";
+				throw new Error(
+					pick(
+						lang,
+						`命令语法不完整（${reasonZh}），未执行。终端接管 bash 无法为它注入退出码哨兵，残句还会让 shell 停在续行提示符、零执行。请补全引号 / 续行符 / 括号后重试。`,
+						`Command is syntactically incomplete (${reasonEn}); nothing was executed. The terminal bash path cannot inject an exit-code sentinel here, and the leftover fragment would leave the shell waiting at a continuation prompt. Complete the quote / continuation / bracket and retry.`,
+						"terminals.bash.incomplete",
+						{ reason: reasonEn, reasonEn, reasonZh },
+					),
+				);
+			}
+			const persist = p.persist ?? opts.defaultPersist();
+			// create() 对已存活的同名终端原样返回、对已退出的原地重启。
+			// forceBash：该终端永远跑 bash（而非用户登录 shell），模型写的
+			// bash 语法（数组/read -p/process substitution…）不会踩 zsh 差异。
+			// agentBash：标记为终端接管 bash，前端单独归到「AI bash」分组，
+			// 也不计入终端数量上限。
+			const termId = persist ? PERSIST_ID : `ai-bash-${++oneShotBashSeq}`;
+			const title = persist ? "AI bash" : `AI bash ${oneShotBashSeq}`;
+			if (
+				terminals.create(termId, opts.cwd, 120, 40, opts.cwd, title, {
+					forceBash: true,
+					agentBash: true,
+				}) === null
+			) {
+				throw new Error(
+					pick(
+						lang,
+						`无法打开 AI bash 终端（${termId}）`,
+						`Failed to open the AI bash terminal (${termId})`,
+						"terminals.bash.open.failed",
+						{ termId },
+					),
+				);
+			}
+			// 阻塞等待期间挂起活力提醒（我们自己在检测静默，避免双重通知）。
+			terminals.suspendIdleWatch(termId);
+			const start = terminals.endCursor(termId)!;
+			const ac = new AbortController();
+			opts.kills.add(ac);
+			// 一键退出一次性终端：命令结束后 shell 用 exit 退场（进程结束），
+			// 输出保留在 history 供查阅；持久终端则保留 shell 状态跨调用。
+			const closeOneShot = (): void => {
+				if (!persist) void terminals.inputChecked(termId, "exit\r");
+			};
+			const idleMs = Math.max(0, opts.idleMs());
+			const maxForegroundMs = Math.max(0, opts.maxForegroundMs?.() ?? 0);
+			const startTime = Date.now();
+			const deadline = p.timeout && p.timeout > 0 ? Date.now() + p.timeout * 1000 : null;
+			// 拆掉模型常写的尾部输出限制/过滤管道（`| tail -N` / `| less` / `| more` / `| cat`）：
+			// 这类管道在终端里 ①缓冲输出——可见终端全程哑火、无法感知实时进度；②吞掉真实退出码——
+			// 退出码取管道最后一个命令（tail 恒 0），掩盖真实失败；③需 stdin 的管道出错后可能一直挂到超时。
+			// 拆掉后底层命令直跑（实时可见 + 真实退出码），只在返回给模型时取末尾 N 行或全部。
+			const limiter = detectTrailingLimiter(p.command);
+			const stripped = limiter !== null;
+			const effectiveTail: number | undefined =
+				p.tail ?? (limiter?.kind === "tail" ? (limiter.lines ?? undefined) : undefined);
+			const runCommand = stripped ? limiter!.base : p.command;
+			// `cmd > log 2>&1 | tail -N`：拆掉 tail 后 stdout 进文件、终端为空 → 补一个
+			// tail 文件让模型看到日志尾部与真实退出码（否则输出为空）。
+			const redirect = stripped && limiter!.kind === "tail" ? detectStdoutRedirect(runCommand) : null;
+			const tailFile = redirect ? { file: redirect.file, lines: limiter!.lines ?? 10 } : undefined;
+			// 复杂子表达式先 hoist 成干净 const（issue #91 v2：vars key 不写复杂表达式）。
+			// 注意：limiter 对「没有尾部限输出管道」的命令是 null（issue #121）——
+			// 这些 const 一律走可选链，只在 stripped=true（limiterNote 才被取用）时才有意义。
+			const limiterSegment = limiter?.segment ?? "";
+			const limiterTailLines = limiter?.lines ?? 10;
+			const limiterTailZh = limiter?.kind === "tail" ? `本次返回末尾 ${limiterTailLines} 行。` : "本次返回全部输出。";
+			const limiterTailEn =
+				limiter?.kind === "tail"
+					? `Returning the last ${limiterTailLines} lines this time.`
+					: "Returning the full output this time.";
+			const limiterNote = stripped
+				? pick(
+						lang,
+						`\n[注：检测到你带了「${limiterSegment}」这类限输出/过滤管道——已在终端里直跑底层命令（实时可见 + 真实退出码），只按参数返回片段。${limiterTailZh} 后续直接用 bash(command, tail=N) 参数限输出。]`,
+						`\n[Note: detected a trailing output-limiting pipe "${limiterSegment}" — ran the underlying command directly in the terminal (live output + real exit code) and trimmed only the returned slice. ${limiterTailEn} Next time use the bash(command, tail=N) parameter to limit output.]`,
+						"terminals.bash.limiter.note",
+						{ limiterSegment, limiterTailZh, limiterTailEn },
+					)
+				: "";
+			try {
+				let collected = "";
+				let cursor = start;
+				let lastDataAt = Date.now();
+				const nonce = newSentinelNonce();
+				// 标记「有哨兵命令在跑」：terminal_wait / terminal_read 据此区分等待与空闲。
+				terminals.setSentinelPending(termId, true);
+				const inputErr = terminals.inputChecked(termId, buildTerminalBashLine(runCommand, tailFile, nonce) + "\r");
+				if (inputErr) throw new Error(inputErr);
+				for (;;) {
+					if (ac.signal.aborted || signal?.aborted) {
+						// Ctrl+C 杀前台进程；一次性终端随之退出，持久终端保留（会话状态还在）。
+						terminals.setSentinelPending(termId, false);
+						terminals.inputChecked(termId, "\x03");
+						closeOneShot();
+						throw new Error(pick(lang, "命令已中止", "Command aborted", "terminals.bash.aborted"));
+					}
+					await sleep(60);
+					const read = terminals.read(termId, cursor);
+					if (read?.data) {
+						collected += read.data;
+						cursor = read.cursor;
+						lastDataAt = Date.now();
+						// 长跑/刷屏命令的累积无上限会拖爆服务进程内存。哨兵判定只看尾部
+						// 8KB（lastSentinel），超限丢最旧一半、保留近期输出即可；
+						// 命令结束后的 cleanBashOutput 语义不受影响。
+						if (collected.length > BASH_COLLECT_MAX) {
+							collected = collected.slice(collected.length - BASH_COLLECT_MAX / 2);
+						}
+					}
+					const m = lastSentinel(collected, nonce);
+					if (m) {
+						terminals.setSentinelPending(termId, false);
+						closeOneShot();
+						const text = applyHeadTail(cleanBashOutput(collected, nonce, runCommand), p.head, effectiveTail, lang);
+						return {
+							content: [
+								{
+									type: "text",
+									text: `${text}${text ? "\n" : ""}${limiterNote}[exit:${m[1]}]`,
+								},
+							],
+							details: { exitCode: Number(m[1]), output: text },
+						};
+					}
+					if (deadline !== null && Date.now() > deadline) {
+						terminals.setSentinelPending(termId, false);
+						terminals.inputChecked(termId, "\x03");
+						closeOneShot();
+						const timeoutPartial = truncateMiddle(stripAnsi(collected), 4000);
+						throw new Error(
+							pick(
+								lang,
+								`Command timed out after ${p.timeout}s（已发 Ctrl+C；已有输出：${timeoutPartial}）`,
+								`Command timed out after ${p.timeout}s (sent Ctrl+C; partial output: ${timeoutPartial})`,
+								"terminals.bash.timeout",
+								{ "p.timeout": p.timeout, timeout: p.timeout, timeoutPartial, sentinelNote: "" },
+							),
+						);
+					}
+					// 静默解阻（仅持久终端）：转后台 + 注册完成观察器，立即把控制权还给模型。
+					if (persist && idleMs > 0 && Date.now() - lastDataAt >= idleMs) {
+						return backgroundResult(
+							terminals,
+							opts,
+							runCommand,
+							applyHeadTail(cleanBashOutput(collected, nonce, runCommand), p.head, effectiveTail, lang),
+							Math.round((Date.now() - lastDataAt) / 1000),
+							lang,
+							nonce,
+							termId,
+							persist,
+							"idle",
+						);
+					}
+					// 总时长解阻（持久与一次性终端）：前台运行达到上限，转入后台继续执行，避免卡死。
+					if (maxForegroundMs > 0 && Date.now() - startTime >= maxForegroundMs) {
+						return backgroundResult(
+							terminals,
+							opts,
+							runCommand,
+							applyHeadTail(cleanBashOutput(collected, nonce, runCommand), p.head, effectiveTail, lang),
+							Math.round((Date.now() - startTime) / 1000),
+							lang,
+							nonce,
+							termId,
+							persist,
+							"elapsed",
+						);
+					}
+				}
+			} finally {
+				opts.kills.delete(ac);
+			}
+		},
+	});
+}
+
+/** 静默 / 总时长解阻路径：注册完成观察器后立即返回「仍在后台运行」。 */
+function backgroundResult(
+	terminals: TerminalManager,
+	opts: Parameters<typeof makeTerminalBashTool>[1],
+	command: string,
+	partialText: string,
+	durationSeconds: number,
+	lang: ServerLang,
+	nonce: string,
+	termId: string = "ai-bash",
+	persist: boolean = true,
+	reason: "idle" | "elapsed" = "idle",
+): { content: { type: "text"; text: string }[]; details: unknown } {
+	terminals.watchOutput(termId, sentinelReFor(nonce), (m) => {
+		// 后台命令最终结束（或终端被关）→ 清除待决标记，terminal_wait 不再适用。
+		terminals.setSentinelPending(termId, false);
+		opts.notifyBackgroundDone({
+			terminalId: termId,
+			command,
+			exitCode: m ? Number(m[1]) : null,
+		});
+		if (!persist) {
+			void terminals.inputChecked(termId, "exit\r");
+		}
+	});
+	// partialText 已在调用方做过 cleanBashOutput + applyTail。
+	const partial = truncateMiddle(partialText, 6000);
+	// 空输出占位按语言预渲染（issue #91 v2：vars 只收干净标识）。
+	const partialZh = partial || "（暂无输出）";
+	const partialEn = partial || "(no output yet)";
+
+	let descZh = "";
+	let descEn = "";
+
+	if (reason === "elapsed") {
+		descZh =
+			`命令仍在终端 ${termId} 中运行（前台执行已达 ${durationSeconds} 秒上限，自动转入后台）。` +
+			`本次调用不阻塞——命令继续在后台执行，结束时你会收到自动通知。\n` +
+			`已有输出：\n${partialZh}\n`;
+		descEn =
+			`Command still running in terminal ${termId} (foreground execution reached ${durationSeconds}s limit, moved to background). ` +
+			`This call does not block — the command keeps running in the background and you will be notified automatically when it finishes.\n` +
+			`Partial output:\n${partialEn}\n`;
+	} else {
+		descZh =
+			`命令仍在持久终端 ${termId} 中运行（已连续 ${durationSeconds} 秒无输出，未结束）。` +
+			`本次调用不阻塞——命令继续在后台执行，结束时你会收到自动通知。\n` +
+			`已有输出：\n${partialZh}\n`;
+		descEn =
+			`Command still running in the persistent terminal ${termId} (no output for ${durationSeconds}s, not finished). ` +
+			`This call does not block — the command keeps running in the background and you will be notified automatically when it finishes.\n` +
+			`Partial output:\n${partialEn}\n`;
+	}
+
+	if (persist) {
+		descZh += `要重新阻塞等它结束就用 terminal_wait(terminalId="${termId}")（无需反复轮询）；需要交互用 terminal_input / terminal_key（Ctrl+C 可终止）。`;
+		descEn += `To block until it finishes, use terminal_wait(terminalId="${termId}") (no polling needed); use terminal_input / terminal_key to interact (Ctrl+C aborts).`;
+	} else {
+		descZh += `命令完成后该终端将自动退出并发送通知；如需查看输出可用 terminal_read(terminalId="${termId}")。`;
+		descEn += `When completed, this terminal will exit automatically and notify; to inspect output, use terminal_read(terminalId="${termId}").`;
+	}
+
+	if (reason === "elapsed") {
+		return {
+			content: [
+				{
+					type: "text",
+					text: pick(lang, descZh, descEn, "terminals.bash.background.elapsed", {
+						durationSeconds,
+						partialZh,
+						partialEn,
+						termId,
+					}),
+				},
+			],
+			details: { running: true, terminalId: termId, persist, durationSeconds, reason },
+		};
+	}
+
+	return {
+		content: [
+			{
+				type: "text",
+				text: pick(lang, descZh, descEn, "terminals.bash.background.running", {
+					silentSeconds: durationSeconds,
+					durationSeconds,
+					partialZh,
+					partialEn,
+					termId,
+				}),
+			},
+		],
+		details: { running: true, terminalId: termId, persist, durationSeconds, reason },
+	};
+}
+
+/** Agent 持久终端工具名（唯一登记见 tool-manager.ts；此处 re-export 保兼容）。 */
+export { TERMINAL_TOOL_NAMES } from "./tool-manager.js";
+
+/** System-prompt guidance teaching the model WHEN to prefer the terminal tools
+ *  over one-shot bash. Without it models almost never pick them — bash returns
+ *  complete output in a single call, so it always wins on convenience. */
+export const TERMINAL_TOOLS_GUIDANCE = `Persistent interactive terminal tools are available (terminal_create / terminal_list / terminal_close / terminal_input / terminal_key / terminal_read / terminal_wait). The bash tool stays the DEFAULT for ordinary commands. Switch to bash({persist:true}) or the terminal tools when:
+- The program is interactive or TUI-based (REPLs, vim/htop, y/n installers, anything waiting on stdin): prefer bash({persist:true}), which runs it in the persistent 'ai-bash' terminal and returns immediately; then drive it with terminal_input / terminal_key / terminal_read on terminalId='ai-bash'.
+- You start a long-running server or watcher and want to watch its output (terminal_read with waitMs), send keys later (e.g. Ctrl+c via terminal_key), or block until a backgrounded command finishes without polling (terminal_wait).
+- The user asks you to work in the visible terminal panel.
+Liveness watchdog: terminals you touched are monitored — if one goes silent while you are working (default 15s), a system reminder prompts you to check it (terminal_read), answer its input prompt, or close it (terminal_close) if no longer needed.`;
+
+/** Build the agent-facing persistent terminal tools for one conversation. */
+export function makePersistentTerminalTools(
+	terminals: TerminalManager,
+	cwd: string,
+	/** per-call 返回文本的服务端语言（默认英文）；工具 definition 为纯英文。 */
+	lang?: () => ServerLang,
+	options?: {
+		checkSafety?: (cmd: string) => { blocked?: boolean; reason?: string };
+	},
+): ToolDefinition[] {
+	const getLang: () => ServerLang = lang ?? (() => "en");
+	const result = (
+		text: string,
+		details: unknown = {},
+	): {
+		content: { type: "text"; text: string }[];
+		details: unknown;
+	} => ({ content: [{ type: "text", text }], details });
+	const failIf = (error: string | null): void => {
+		if (error) throw new Error(error);
+	};
+
+	return [
+		defineTool({
+			name: "terminal_create",
+			label: "Create terminal",
+			description:
+				"Create a named persistent interactive PTY. Interact via terminal_input / terminal_key; inspect output via terminal_read.",
+			promptSnippet: "drive interactive programs or long-running servers in a PTY",
+			promptGuidelines: [
+				"Use this for full-screen TUIs (vim/htop) and servers you need to observe or interrupt; prefer bash for one-shot commands",
+			],
+			parameters: Type.Object({
+				terminalId: Type.String({ description: "Stable terminal name" }),
+				cwd: Type.Optional(Type.String({ description: "Workspace-relative directory" })),
+				cols: Type.Optional(Type.Integer({ minimum: 2, maximum: 500 })),
+				rows: Type.Optional(Type.Integer({ minimum: 2, maximum: 200 })),
+			}),
+			execute: async (_id, p) => {
+				const lang = getLang();
+				const safeCols = Math.max(2, Math.min(500, Math.floor(p.cols ?? 120)));
+				const safeRows = Math.max(2, Math.min(200, Math.floor(p.rows ?? 40)));
+				const info = terminals.create(p.terminalId, p.cwd ?? cwd, safeCols, safeRows, cwd, p.terminalId);
+				const infoJson = JSON.stringify(info);
+				if (!info)
+					throw new Error(
+						pick(
+							lang,
+							`创建终端失败：${p.terminalId}`,
+							`Failed to create terminal: ${p.terminalId}`,
+							"terminals.create.failed",
+							{ "p.terminalId": p.terminalId },
+						),
+					);
+				// AI 创建 → 启动活力检测纪元（静默提醒只针对 agent 触碰过的终端）。
+				terminals.noteAgentActivity(p.terminalId);
+				return result(
+					pick(lang, `终端已创建：${infoJson}`, `Terminal created: ${infoJson}`, "terminals.create.done", { infoJson }),
+					info,
+				);
+			},
+		}),
+		defineTool({
+			name: "terminal_list",
+			label: "List terminals",
+			description: "List all persistent PTY terminals owned by this conversation.",
+			promptSnippet: "list persistent terminals",
+			parameters: Type.Object({}),
+			execute: async () => result(JSON.stringify(terminals.list()), terminals.list()),
+		}),
+		defineTool({
+			name: "terminal_close",
+			label: "Close terminal",
+			description: "Close a persistent PTY and terminate its process tree.",
+			parameters: Type.Object({ terminalId: Type.String() }),
+			execute: async (_id, p) => {
+				const lang = getLang();
+				if (!terminals.has(p.terminalId))
+					throw new Error(
+						pick(
+							lang,
+							`终端不存在：${p.terminalId}`,
+							`Terminal not found: ${p.terminalId}`,
+							"terminals.close.not.found",
+							{ "p.terminalId": p.terminalId },
+						),
+					);
+				terminals.kill(p.terminalId);
+				return result(
+					pick(lang, `终端已关闭：${p.terminalId}`, `Terminal closed: ${p.terminalId}`, "terminals.close.done", {
+						"p.terminalId": p.terminalId,
+					}),
+				);
+			},
+		}),
+		defineTool({
+			name: "terminal_input",
+			label: "Send terminal input",
+			description: "Send arbitrary text to a persistent PTY. Include newline when a command should be submitted.",
+			parameters: Type.Object({ terminalId: Type.String(), data: Type.String() }),
+			execute: async (_id, p) => {
+				const lang = getLang();
+				if (options?.checkSafety && (p.data.includes("\n") || p.data.includes("\r"))) {
+					const safety = options.checkSafety(p.data.trim());
+					if (safety.blocked) {
+						throw new Error(
+							pick(
+								lang,
+								`【终端输入命令被安全规则阻断】${safety.reason ? ` 原因：${safety.reason}` : ""}`,
+								`[Terminal command blocked by safety rule]${safety.reason ? ` Reason: ${safety.reason}` : ""}`,
+								"terminals.command.blocked",
+								{ reason: safety.reason ?? "" },
+							),
+						);
+					}
+				}
+				failIf(terminals.inputChecked(p.terminalId, p.data));
+				// AI 发了输入 = 在等结果，重开一个静默纪元。
+				terminals.noteAgentActivity(p.terminalId);
+				return result(
+					pick(
+						lang,
+						`已发送 ${p.data.length} 个字符到 ${p.terminalId}`,
+						`Sent ${p.data.length} chars to ${p.terminalId}`,
+						"terminals.input.sent",
+						{ "p.data.length": p.data.length, "p.terminalId": p.terminalId },
+					),
+				);
+			},
+		}),
+		defineTool({
+			name: "terminal_key",
+			label: "Send terminal key",
+			description: "Send Enter, Tab, arrows, function keys, or Ctrl/Alt combinations to a persistent PTY.",
+			parameters: Type.Object({
+				terminalId: Type.String(),
+				key: Type.String({
+					description: "Enter, Tab, ArrowUp, c, etc.",
+				}),
+				modifiers: Type.Optional(
+					Type.Object({
+						ctrl: Type.Optional(Type.Boolean()),
+						alt: Type.Optional(Type.Boolean()),
+						shift: Type.Optional(Type.Boolean()),
+					}),
+				),
+			}),
+			execute: async (_id, p) => {
+				const lang = getLang();
+				failIf(terminals.key(p.terminalId, p.key, p.modifiers));
+				// 同 terminal_input：AI 主动交互后重新计时。
+				terminals.noteAgentActivity(p.terminalId);
+				return result(
+					pick(
+						lang,
+						`已发送按键 ${p.key} 到 ${p.terminalId}`,
+						`Sent key ${p.key} to ${p.terminalId}`,
+						"terminals.key.sent",
+						{ "p.key": p.key, "p.terminalId": p.terminalId },
+					),
+				);
+			},
+		}),
+		defineTool({
+			name: "terminal_read",
+			label: "Read terminal output",
+			description:
+				"Read incremental output from a persistent PTY. " +
+				"Keep the returned cursor and pass it on the next read; " +
+				"optionally wait for new output or process exit. " +
+				"commandPending=true means a bash-tool command has not reported its exit code yet " +
+				"(manual terminal_input commands are not tracked).",
+			parameters: Type.Object({
+				terminalId: Type.String(),
+				cursor: Type.Optional(Type.Integer({ minimum: 0 })),
+				maxBytes: Type.Optional(Type.Integer({ minimum: 1, maximum: 100000 })),
+				waitMs: Type.Optional(Type.Integer({ minimum: 0, maximum: 120000 })),
+			}),
+			execute: async (_id, p, signal) => {
+				const lang = getLang();
+				const cursor = Math.max(0, Math.floor(p.cursor ?? 0));
+				const waitMs = p.waitMs !== undefined ? Math.max(0, Math.min(120_000, Math.floor(p.waitMs))) : undefined;
+				const maxBytes = Math.max(1, Math.min(100_000, Math.floor(p.maxBytes ?? 20000)));
+				if (waitMs) await terminals.waitForOutput(p.terminalId, cursor, waitMs, signal);
+				const read = terminals.read(p.terminalId, cursor, maxBytes);
+				if (!read)
+					throw new Error(
+						pick(
+							lang,
+							`终端不存在：${p.terminalId}`,
+							`Terminal not found: ${p.terminalId}`,
+							"terminals.read.not.found",
+							{ "p.terminalId": p.terminalId },
+						),
+					);
+				return result(JSON.stringify(read), read);
+			},
+		}),
+		defineTool({
+			name: "terminal_wait",
+			label: "Wait for terminal command",
+			description:
+				"Block until a bash-tool command finishes (exit marker) or timeout — no polling. " +
+				"Returns {finished, exitCode} plus output produced meanwhile; finished=false = still running (call again). " +
+				"terminal_input commands have no completion marker — use terminal_read(waitMs=…) for those.",
+			promptSnippet: "avoid polling: wait for a long bash command to finish",
+			parameters: Type.Object({
+				terminalId: Type.String(),
+				cursor: Type.Optional(
+					Type.Integer({
+						minimum: 0,
+						description: "Ignore exit markers before this absolute offset (default: now)",
+					}),
+				),
+				maxWaitMs: Type.Optional(
+					Type.Integer({
+						minimum: 100,
+						maximum: 600000,
+						description: "Max wait in ms (default 300000)",
+					}),
+				),
+			}),
+			execute: async (_id, p, signal) => {
+				const lang = getLang();
+				if (!terminals.has(p.terminalId)) {
+					throw new Error(
+						pick(
+							lang,
+							`终端不存在：${p.terminalId}（可能已被关闭或会话重置，请先 terminal_create）`,
+							`Terminal not found: ${p.terminalId} (it may have been closed or the session was reset — run terminal_create first)`,
+							"terminals.wait.not.found",
+							{ "p.terminalId": p.terminalId },
+						),
+					);
+				}
+				// 没有带哨兵的待决命令：shell 空闲在提示符，或该终端的命令是经
+				// terminal_input 手动发的（无完成标记）——等哨兵永远等不到，直接
+				// 说明并引导改用 terminal_read，避免 AI 无限重试。（显式传 cursor
+				// 的调用是有目的的追溯查询，不拦。）
+				if (p.cursor === undefined && !terminals.isSentinelPending(p.terminalId)) {
+					const why = pick(
+						lang,
+						`终端 ${p.terminalId} 当前没有正在等待完成的 bash 工具命令（shell 空闲，或该命令是通过 terminal_input 发出的、没有完成标记）。terminal_wait 不适用；要观察输出请用 terminal_read(terminalId="${p.terminalId}", waitMs=…)。`,
+						`Terminal ${p.terminalId} has no pending bash-tool command to wait for (the shell is idle, or the command was sent via terminal_input and has no completion marker). terminal_wait does not apply; use terminal_read(terminalId="${p.terminalId}", waitMs=…) to observe output.`,
+						"terminals.wait.no.pending",
+						{ "p.terminalId": p.terminalId },
+					);
+					return result(JSON.stringify({ applicable: false, reason: why }), { applicable: false });
+				}
+				const cursor = p.cursor ?? terminals.endCursor(p.terminalId) ?? 0;
+				const maxWait = Math.max(100, Math.min(600_000, Math.floor(p.maxWaitMs ?? 300_000)));
+				const wait = await terminals.waitForCompletion(p.terminalId, maxWait, signal, cursor);
+				const read = terminals.read(p.terminalId, cursor, 20_000);
+				const outputTail = read?.data ? stripAnsi(read.data).slice(-4000) : "";
+				return result(JSON.stringify({ ...wait, outputTail }), {
+					...wait,
+					outputTail,
+				});
+			},
+		}),
+	];
+}

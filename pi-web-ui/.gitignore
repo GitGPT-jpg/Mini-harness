@@ -1,0 +1,82 @@
+# Dependencies
+node_modules/
+
+# Build artifacts
+dist/
+web/dist/
+
+# OS files
+.DS_Store
+
+# pi agent data
+.pi/
+.pi-web/
+.pi-subagents/
+
+# Editor data
+.vscode/
+
+# Git worktrees
+.worktrees/
+
+# Plugin dependencies (installed per-plugin)
+plugins/*/node_modules/
+
+# 插件运行期数据与权限标记（用户数据与运行时产物不入库）
+plugins/*/storage/
+plugins/*/.pi-approved
+plugins/*/storage.json
+plugins/*/secrets.bin
+plugins/*/schedules.json
+plugins/webmail/package*.json
+plugins/*/*.token*
+plugins/*/*.cookie*
+plugins/*/*_token*
+plugins/*/*_cookie*
+plugins/*/*_session*
+
+# Scratch/test temp files
+tests/scratch/
+
+# 主题视觉审计产物（scripts/theme-audit.mjs + theme-diff.mjs 的截图/差异图）
+.theme-audit/
+
+# 误落仓库根的临时包（npm pack / 手工下载的 tgz）
+*.tgz
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+.zcodeignore
+*.bak
+
+# pi-web-ui Electron 桌面版构建产物
+release/
+
+# 独立社区插件清单仓库工作区
+plugin-registry/
+
+# 本地临时调试截图
+dev/wechat-shot*.png
+*.png
+*.jpg
+*.jpeg
+!assets/**
+preview-*.html
+.tmp-verify-data/
+test-screenshots/
+generated/
+
+# 本地调试与运行时数据（不入库）
+/durable/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+provider-keys.json
+test-driver-prompt.ts
+capsule-palettes.html
+
+# 本地流水线实跑产物（画布 demo 任务与 AI 生成的 output，不入库）
+/pipelines/
+

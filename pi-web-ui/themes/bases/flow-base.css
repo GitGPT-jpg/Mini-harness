@@ -1,0 +1,1363 @@
+/* themes/bases/flow-base.css — 极简行文模式形态与排版基底
+ * 包含：实体画布骨架、正文零边框无界微流排版、行内微胶囊深度思考与工具集群、
+ * 双层悬浮输入岛、全自适应浮层与弹窗系统。
+ *
+ * 核心设计原则：
+ *   1. 纯形态与排版：绝不硬编码任何具体色值（如 #ffffff、#141414、#000000）；
+ *   2. 颜色统一由语义变量（var(--text), var(--bg-elev), var(--border), var(--accent) 等）驱动；
+ *   3. 半透明/微透光统一走 color-mix(in srgb, var(--text) X%, transparent) 自适应深浅主题；
+ *   4. 所有主操作实底按钮统一走 var(--accent) + var(--accent-contrast, #fff)。
+ */
+
+/* 能力声明：本主题要求「正文 + 胶囊」连成一条行内流（字级输入流）。
+   前端用 web/src/flow-mode.ts 探测这条属性来决定分组方式与容器外观，
+   于是渲染层不需要认识任何主题 id —— 自制主题声明同一条属性即可复用。 */
+:root {
+	--flow-inline-stream: 1;
+}
+
+/* ========================================================
+   骨架与层级：实体暗调结构，利落细线分割
+   ======================================================== */
+#root,
+.app,
+.layout,
+.view-pane,
+.main,
+.chat-view,
+.chat-scroll,
+.messages {
+	background: var(--bg);
+}
+
+/* 输入栏与消息包裹层必须保持背景透明，确保快捷短语所在带子透出底层消息正文 */
+.messages-wrap,
+.inputbar {
+	background: transparent;
+}
+
+.topbar {
+	background: var(--topbar-bg, var(--bg-elev));
+	border-bottom: 1px solid var(--border-soft);
+	box-shadow: 0 1px 3px var(--sunken-bg, rgba(0, 0, 0, 0.15));
+	backdrop-filter: none;
+	-webkit-backdrop-filter: none;
+	z-index: 50;
+}
+
+.footer-bar,
+.statusbar {
+	background: var(--statusbar-bg, var(--bg-elev));
+	border-top: 1px solid var(--border-soft);
+	box-shadow: 0 -1px 3px var(--sunken-bg, rgba(0, 0, 0, 0.15));
+	backdrop-filter: none;
+	-webkit-backdrop-filter: none;
+	z-index: 50;
+}
+
+.panel,
+.drawer-left .panel,
+.drawer-right .panel,
+.lp-panel {
+	background: var(--panel-bg, var(--bg-elev));
+	border-color: var(--border-soft);
+	backdrop-filter: none;
+	-webkit-backdrop-filter: none;
+	box-shadow: none;
+}
+
+.panel-header,
+.lp-section-header,
+.panel-convs,
+.panel-sessions,
+.lp-group-title,
+.panel-body {
+	background: transparent;
+}
+
+.lp-conv-row:hover,
+.lp-conv-row.active,
+.ft-row:hover,
+.panel-item:hover {
+	background: var(--border-soft);
+	border-radius: 8px;
+}
+
+/* 消除会话项激活与聚焦态的一切蓝色/紫蓝色外边框 */
+.session-item,
+.session-item.active,
+.session-item:hover,
+.session-item:focus,
+.session-item:focus-visible,
+.lp-row .session-item,
+.lp-row .session-item.active {
+	border: none;
+	outline: none;
+	box-shadow: none;
+}
+
+.session-item.active,
+.lp-row .session-item.active {
+	background: var(--border);
+	color: var(--md-strong, var(--text));
+	border: none;
+	border-radius: 8px;
+	padding: 8px 10px;
+}
+
+.session-item:hover,
+.lp-row .session-item:hover {
+	background: color-mix(in srgb, var(--text) 5%, transparent);
+	color: var(--md-strong, var(--text));
+	border: none;
+	border-radius: 8px;
+}
+
+.lp-section-header,
+.lp-section-title,
+.lp-section-title-text,
+.panel-section-title {
+	color: var(--text-faint);
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	font-weight: 600;
+}
+
+.lp-conv-title,
+.lp-conv-row {
+	color: var(--control-fg, var(--text));
+}
+.lp-conv-row:hover .lp-conv-title,
+.lp-conv-row.active .lp-conv-title {
+	color: var(--md-strong, var(--text));
+}
+
+/* ========================================================
+   核心：极简行文（Flow）—— 正文零气泡外壳、零边框、极致紧凑排版
+   ======================================================== */
+.messages {
+	padding-top: 6px;
+	padding-bottom: calc(48px + var(--quick-row-h, 0px));
+}
+
+.msg {
+	background: transparent;
+	border: none;
+	box-shadow: none;
+	margin: 4px 0;
+	padding: 0;
+}
+
+.msg-assistant {
+	margin: 8px 0;
+	padding: 0;
+}
+
+/* 助手正文主体：完全透明无外框无圆角无遮挡，如字书印于深曜画布上 */
+.msg-assistant .msg-body {
+	background: transparent;
+	border: none;
+	border-radius: 0;
+	box-shadow: none;
+	backdrop-filter: none;
+	-webkit-backdrop-filter: none;
+	overflow: visible;
+	display: block;
+	padding: 0;
+	margin: 0;
+	line-height: 1.62;
+	letter-spacing: 0.012em;
+	font-size: 14px;
+	color: var(--text);
+	word-break: break-word;
+}
+
+.msg-text,
+.msg-assistant .msg-text {
+	background: transparent;
+	border: none;
+	box-shadow: none;
+	padding: 0;
+	margin: 0;
+}
+
+/* 正文排版：段间距、行高、列表间隙微调，彻底消灭笨重留白 */
+.msg-body p {
+	margin: 0.36em 0;
+	line-height: 1.62;
+}
+.msg-body p:first-child {
+	margin-top: 0;
+}
+.msg-body p:last-child {
+	margin-bottom: 0;
+}
+
+.msg-body ul,
+.msg-body ol {
+	margin: 0.25em 0;
+	padding-left: 1.25em;
+}
+
+.msg-body li {
+	margin: 0.12em 0;
+	line-height: 1.58;
+}
+.msg-body li > p {
+	margin: 0;
+	display: inline;
+}
+
+.msg-body h1,
+.msg-body h2,
+.msg-body h3,
+.msg-body h4,
+.msg-body h5,
+.msg-body h6 {
+	margin: 0.55em 0 0.22em 0;
+	line-height: 1.35;
+	font-weight: 600;
+	color: var(--md-strong, var(--text));
+}
+.msg-body h1:first-child,
+.msg-body h2:first-child,
+.msg-body h3:first-child,
+.msg-body h4:first-child {
+	margin-top: 0;
+}
+
+.msg-body blockquote {
+	background: transparent;
+	border: none;
+	border-left: 2px solid color-mix(in srgb, var(--text) 22%, transparent);
+	margin: 0.35em 0;
+	padding: 2px 0 2px 10px;
+	color: var(--text-dim);
+}
+
+.msg-body hr {
+	margin: 0.5em 0;
+	border: none;
+	border-top: 1px solid var(--border);
+}
+
+.msg-body table {
+	background: transparent;
+	border-collapse: collapse;
+	border: 1px solid var(--border);
+	margin: 0.4em 0;
+	font-size: 13.5px;
+}
+
+.msg-body th,
+.msg-body td {
+	background: transparent;
+	border: 1px solid var(--border-soft);
+	padding: 4px 8px;
+}
+
+.msg-body code:not(pre code) {
+	background: var(--border-soft);
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	padding: 1px 4px;
+	font-size: 12.5px;
+	color: var(--text);
+}
+
+.msg-body pre {
+	background: var(--code-bg);
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	margin: 0.42em 0;
+	padding: 10px 14px;
+	line-height: 1.45;
+	font-size: 13px;
+}
+
+/* 工具调用与深度思考：Apple Vision 液态毛玻璃亚克力呼吸晶体微胶囊 */
+.toolcall,
+.thinking {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	vertical-align: middle;
+	box-sizing: border-box;
+	width: auto;
+	min-width: 0;
+	max-width: fit-content;
+	flex: 0 0 auto;
+	flex-shrink: 0;
+	height: 23px;
+	line-height: 21px;
+	margin: 0;
+	padding: 0 8px;
+	background: color-mix(in srgb, var(--text) 5%, transparent);
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	font-family: var(--mono, monospace);
+	font-size: 11px;
+	font-weight: 500;
+	cursor: pointer;
+	white-space: nowrap;
+	box-shadow:
+		inset 0 0.5px 0.5px color-mix(in srgb, var(--text) 22%, transparent),
+		0 2px 5px rgba(0, 0, 0, 0.35);
+	backdrop-filter: blur(12px) saturate(140%);
+	-webkit-backdrop-filter: blur(12px) saturate(140%);
+	transition:
+		background 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+		border-color 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+		box-shadow 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+	overflow: hidden;
+	contain: layout paint;
+	user-select: none;
+	text-decoration: none;
+}
+
+.toolcall:hover,
+.thinking:hover {
+	background: var(--border);
+	border-color: color-mix(in srgb, var(--text) 22%, transparent);
+	box-shadow:
+		inset 0 1px 1px rgba(255, 255, 255, 0.35),
+		0 4px 10px rgba(0, 0, 0, 0.45);
+	transform: translateY(-1px);
+	transition:
+		background 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+		border-color 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+		box-shadow 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+		transform 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* 状态氛围点睛 */
+.toolcall.run {
+	border-color: rgba(245, 158, 11, 0.45);
+	box-shadow:
+		inset 0 0.5px 0.5px rgba(255, 255, 255, 0.25),
+		0 0 10px rgba(245, 158, 11, 0.25);
+}
+.toolcall.ok {
+	border-color: rgba(52, 211, 153, 0.25);
+}
+.toolcall.err {
+	border-color: rgba(248, 113, 113, 0.45);
+	box-shadow:
+		inset 0 0.5px 0.5px rgba(255, 255, 255, 0.25),
+		0 0 10px rgba(239, 68, 68, 0.25);
+}
+
+.thinking {
+	border-color: rgba(192, 132, 252, 0.25);
+}
+.thinking:hover {
+	border-color: rgba(192, 132, 252, 0.45);
+}
+.thinking.run {
+	border-color: rgba(192, 132, 252, 0.5);
+	box-shadow:
+		inset 0 0.5px 0.5px rgba(255, 255, 255, 0.25),
+		0 0 10px rgba(192, 132, 252, 0.25);
+}
+
+/* 隐藏流内大图缩略图（由点击居中弹窗展示大图） */
+.toolcall-images,
+.toolcall-image,
+.toolcall .toolcall-images {
+	display: none;
+}
+
+/* 卡头：自适应内容宽度，严格水平对齐 */
+.toolcall .toolcall-head,
+.toolcall .chead,
+.thinking .chead {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	vertical-align: middle;
+	box-sizing: border-box;
+	width: auto;
+	min-width: 0;
+	max-width: fit-content;
+	min-height: unset;
+	height: 100%;
+	padding: 0;
+	margin: 0;
+	border: none;
+	border-top: none;
+	border-bottom: none;
+	background: transparent;
+	gap: 4px;
+	box-shadow: none;
+	line-height: 1;
+	flex: 0 0 auto;
+	flex-shrink: 0;
+	white-space: nowrap;
+}
+
+/* 隐藏原地折叠、复制、长命令与长路径等干扰元素 */
+.toolcall .chead-toggle,
+.toolcall .toolcall-toggle,
+.toolcall .toolcall-spacer,
+.toolcall .chead-copy,
+.toolcall .toolcall-copy,
+.toolcall .toolcall-path,
+.toolcall .toolcall-cmd,
+.toolcall .toolcall-query,
+.toolcall .toolcall-timeout,
+.toolcall .toolcall-agent,
+.toolcall .toolcall-open,
+.toolcall .toolcall-kill,
+.toolcall .toolcall-duration,
+.thinking .chead-toggle,
+.thinking .thinking-toggle,
+.thinking .chead-copy,
+.thinking .thinking-copy,
+.thinking .thinking-spacer,
+.thinking .thinking-summary-text,
+.thinking .thinking-preview-live,
+.thinking .thinking-preview-viewport,
+.thinking .thinking-preview-track,
+.thinking .thinking-preview-prefix,
+.thinking .thinking-live-label,
+.thinking-summary {
+	display: none;
+}
+
+.chead-icon,
+.chead-icon.thinking-icon,
+.chead-icon.toolcall-icon,
+.toolcall-icon,
+.toolcall-head svg,
+.thinking-icon,
+.thinking svg {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 12px;
+	height: 12px;
+	padding: 0;
+	margin: 0;
+	border-radius: 0;
+	background: transparent;
+	flex: none;
+	opacity: 0.85;
+	font-size: 10px;
+}
+
+.toolcall-name,
+.chead-title.toolcall-name,
+.thinking-name,
+.thinking-label,
+.chead-title.thinking-label {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	line-height: 1;
+	font-size: 11px;
+	font-weight: 500;
+	color: #f1f5f9;
+	padding: 0;
+	margin: 0;
+	flex: none;
+	min-width: unset;
+	max-width: unset;
+	letter-spacing: 0.02em;
+}
+
+.thinking .thinking-name {
+	color: #f1f5f9;
+}
+.thinking .thinking-icon,
+.thinking .thinking-status {
+	color: #c084fc;
+	filter: drop-shadow(0 0 4px rgba(192, 132, 252, 0.75));
+}
+
+/* 语义化工具微光宝石呼吸灯 */
+.toolcall-icon.tc-tone-exec {
+	color: #38bdf8;
+	filter: drop-shadow(0 0 4px rgba(56, 189, 248, 0.75));
+}
+.toolcall-icon.tc-tone-read,
+.toolcall-icon.tc-tone-search {
+	color: #34d399;
+	filter: drop-shadow(0 0 4px rgba(52, 211, 153, 0.75));
+}
+.toolcall-icon.tc-tone-edit {
+	color: #fbbf24;
+	filter: drop-shadow(0 0 4px rgba(251, 191, 36, 0.75));
+}
+.toolcall-icon.tc-tone-code {
+	color: #e879f9;
+	filter: drop-shadow(0 0 4px rgba(232, 121, 249, 0.75));
+}
+.toolcall-icon.tc-tone-agent {
+	color: #f87171;
+	filter: drop-shadow(0 0 4px rgba(248, 113, 113, 0.75));
+}
+
+.toolcall.ok .toolcall-status {
+	color: #34d399;
+	filter: drop-shadow(0 0 3px rgba(52, 211, 153, 0.6));
+}
+.toolcall.err .toolcall-status {
+	color: #f87171;
+	filter: drop-shadow(0 0 4px rgba(248, 113, 113, 0.8));
+}
+
+.toolcall-status,
+.thinking-status {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	vertical-align: middle;
+	width: 11px;
+	height: 11px;
+	font-size: 9px;
+	flex: none;
+	margin: 0;
+	padding: 0;
+}
+.toolcall-status > svg,
+.toolcall-status svg,
+.thinking-status > svg,
+.thinking-status svg {
+	width: 10px;
+	height: 10px;
+	margin: 0;
+	padding: 0;
+}
+.thinking-status .spin,
+.toolcall-status .spin,
+.toolcall-status .half-ring-spin,
+.thinking-status .half-ring-spin,
+.toolcall.run .toolcall-status svg,
+.toolcall.run .toolcall-status-icon svg {
+	animation: spin 0.85s linear infinite;
+	transform-origin: center center;
+}
+
+/* 输出徽标：图片 🖼️、Markdown 📝 等行内小微标 */
+.toolcall-out-badge {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	vertical-align: middle;
+	width: 11px;
+	height: 11px;
+	font-size: 9.5px;
+	margin: 0;
+	padding: 0;
+	flex: none;
+	opacity: 0.85;
+}
+.toolcall-out-badge.img {
+	color: #3b82f6;
+}
+.toolcall-out-badge.md {
+	color: #a78bfa;
+}
+.toolcall-out-badge svg {
+	width: 10px;
+	height: 10px;
+	margin: 0;
+	padding: 0;
+}
+
+/* 附件也是一个“字”：混排在同一输入流中，外边距清零由 gap 管理 */
+.msg-queued-atts-bar {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	margin: 0;
+	padding: 0;
+}
+.queued-att-chip,
+.attach-chip {
+	display: inline-flex;
+	align-items: center;
+	vertical-align: middle;
+	box-sizing: border-box;
+	height: 22px;
+	line-height: 20px;
+	margin: 0;
+	padding: 0 7px;
+	font-size: 11px;
+	border-radius: 6px;
+	background: var(--code-bg);
+	border: 1px solid var(--border);
+	color: var(--control-fg, var(--text));
+}
+
+/* 正文自成段落倾泻，与上方工具流保持舒适间距。
+   注意：正文块必须保持块级 —— 用户要的是「正文前后都断行，只有连续胶囊才连排」，
+   行内化正文会把它和胶囊焊在同一行，那就又乱了。 */
+.msg-assistant .msg-text {
+	display: block;
+	padding: 0;
+	margin: 8px 0 0 0;
+}
+/* 单行正文保持「正文 + 复制键」的同一条 flex 行（仍是块级：前后照样断行），
+   否则复制键会被挤到正文下面单独占一行。 */
+.msg-assistant .msg-text.single {
+	display: flex;
+}
+.msg-assistant .msg-text > .markdown {
+	display: inline;
+}
+.msg-assistant .msg-text > .markdown > p:first-child {
+	display: inline;
+	margin: 0;
+}
+
+/* 彻底隐藏原地展开内容，点击由居中检查器弹窗接管 */
+.toolcall-body,
+.thinking-body {
+	display: none;
+}
+
+.msg-actions {
+	opacity: 0.3;
+	margin-top: 2px;
+	transition: opacity 0.15s ease;
+}
+.msg-assistant:hover .msg-actions,
+.msg-user:hover .msg-actions {
+	opacity: 1;
+}
+
+/* ========================================================
+   用户消息气泡：克制典雅的暗炭微卡片（无边框纯净融合）
+   ======================================================== */
+.msg-user {
+	background: transparent;
+	box-shadow: none;
+	margin: 6px 0 2px 0;
+}
+
+.msg-user .msg-body {
+	background: var(--card-bg, var(--bg-elev));
+	border: none;
+	border-radius: 14px;
+	padding: 8px 14px;
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+	backdrop-filter: none;
+	-webkit-backdrop-filter: none;
+	color: var(--text);
+}
+
+/* ========================================================
+   输入框与控件（复刻 OpenAI Codex 桌面悬浮岛）
+   ======================================================== */
+.inputbox {
+	background: var(--card-bg, var(--bg-elev));
+	border: 1px solid var(--border);
+	border-radius: 18px;
+	box-shadow:
+		0 4px 24px rgba(0, 0, 0, 0.45),
+		0 1px 2px rgba(0, 0, 0, 0.3);
+	backdrop-filter: none;
+	-webkit-backdrop-filter: none;
+	transition:
+		border-color 0.2s ease,
+		box-shadow 0.2s ease;
+}
+
+.inputbox:focus-within {
+	border-color: rgba(255, 255, 255, 0.2);
+	box-shadow:
+		0 6px 32px rgba(0, 0, 0, 0.55),
+		0 0 0 1px var(--border);
+}
+
+.inputbox textarea {
+	background: transparent;
+	color: var(--md-strong, var(--text));
+}
+
+.composer-tools,
+.composer-tools-left,
+.composer-tools-center,
+.composer-tools-right {
+	color: var(--text-dim);
+}
+
+.composer-tools .chip {
+	background: #181818;
+	border: 1px solid var(--border);
+	color: var(--control-fg, var(--text));
+	box-shadow: none;
+	border-radius: 12px;
+	transition:
+		background 0.15s ease,
+		border-color 0.15s ease,
+		color 0.15s ease;
+}
+
+.composer-tools .chip:hover {
+	background: #282828;
+	border-color: rgba(255, 255, 255, 0.16);
+	color: var(--md-strong, var(--text));
+}
+
+.composer-tools .chip > span,
+.composer-tools .chip > span.chip-model,
+.composer-tools .chip > span.chip-sub,
+.composer-tools .chip-sub {
+	color: var(--control-fg, var(--text));
+	opacity: 0.95;
+}
+
+.inputbox .composer-tools-left button:hover,
+.inputbox .btn.composer-plugin-action:hover,
+.inputbox .composer-tools-left .btn:hover {
+	background: var(--border);
+}
+
+.composer-tools .chip,
+.composer-tools .chip:hover,
+.composer-tools .dropdown > button,
+.composer-tools .dropdown > button:hover,
+.dropdown > button.chip,
+.dropdown > button.chip:hover {
+	border-radius: 12px;
+}
+
+.inputbox .btn.send {
+	background: var(--accent);
+	border-color: var(--accent);
+	color: var(--accent-contrast, #fff);
+	border-radius: 50%;
+	width: 32px;
+	height: 32px;
+	min-width: 32px;
+	padding: 0;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+.inputbox .btn.send svg {
+	stroke: var(--accent-contrast, #fff);
+	color: var(--accent-contrast, #fff);
+	stroke-width: 2.5;
+}
+.inputbox .btn.send:hover:not(:disabled) {
+	background: var(--accent);
+	border-color: var(--accent);
+	color: var(--accent-contrast, #fff);
+	opacity: 0.92;
+	box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 30%, transparent);
+	transform: translateY(-1px);
+}
+.inputbox .btn.send:disabled {
+	opacity: 0.35;
+	box-shadow: none;
+	cursor: default;
+}
+.inputbox .btn.send:disabled svg {
+	stroke: var(--accent-contrast, #fff);
+	color: var(--accent-contrast, #fff);
+}
+
+.inputbox .split-send {
+	background: var(--accent);
+	border-color: var(--accent);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+	border-radius: 18px;
+}
+.inputbox .split-send button {
+	color: var(--accent-contrast, #fff);
+}
+.inputbox .split-send button svg {
+	stroke: var(--accent-contrast, #fff);
+	color: var(--accent-contrast, #fff);
+}
+.inputbox .split-send .split-queue {
+	background: color-mix(in srgb, var(--accent-contrast, #000) 10%, transparent);
+}
+.inputbox .split-send button + button {
+	border-left: 1px solid rgba(0, 0, 0, 0.15);
+}
+.inputbox .split-send:hover {
+	background: #f4f4f4;
+	border-color: var(--md-strong, var(--text));
+	box-shadow: 0 0 14px rgba(255, 255, 255, 0.3);
+}
+.inputbox .split-send button:hover:not(:disabled) {
+	background: rgba(0, 0, 0, 0.08);
+}
+
+/* 快捷指令/快捷短语胶囊：悬浮、背景透明、磨砂毛玻璃浮空质感 */
+.quick-chip {
+	background: rgba(33, 33, 33, 0.48);
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	box-shadow:
+		0 4px 16px rgba(0, 0, 0, 0.28),
+		0 1px 3px rgba(0, 0, 0, 0.2),
+		inset 0 1px 0 var(--border);
+	backdrop-filter: blur(14px) saturate(140%);
+	-webkit-backdrop-filter: blur(14px) saturate(140%);
+	color: #e0e0e0;
+	transition:
+		transform 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+		box-shadow 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+		border-color 0.18s ease,
+		background 0.18s ease,
+		color 0.18s ease;
+}
+
+.quick-chip:hover:not(:disabled) {
+	transform: translateY(-2px);
+	background: rgba(45, 45, 45, 0.72);
+	border-color: rgba(255, 255, 255, 0.28);
+	box-shadow:
+		0 8px 24px rgba(0, 0, 0, 0.42),
+		0 2px 6px rgba(0, 0, 0, 0.25),
+		inset 0 1px 0 color-mix(in srgb, var(--text) 14%, transparent);
+	color: var(--md-strong, var(--text));
+}
+
+.quick-chip:active:not(:disabled) {
+	transform: translateY(0) scale(0.97);
+	box-shadow:
+		0 2px 8px rgba(0, 0, 0, 0.24),
+		inset 0 1px 0 color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+/* 底部候选操作建议（同属快捷指令交互）：悬浮透明毛玻璃 */
+.action-suggestion-chip {
+	background: rgba(33, 33, 33, 0.48);
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	box-shadow:
+		0 4px 16px rgba(0, 0, 0, 0.28),
+		0 1px 3px rgba(0, 0, 0, 0.2),
+		inset 0 1px 0 var(--border);
+	backdrop-filter: blur(14px) saturate(140%);
+	-webkit-backdrop-filter: blur(14px) saturate(140%);
+	color: #e0e0e0;
+	transition:
+		transform 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+		box-shadow 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+		border-color 0.18s ease,
+		background 0.18s ease,
+		color 0.18s ease;
+}
+
+.action-suggestion-chip:hover:not(:disabled) {
+	transform: translateY(-2px);
+	background: rgba(45, 45, 45, 0.72);
+	border-color: rgba(255, 255, 255, 0.28);
+	box-shadow:
+		0 8px 24px rgba(0, 0, 0, 0.42),
+		0 2px 6px rgba(0, 0, 0, 0.25),
+		inset 0 1px 0 color-mix(in srgb, var(--text) 14%, transparent);
+	color: var(--md-strong, var(--text));
+}
+
+.action-suggestion-chip:active:not(:disabled) {
+	transform: translateY(0) scale(0.97);
+}
+
+/* 浮层与弹窗 */
+.dd-menu,
+.ctx-menu,
+.pm-panel,
+.modal-dialog {
+	background: var(--card-bg, var(--bg-elev));
+	border: 1px solid var(--border);
+	box-shadow:
+		0 16px 40px rgba(0, 0, 0, 0.65),
+		inset 0 1px 0 color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+[data-pi-floating-panel],
+.floating-panel {
+	background: var(--card-bg, var(--bg-elev));
+	border: 1px solid var(--border);
+	box-shadow:
+		0 12px 32px rgba(0, 0, 0, 0.55),
+		inset 0 1px 0 color-mix(in srgb, var(--text) 4%, transparent);
+	color: var(--text);
+}
+
+/* ---------------- 工具详情检查器弹窗（Tool Inspector Modal） ---------------- */
+.pi-we-inspector-backdrop {
+	position: fixed;
+	inset: 0;
+	z-index: 100000;
+	background: var(--sunken-bg, rgba(4, 6, 12, 0.72));
+	backdrop-filter: blur(10px) saturate(120%);
+	-webkit-backdrop-filter: blur(10px) saturate(120%);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 20px;
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.pi-we-inspector-backdrop.open {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+.pi-we-inspector-dialog {
+	position: relative;
+	width: 760px;
+	max-width: 92vw;
+	max-height: 82vh;
+	display: flex;
+	flex-direction: column;
+	background: var(--card-bg, var(--bg-elev));
+	border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+	border-radius: 14px;
+	box-shadow:
+		0 20px 50px rgba(0, 0, 0, 0.85),
+		0 0 20px var(--border);
+	color: var(--text);
+	font-family:
+		system-ui,
+		-apple-system,
+		sans-serif;
+	overflow: hidden;
+	transform: scale(0.96) translateY(10px);
+	transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.pi-we-inspector-backdrop.open .pi-we-inspector-dialog {
+	transform: scale(1) translateY(0);
+}
+
+.pi-we-inspector-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 12px 18px;
+	background: var(--bg-elev2, var(--bg-elev));
+	border-bottom: 1px solid var(--border);
+	gap: 12px;
+	flex-shrink: 0;
+}
+
+.pi-we-inspector-title-group {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.pi-we-inspector-icon {
+	width: 24px;
+	height: 24px;
+	border-radius: 6px;
+	background: color-mix(in srgb, var(--text) 10%, transparent);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 13px;
+	color: var(--text);
+	flex-shrink: 0;
+}
+
+.pi-we-inspector-title {
+	font-family: var(--mono, monospace);
+	font-weight: 700;
+	font-size: 14.5px;
+	color: var(--text);
+	white-space: nowrap;
+	text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+
+.pi-we-inspector-badge {
+	font-family: var(--mono, monospace);
+	font-size: 11px;
+	padding: 2px 7px;
+	border-radius: 4px;
+	background: color-mix(in srgb, var(--text) 8%, transparent);
+	border: 1px solid rgba(255, 255, 255, 0.15);
+	color: var(--text-dim);
+	white-space: nowrap;
+}
+
+.pi-we-inspector-badge.ok {
+	background: rgba(74, 222, 128, 0.15);
+	border-color: rgba(74, 222, 128, 0.4);
+	color: var(--green);
+}
+
+.pi-we-inspector-badge.run {
+	background: rgba(251, 191, 36, 0.15);
+	border-color: rgba(251, 191, 36, 0.4);
+	color: var(--amber);
+}
+
+.pi-we-inspector-badge.err {
+	background: rgba(248, 113, 113, 0.15);
+	border-color: rgba(248, 113, 113, 0.4);
+	color: var(--red-text);
+}
+
+.pi-we-inspector-actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-shrink: 0;
+}
+
+.pi-we-inspector-btn {
+	background: color-mix(in srgb, var(--text) 8%, transparent);
+	border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+	border-radius: 6px;
+	color: var(--text);
+	font-size: 12px;
+	padding: 5px 10px;
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	transition: all 0.15s ease;
+	text-shadow: 0 1px 1px rgba(0, 0, 0, 0.8);
+}
+
+.pi-we-inspector-btn:hover {
+	background: color-mix(in srgb, var(--text) 16%, transparent);
+	border-color: rgba(255, 255, 255, 0.35);
+	color: var(--text);
+}
+
+.pi-we-inspector-close {
+	padding: 5px 8px;
+	font-size: 14px;
+	line-height: 1;
+}
+
+.pi-we-inspector-body {
+	flex: 1;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	padding: 16px 20px 24px;
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+
+.pi-we-inspector-section {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.pi-we-inspector-label {
+	font-size: 12px;
+	font-weight: 600;
+	color: #94a3b8;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.pi-we-inspector-codeblock {
+	background: rgba(4, 6, 12, 0.85);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 12px 14px;
+	font-family: var(--mono, monospace);
+	font-size: 12.5px;
+	line-height: 1.55;
+	color: var(--text);
+	white-space: pre-wrap;
+	word-break: break-all;
+	overflow-x: auto;
+	max-height: 40vh;
+	margin: 0;
+	text-shadow: 0 1px 1px rgba(0, 0, 0, 0.9);
+}
+
+.pi-we-inspector-thinking-text {
+	background: rgba(18, 14, 28, 0.65);
+	border: 1px solid rgba(168, 85, 247, 0.25);
+	border-radius: 8px;
+	padding: 14px 16px;
+	font-size: 13.5px;
+	line-height: 1.68;
+	color: var(--text);
+	white-space: pre-wrap;
+	word-break: break-word;
+	max-height: 55vh;
+	overflow-y: auto;
+	margin: 0;
+	text-shadow: 0 1px 1.5px rgba(0, 0, 0, 0.9);
+}
+
+/* 富媒体文件展示预览（针对 present_files 与文件交付） */
+.pi-we-ins-preview-wrap {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+.pi-we-ins-preview-meta {
+	background: color-mix(in srgb, var(--text) 4%, transparent);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 12px 14px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.pi-we-ins-preview-title {
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--text);
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.pi-we-ins-preview-note {
+	font-size: 12.5px;
+	line-height: 1.55;
+	color: var(--text-dim);
+	word-break: break-word;
+}
+
+.pi-we-ins-preview-card {
+	background: color-mix(in srgb, var(--text) 5%, transparent);
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	padding: 12px 14px;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+
+.pi-we-ins-preview-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+}
+
+.pi-we-ins-preview-info {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.pi-we-ins-preview-icon {
+	font-size: 18px;
+	line-height: 1;
+}
+
+.pi-we-ins-preview-name {
+	font-family: var(--mono, monospace);
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.pi-we-ins-preview-caption {
+	font-size: 11.5px;
+	color: var(--text-dim);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.pi-we-ins-preview-actions {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-shrink: 0;
+}
+
+.pi-we-ins-btn-sm {
+	background: color-mix(in srgb, var(--text) 8%, transparent);
+	border: 1px solid rgba(255, 255, 255, 0.15);
+	border-radius: 4px;
+	color: var(--text);
+	font-size: 11px;
+	padding: 3px 7px;
+	cursor: pointer;
+	text-decoration: none;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	transition: all 0.15s ease;
+}
+
+.pi-we-ins-btn-sm:hover {
+	background: color-mix(in srgb, var(--text) 18%, transparent);
+	border-color: rgba(255, 255, 255, 0.3);
+}
+
+.pi-we-ins-preview-media {
+	width: 100%;
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	background: rgba(0, 0, 0, 0.35);
+	border-radius: 6px;
+	padding: 8px;
+	overflow: hidden;
+}
+
+.pi-we-ins-preview-img {
+	max-width: 100%;
+	max-height: 380px;
+	object-fit: contain;
+	border-radius: 4px;
+}
+
+.pi-we-ins-preview-audio {
+	width: 100%;
+	height: 36px;
+}
+
+.pi-we-ins-preview-video {
+	max-width: 100%;
+	max-height: 380px;
+	border-radius: 4px;
+	background: #000;
+}
+
+/* 角标防白底白字：当 --accent 为纯白时，顶栏实体胶囊角标反色为深色，后台任务保持红底白字（底栏透明徽标保持 var(--accent) 纯白高亮） */
+.topbar .bar-item-badge:not(.bg-task-badge) {
+	color: #000000;
+}
+
+/* 主操作按钮防白底白字：实底按钮前景走 --accent-contrast */
+.btn.primary,
+.cwd-choose-btn.primary {
+	color: var(--accent-contrast, #000000);
+}
+
+/* ========================================================
+   字级输入流系统（Character-Level Inline Stream）
+   --------------------------------------------------------
+   一个回合的全部助手产出装进同一个 .flow-turn —— 一个弹性行流容器：
+   · 胶囊（.toolcall / .thinking / .thinking-wait）：行内项，横排、满了换行，
+     同一行 align-items:center + 统一 22px 高度 → 永远互相对齐；
+   · 其余内容（正文 / 附件 / 报错 / 折叠卡）：100% 宽项 → 独占整行，正文前后必断行；
+   · 间距单源：容器 gap（行列同值）+ 正文项外边距，不让每个元素各自 margin 打架。
+
+   ⚠ 为什么这里不再需要 `#root` 前缀（原先为了压过基线而加的 ID 权重已撤销）：
+   全项目样式改为显式分层（`@layer guard, base, theme;`）：基线 styles.css 落在
+   `base` 层，本主题样式表由服务端整体包进 `theme` 层。普通声明里**靠后的层恒压过
+   靠前的层**，与选择器权重无关 —— 所以基线那条靠「类选择器军备竞赛」堆出来的
+   `.main.hide-model-row .msg-assistant .toolcall`（4 个类）在 theme 层面前自然失效，
+   本主题的布局只由本主题说了算，不需要再挂 ID。
+
+   ⚠ 为什么本段整体放在文件末尾：
+   分层只解决「主题 vs 基线」，不解决「本主题内部」的先后问题 —— 同权重仍看源顺序。
+   本段与通用消息排版（如 `.msg-assistant .msg-text` 的 margin，同为 2 个类）本来
+   就会遇到同权撞车，改造前靠 `#root` 的 ID 权重强行胜出；现在用最平权的办法等效：
+   把「特化规则」整段放在文件最后，同权重时靠源顺序取胜，任何选择器都不用加权重。
+   新增本主题的流布局规则时，写普通类选择器、放在本段里即可。
+   ======================================================== */
+
+.flow-turn {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	align-content: flex-start;
+	justify-content: flex-start;
+	gap: 8px;
+	width: 100%;
+	min-width: 0;
+	max-width: 100%;
+	margin: 4px 0 16px 0;
+	padding: 0;
+}
+
+/* 壳透明化：消息壳不再是排版单元，内部元素直接成为 .flow-turn 的弹性项 */
+.flow-turn > .msg,
+.flow-turn > .msg-assistant,
+.flow-turn > .msg .msg-body,
+.flow-turn > .msg-assistant .msg-body {
+	display: contents;
+	width: auto;
+}
+
+/* 元数据行（角色 / 时间）与消息级操作栏在流里没有位置：收起。
+   复制走正文自带的复制键 / 卡头的 .chead-copy。 */
+.flow-turn .msg-meta,
+.flow-turn > .msg > .msg-meta,
+.flow-turn > .msg-assistant > .msg-meta,
+.flow-turn .msg-actions,
+.flow-turn > .msg > .msg-actions,
+.flow-turn > .msg-assistant > .msg-actions {
+	display: none;
+}
+
+/* 默认：除胶囊以外的一切（正文 / 附件卡 / 报错 / 技能卡 / 折叠卡 / 工具输出…）
+   都是 100% 宽项 —— 独占整行，前后自动断行，且不吃任何外边距（间距只由 gap 定）。 */
+.flow-turn .msg-body > * {
+	flex: 0 0 100%;
+	min-width: 0;
+	max-width: 100%;
+	margin: 0;
+}
+
+/* 胶囊是行内项：宽度按内容、行内垂直居中（同一行内绝对对齐） */
+.flow-turn .toolcall,
+.flow-turn .thinking,
+.flow-turn .thinking-wait {
+	flex: 0 0 auto;
+	align-self: center;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	box-sizing: border-box;
+	width: auto;
+	min-width: 0;
+	max-width: fit-content;
+	/* 高度单源：工具 / 思考 / 等待指示器全部 22px，避免 22/23 混用导致错半行 */
+	height: 22px;
+	line-height: 20px;
+	margin: 0;
+	padding: 0 7px;
+	overflow: hidden;
+	contain: layout paint;
+	white-space: nowrap;
+}
+.flow-turn .thinking-wait {
+	font-size: 11px;
+	font-family: var(--mono, monospace);
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--text) 5%, transparent);
+	border: 1px solid var(--border);
+}
+
+/* 消除兄弟选择器在行内流中对卡头施加的任何 border 细线 */
+.flow-turn .chead,
+.flow-turn .thinking .chead,
+.flow-turn .toolcall .chead,
+.flow-turn .toolcall + .toolcall .chead,
+.flow-turn .thinking + .toolcall .chead,
+.flow-turn .toolcall + .thinking .chead,
+.flow-turn * .chead {
+	border: none;
+	margin: 0;
+	padding: 0;
+}
+
+/* 正文：整行块（100% 宽项），上下再补一点留白，和胶囊行拉开呼吸感 */
+.flow-turn .msg-text {
+	padding: 0;
+	margin: 6px 0;
+}

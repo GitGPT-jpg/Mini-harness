@@ -1,0 +1,1061 @@
+{
+	"manifest_extName": {
+		"message": "pi-web-ui 元素拾取"
+	},
+	"manifest_extDescription": {
+		"message": "在开发网页上拾取元素，把 DOM 结构、命中的 CSS（文件:行号）与 React/Vue 源码位置整理成上下文，一键注入 pi-web-ui 对话输入框；在 pi-web-ui 页面上点图标即可绑定服务地址；页面桥可让两个配对过的页面互相读写。"
+	},
+	"manifest_actionTitle": {
+		"message": "拾取网页元素（添加到 pi-web-ui 对话）"
+	},
+	"manifest_commandTogglePicking": {
+		"message": "开始拾取网页元素"
+	},
+
+	"options_title": {
+		"message": "pi-web-ui 元素拾取 · 设置"
+	},
+	"options_hint": {
+		"message": "在开发网页上按扩展图标（或 $1）开始拾取，选中的元素会整理成上下文注入 pi-web-ui 的输入框，你补一句说明再发送。"
+	},
+	"options_serverSection": {
+		"message": "pi-web-ui 服务"
+	},
+	"options_serverUrlLabel": {
+		"message": "服务地址"
+	},
+	"options_serverUrlPlaceholder": {
+		"message": "http://127.0.0.1:8787"
+	},
+	"options_tokenLabel": {
+		"message": "访问口令 PI_WEB_TOKEN"
+	},
+	"options_tokenPlaceholder": {
+		"message": "没开鉴权就留空"
+	},
+	"options_grantButton": {
+		"message": "授权该地址"
+	},
+	"options_grantButtonDone": {
+		"message": "已授权"
+	},
+	"options_testButton": {
+		"message": "测试连接"
+	},
+	"options_serverHint": {
+		"message": "只预置了 <code>localhost</code> / <code>127.0.0.1</code> 的权限。换成局域网 IP、域名或 https 地址（<b>远程部署就是这种</b>）后：先点「授权该地址」。<br /><b>更省事的办法：直接在 pi-web-ui 页面上点扩展图标</b> —— 扩展会认出那个页面，在页面上问你「要不要把它设为服务地址」，地址和端口都不用手打。<br />投递是往<b>浏览器里打开的那个 pi-web-ui 页面</b>注入内容的，所以这个地址的页面得开着（可以在另一个标签页/窗口，不必是当前标签）；页面关着时会退化成「复制 Markdown 到剪贴板」。"
+	},
+	"options_bindTitleNotSame": {
+		"message": "检测到 pi-web-ui 页面"
+	},
+	"options_bindTitleGranted": {
+		"message": "把 $1 设为服务地址？"
+	},
+	"options_bindBodyGranted": {
+		"message": "该地址已授权，点下面按钮就能绑定（之后在别的页面拾取的内容都注入到这里）。"
+	},
+	"options_bindBodyNotGranted": {
+		"message": "浏览器要求在本页点一次才能授权 $1；点下面按钮即可授权并绑定。"
+	},
+	"options_bindAcceptGranted": {
+		"message": "设为服务地址"
+	},
+	"options_bindAcceptNotGranted": {
+		"message": "授权并绑定"
+	},
+	"options_bindDismiss": {
+		"message": "忽略"
+	},
+	"options_aiControlSection": {
+		"message": "AI 操作页面（让模型能读写网页）"
+	},
+	"options_aiControlHint": {
+		"message": "授权之后，模型在对话里就能用 <code>browser_page</code> 工具操作那个页面：<code>read</code>（读文本 / 查元素）、<code>click</code>、<code>type</code>、<code>scroll</code>、<code>goto</code>、<code>wait</code>，以及开关打开后的 <code>eval</code>（执行任意 JS）。<br /><strong>另一端固定是 pi-web-ui 页面本身</strong>：模型的动作要从浏览器里那个 pi-web-ui 页面送进扩展，所以<b>那个标签页得开着</b>（与拾取投递同一个取舍）；这里只需要授权被操作的那个页面。<br /><strong>只对你信任的页面授权</strong>：授权后模型能点它、在它里面输入、读它的内容。可以随时收回。"
+	},
+	"options_aiControlToggle": {
+		"message": "允许 AI 操作页面（总开关）"
+	},
+	"options_aiControlToggleDesc": {
+		"message": "关掉后模型的所有页面动作会被直接拒绝"
+	},
+	"options_allowEvalToggle": {
+		"message": "允许执行任意 JS（eval，默认关）"
+	},
+	"options_allowEvalToggleDesc": {
+		"message": "开了等于把页面交给模型写的脚本：能改数据、能提交表单、能发请求"
+	},
+	"options_allowShotToggle": {
+		"message": "允许截图（默认开）"
+	},
+	"options_allowShotToggleDesc": {
+		"message": "模型能看到页面长什么样。<br /><b>打开它会申请「读取您在所有网站上的数据」</b>：浏览器的截图 API 只认这个权限（或你点图标那一刻的临时授权），普通授权不够。<br />另外截图只能截「当前活动标签页」，所以扩展会先把目标页切到前台、截完立刻切回（焦点会跳一下）。<br />不想给这个权限就保持关闭 —— 模型仍能靠 read 读 DOM 文本，只是“看不见”页面。"
+	},
+	"options_aiPageInputLabel": {
+		"message": "授权一个页面"
+	},
+	"options_aiPageInputPlaceholder": {
+		"message": "http://localhost:5173"
+	},
+	"options_aiGrantButton": {
+		"message": "授权该页面"
+	},
+	"options_aiHint": {
+		"message": "地址不用手打：在目标页面上点一次扩展图标，它就会出现在候选里；或者在开发页的拾取浮条上点「让 AI 操作本页…」，本页会自动预填好。"
+	},
+	"options_bridgeSection": {
+		"message": "页面桥（让两个页面互相读写）"
+	},
+	"options_bridgeHint": {
+		"message": "配对之后，这两个页面里的脚本可以互相调用：对端用 <code>window.__piBridge.on(\"readOrders\", () =&hellip;)</code> 注册能力，这边用 <code>await window.__piBridge.call({ op: \"readOrders\" })</code> 拿到结果。跨源、跨标签页、跨窗口都行 —— 浏览器里只有扩展能做到这件事。<br /><b>桥默认关闭</b>：只有下面列出的配对能通，两端的 host 权限由你在这里授权。被配对的页面里，<b>任何脚本</b>（包括第三方广告/统计脚本）都摸得到 <code>window.__piBridge</code>，所以<b>只对你信任的页面开桥</b>。"
+	},
+	"options_pairALabel": {
+		"message": "端点 A（origin）"
+	},
+	"options_pairBLabel": {
+		"message": "端点 B（origin）"
+	},
+	"options_pairNoteLabel": {
+		"message": "备注（可选）"
+	},
+	"options_pairNotePlaceholder": {
+		"message": "订单页 ↔ 本地工具页"
+	},
+	"options_pairAddButton": {
+		"message": "授权并添加配对"
+	},
+	"options_bridgeHint2": {
+		"message": "<b>地址不用手打</b>：在要配对的两个页面里各点一次扩展图标，它们就会出现在上面两个输入框的<b>候选下拉</b>里（点一下就填好了）；在开发页的拾取浮条上点「与另一页配对…」还能直接把本页预填好。<br />例子：在开发页里读线上后台的数据（<code>on(\"orders\", &hellip;)</code> 在后台页），或者让 A 页控制 B 页（<code>on(\"highlight\", ({id}) =&gt; document.querySelector(`#${id}`)?.scrollIntoView())</code>）。对端页面没打开、或者没注册那个 op 时会得到一句说明原因的错误，而不是「没反应」。"
+	},
+	"options_sendSection": {
+		"message": "发送什么（可多选）"
+	},
+	"options_sendHint": {
+		"message": "每一项都是一类信息，勾了就采、也发；没勾的<b>根本不采</b>（既省上下文也省时间）。嫌信息多就先挑一个预设，再按需增减。"
+	},
+	"options_presetLabel": {
+		"message": "预设"
+	},
+	"options_screenshotsToggle": {
+		"message": "采集元素截图"
+	},
+	"options_screenshotsToggleDesc": {
+		"message": "作为附件一并送进对话（纯文本模型请看视觉桥）"
+	},
+	"options_deliverSection": {
+		"message": "投递"
+	},
+	"options_copyToClipboardToggle": {
+		"message": "同时复制 Markdown 到剪贴板"
+	},
+	"options_copyToClipboardToggleDesc": {
+		"message": "注入失败时的兜底，建议开着"
+	},
+	"options_focusTargetToggle": {
+		"message": "注入后切到 pi-web-ui 标签页"
+	},
+	"options_focusTargetToggleDesc": {
+		"message": "关掉则留在当前网页继续看"
+	},
+	"options_resetButton": {
+		"message": "恢复默认"
+	},
+	"options_pairEmpty": {
+		"message": "还没有配对。桥默认关闭——只有列在这里的配对之间才能互相调用。"
+	},
+	"options_pairPermissionChecking": {
+		"message": "权限检查中…"
+	},
+	"options_pairBothGranted": {
+		"message": "两端已授权"
+	},
+	"options_pairMissingGrant": {
+		"message": "还缺授权：$patterns$",
+		"placeholders": { "patterns": { "content": "$1" } }
+	},
+	"options_pairCandidatePaired": {
+		"message": "$origin$（已配对）",
+		"placeholders": { "origin": { "content": "$1" } }
+	},
+	"options_pairEnabled": {
+		"message": "启用"
+	},
+	"options_pairDisabled": {
+		"message": "已停用"
+	},
+	"options_pairDelete": {
+		"message": "删除配对"
+	},
+	"options_aiEmpty": {
+		"message": "还没有授权任何页面 —— 模型现在没有可操作的页面。"
+	},
+	"options_aiRevoke": {
+		"message": "收回授权"
+	},
+
+	"status_saved": {
+		"message": "已保存"
+	},
+	"status_atLeastOne": {
+		"message": "至少要勾一项；全不勾会回落成标准组合"
+	},
+	"status_grantGranted": {
+		"message": "已授权 $pattern$",
+		"placeholders": { "pattern": { "content": "$1" } }
+	},
+	"status_grantNotGranted": {
+		"message": "未授权 $pattern$",
+		"placeholders": { "pattern": { "content": "$1" } }
+	},
+	"status_originNotGrantedAuthRequired": {
+		"message": "未授权 $pattern$ —— 非本机地址必须授权才能注入",
+		"placeholders": { "pattern": { "content": "$1" } }
+	},
+	"status_testingProbing": {
+		"message": "正在探测服务端…"
+	},
+	"status_serverOnlineWithTabs": {
+		"message": "服务端在线（cwd: $cwd$），已打开 $count$ 个 pi-web-ui 页面",
+		"placeholders": {
+			"cwd": { "content": "$1" },
+			"count": { "content": "$2" }
+		}
+	},
+	"status_serverOnlineNoTabs": {
+		"message": "服务端在线（cwd: $cwd$），但浏览器里还没打开这个页面 —— 投递需要它开着",
+		"placeholders": { "cwd": { "content": "$1" } }
+	},
+	"status_connectionFailed": {
+		"message": "连不上服务端：$error$（地址对吗？证书受信吗？）",
+		"placeholders": { "error": { "content": "$1" } }
+	},
+	"status_shotDisabled": {
+		"message": "已关闭截图：模型只能靠 read 读 DOM 文本"
+	},
+	"status_shotNeedPermission": {
+		"message": "截图需要「读取您在所有网站上的数据」权限：浏览器没给，已保持关闭"
+	},
+	"status_shotEnabled": {
+		"message": "已允许截图（截图时会把目标标签页切到前台，截完立刻切回）"
+	},
+	"status_bindAlreadyCurrent": {
+		"message": "已经是当前服务地址：$base$",
+		"placeholders": { "base": { "content": "$1" } }
+	},
+	"status_bindAlreadyCurrentBody": {
+		"message": "无需改动。要换地址就直接改上面的输入框（改完自动保存）。"
+	},
+	"status_bindSetAsServer": {
+		"message": "把 $base$ 设为服务地址？",
+		"placeholders": { "base": { "content": "$1" } }
+	},
+	"status_bindDetectedPage": {
+		"message": "检测到 pi-web-ui 页面：$base$",
+		"placeholders": { "base": { "content": "$1" } }
+	},
+	"status_bindAcceptGranted": {
+		"message": "设为服务地址"
+	},
+	"status_bindAcceptNotGranted": {
+		"message": "授权并绑定"
+	},
+	"status_bindBound": {
+		"message": "已绑定 $base$ —— 以后拾取的内容都注入到这里",
+		"placeholders": { "base": { "content": "$1" } }
+	},
+	"status_pairInvalid": {
+		"message": "配对不合法"
+	},
+	"status_pairNotGranted": {
+		"message": "没授权 $patterns$ —— 不授权就没法在对端页面里装桥，也执行不了调用",
+		"placeholders": { "patterns": { "content": "$1" } }
+	},
+	"status_pairAddedWithInstall": {
+		"message": "已配对 $a$ ↔ $b$；$count$ 个已打开的页面装上了桥",
+		"placeholders": {
+			"a": { "content": "$1" },
+			"b": { "content": "$2" },
+			"count": { "content": "$3" }
+		}
+	},
+	"status_pairAddedAuto": {
+		"message": "已配对 $a$ ↔ $b$（对端页面打开后会自动装桥）",
+		"placeholders": {
+			"a": { "content": "$1" },
+			"b": { "content": "$2" }
+		}
+	},
+	"status_pairEnabledWithInstall": {
+		"message": "已启用；$count$ 个已打开的页面装上了桥",
+		"placeholders": { "count": { "content": "$1" } }
+	},
+	"status_pairEnabledAuto": {
+		"message": "已启用（对端页面打开后自动装桥）"
+	},
+	"status_pairDisabled": {
+		"message": "已停用：那一对页面上的桥已卸下"
+	},
+	"status_pairDeletedWithUninstall": {
+		"message": "已删除；$count$ 个页面卸下了桥",
+		"placeholders": { "count": { "content": "$1" } }
+	},
+	"status_pairDeleted": {
+		"message": "已删除配对"
+	},
+	"status_pairDeepLinkFilled": {
+		"message": "已填入本页 $origin$ —— 在下面选另一个端点（两页都点过一次扩展图标就会出现在候选里）",
+		"placeholders": { "origin": { "content": "$1" } }
+	},
+	"status_aiInvalidAddress": {
+		"message": "地址不合法：要 http/https 的 origin，例如 http://localhost:5173"
+	},
+	"status_aiNotGranted": {
+		"message": "没授权 $pattern$ —— 不授权就没法在那个页面里装控制桥",
+		"placeholders": { "pattern": { "content": "$1" } }
+	},
+	"status_aiGrantedWithInstall": {
+		"message": "已授权 $origin$；$count$ 个已打开的页面已就绪",
+		"placeholders": {
+			"origin": { "content": "$1" },
+			"count": { "content": "$2" }
+		}
+	},
+	"status_aiGrantedAuto": {
+		"message": "已授权 $origin$（打开那个页面后自动就绪）",
+		"placeholders": { "origin": { "content": "$1" } }
+	},
+	"status_aiRevoked": {
+		"message": "已收回 $origin$ 的授权",
+		"placeholders": { "origin": { "content": "$1" } }
+	},
+	"status_aiDeepLinkFilled": {
+		"message": "已填入 $origin$ —— 点「授权该页面」，它就成为模型可操作的页面",
+		"placeholders": { "origin": { "content": "$1" } }
+	},
+
+	"deliver_noPermission": {
+		"message": "还没授权 $pattern$ —— 到扩展选项页点「授权该地址」$suffix$",
+		"placeholders": {
+			"pattern": { "content": "$1" },
+			"suffix": { "content": "$2" }
+		}
+	},
+	"deliver_noTab": {
+		"message": "没找到打开的 pi-web-ui 页面（$base$）$suffix$",
+		"placeholders": {
+			"base": { "content": "$1" },
+			"suffix": { "content": "$2" }
+		}
+	},
+	"deliver_injected": {
+		"message": "已添加到 pi-web-ui 输入框（$n$ 个元素），补充说明后发送",
+		"placeholders": { "n": { "content": "$1" } }
+	},
+	"deliver_noHost": {
+		"message": "这个 pi-web-ui 页面还不支持输入框注入（版本过旧），请更新 pi-web-ui 后刷新页面"
+	},
+	"deliver_notReady": {
+		"message": "pi-web-ui 输入框还没就绪，刷新页面后再试"
+	},
+	"deliver_injectFailed": {
+		"message": "注入 pi-web-ui 失败：$error$",
+		"placeholders": { "error": { "content": "$1" } }
+	},
+	"deliver_sendFailed": {
+		"message": "发送失败：$error$",
+		"placeholders": { "error": { "content": "$1" } }
+	},
+	"deliver_noElements": {
+		"message": "没有可发送的元素"
+	},
+	"deliver_copiedFallback": {
+		"message": "，Markdown 已复制到剪贴板"
+	},
+
+	"bridge_noHttpOrigin": {
+		"message": "页面桥只能从 http/https 页面上发起（或者该地址还没授权，读不到标签页地址）"
+	},
+	"bridge_badOp": {
+		"message": "$message$",
+		"placeholders": { "message": { "content": "$1" } }
+	},
+	"bridge_notPaired": {
+		"message": "$message$",
+	"placeholders": { "message": { "content": "$1" } }
+	},
+	"bridge_noPermission": {
+		"message": "还没授权 $pattern$ —— 到扩展选项页「页面桥」里点一次授权",
+		"placeholders": { "pattern": { "content": "$1" } }
+	},
+	"bridge_peerNotOpen": {
+		"message": "对端页面（$peer$）没打开 —— 先把它开在一个标签页里",
+		"placeholders": { "peer": { "content": "$1" } }
+	},
+	"bridge_callFailed": {
+		"message": "调用对端失败：$error$",
+		"placeholders": { "error": { "content": "$1" } }
+	},
+	"bridge_peerNoResult": {
+		"message": "对端没有返回结果"
+	},
+	"bridge_peerTimeout": {
+		"message": "对端在 $timeoutMs$ms 内没回",
+		"placeholders": { "timeoutMs": { "content": "$1" } }
+	},
+	"bridge_peerResultTooLarge": {
+		"message": "$message$",
+		"placeholders": { "message": { "content": "$1" } }
+	},
+	"bridge_peerResultLabel": {
+		"message": "对端返回的结果"
+	},
+	"bridge_peerCallFailed": {
+		"message": "$message$",
+		"placeholders": { "message": { "content": "$1" } }
+	},
+	"bridge_emptyResult": {
+		"message": "扩展后台返回了空结果（service worker 可能刚被回收）—— 重试一次"
+	},
+	"bridge_noResponse": {
+		"message": "扩展后台没响应：$error$",
+		"placeholders": { "error": { "content": "$1" } }
+	},
+	"bridge_resultNotClonable": {
+		"message": "对端结果传不回来：$error$",
+		"placeholders": { "error": { "content": "$1" } }
+	},
+	"bridge_callFailed3": {
+		"message": "页面桥失败：$error$",
+		"placeholders": { "error": { "content": "$1" } }
+	},
+	"bridge_injectFailed": {
+		"message": "页面桥注入失败：$error$",
+		"placeholders": { "error": { "content": "$1" } }
+	},
+	"bridge_bindFailed": {
+		"message": "绑定失败：$error$",
+		"placeholders": { "error": { "content": "$1" } }
+	},
+	"bridge_bridgesSyncFailed": {
+		"message": "$error$",
+		"placeholders": { "error": { "content": "$1" } }
+	},
+
+	"ai_statusDisabled": {
+		"message": "「AI 操作页面」已在扩展设置里关闭 —— 到选项页打开后再试"
+	},
+	"ai_opSeparator": {
+		"message": "、"
+	},
+	"ai_badOp": {
+		"message": "不支持的动作 \"$op$\"（支持：$ops$）",
+		"placeholders": {
+			"op": { "content": "$1" },
+			"ops": { "content": "$2" }
+		}
+	},
+	"ai_evalDisabled": {
+		"message": "「在页面里执行任意 JS」默认关闭 —— 到扩展选项页「AI 操作页面」里打开它再用 eval"
+	},
+	"ai_shotDisabled": {
+		"message": "「允许截图」已在扩展设置里关闭 —— 到选项页打开后再试（关掉时模型只能靠 read 读 DOM）"
+	},
+	"ai_noPermission": {
+		"message": "还没授权 $pattern$ —— 到扩展选项页「AI 操作页面」里授权该地址",
+		"placeholders": { "pattern": { "content": "$1" } }
+	},
+	"ai_pageNotOpen": {
+		"message": "页面（$peer$）没打开 —— 先把它开在一个标签页里",
+		"placeholders": { "peer": { "content": "$1" } }
+	},
+	"ai_shotPermissionNeeded": {
+		"message": "截图需要额外权限（读取所有网站数据）：到扩展选项页「AI 操作页面」里打开「允许截图」并授权；不想给这个权限就保持关闭（模型只能靠 read 读 DOM）"
+	},
+	"ai_targetNoId": {
+		"message": "目标标签页没有 id"
+	},
+	"ai_selectorNoMatch": {
+		"message": "选择器没匹上：$selector$",
+		"placeholders": { "selector": { "content": "$1" } }
+	},
+	"ai_screenshotFailed": {
+		"message": "截不到这个页面：$error$",
+		"placeholders": { "error": { "content": "$1" } }
+	},
+	"ai_elementNotInViewport": {
+		"message": "元素几乎不在视口里，截出来是碎图：$selector$",
+		"placeholders": { "selector": { "content": "$1" } }
+	},
+	"ai_screenshotFailedEmpty": {
+		"message": "截图失败（页面没有可截内容）"
+	},
+	"ai_optionsOpenFailed": {
+		"message": "打不开扩展设置页：$error$",
+		"placeholders": { "error": { "content": "$1" } }
+	},
+
+	"bindview_same_title": {
+		"message": "这个页面就是已绑定的 pi-web-ui"
+	},
+	"bindview_same_detail": {
+		"message": "$base$ —— 从别的页面拾取的内容会注入到这里。要在这个页面上拾取元素吗？",
+		"placeholders": { "base": { "content": "$1" } }
+	},
+	"bindview_notSame_title": {
+		"message": "这个页面是 pi-web-ui"
+	},
+	"bindview_notSame_detail": {
+		"message": "把拾取的服务地址从 $bound$ 改成 $base$ 吗？改完之后，拾取的内容都注入到本页。",
+		"placeholders": {
+			"bound": { "content": "$1" },
+			"base": { "content": "$2" }
+		}
+	},
+	"bindview_notSame_label": {
+		"message": "设为服务地址"
+	},
+	"bind_needAuth": {
+		"message": "还差一次授权（$pattern$）：浏览器要求这个动作在扩展自己的页面里点一下",
+		"placeholders": { "pattern": { "content": "$1" } }
+	},
+	"bind_saveFailed": {
+		"message": "保存失败：$error$",
+		"placeholders": { "error": { "content": "$1" } }
+	},
+	"bind_bound": {
+		"message": "已绑定 $base$ —— 以后拾取的内容都注入到这里",
+		"placeholders": { "base": { "content": "$1" } }
+	},
+
+	"bindbar_bindLabel": {
+		"message": "设为服务地址"
+	},
+	"bindbar_pickThisPage": {
+		"message": "在本页拾取元素"
+	},
+	"bindbar_openSettingsAuth": {
+		"message": "打开设置页授权"
+	},
+	"bindbar_close": {
+		"message": "关闭"
+	},
+	"bindbar_binding": {
+		"message": "正在绑定…"
+	},
+	"bindbar_bindFailedNoResponse": {
+		"message": "绑定失败：background 没响应，刷新页面后再试"
+	},
+	"bindbar_bindBound": {
+		"message": "已绑定 $base$",
+		"placeholders": { "base": { "content": "$1" } }
+	},
+	"bindbar_retryBind": {
+		"message": "重试绑定"
+	},
+
+	"picker_clickToPick": {
+		"message": "点击拾取元素"
+	},
+	"picker_continueOr": {
+		"message": "继续点击追加，或"
+	},
+	"picker_shiftClick": {
+		"message": "Shift+点击"
+	},
+	"picker_multiSelect": {
+		"message": "多选"
+	},
+	"picker_enter": {
+		"message": "Enter"
+	},
+	"picker_finish": {
+		"message": "完成"
+	},
+	"picker_esc": {
+		"message": "Esc"
+	},
+	"picker_exit": {
+		"message": "退出"
+	},
+	"picker_selected": {
+		"message": "已选 $count$",
+		"placeholders": { "count": { "content": "$1" } }
+	},
+	"picker_confirmThenAdd": {
+		"message": "确认后点「添加到对话」"
+	},
+	"picker_ctrlEnter": {
+		"message": "Ctrl+Enter"
+	},
+	"picker_sendDirectly": {
+		"message": "直接发送"
+	},
+	"picker_preset": {
+		"message": "预设"
+	},
+	"picker_notePlaceholder": {
+		"message": "整体说明（可选）：比如「这三处间距不一致」"
+	},
+	"picker_perElementNotePlaceholder": {
+		"message": "这个元素的问题（可选）"
+	},
+	"picker_addToDialog": {
+		"message": "添加到对话"
+	},
+	"picker_continuePick": {
+		"message": "继续选"
+	},
+	"picker_cancel": {
+		"message": "取消"
+	},
+	"picker_sending": {
+		"message": "发送中…"
+	},
+	"picker_addFailed": {
+		"message": "发送失败"
+	},
+	"picker_alreadyPicking": {
+		"message": "已经在拾取模式了"
+	},
+	"picker_alreadyInList": {
+		"message": "这个元素已经在列表里了"
+	},
+	"picker_pickFailed": {
+		"message": "拾取失败：$error$",
+		"placeholders": { "error": { "content": "$1" } }
+	},
+	"picker_resnapshotFailed": {
+		"message": "$count$ 个元素按新设置重采失败（保留原来的内容）",
+		"placeholders": { "count": { "content": "$1" } }
+	},
+	"picker_syncFailed": {
+		"message": "没同步到扩展设置（这次的选择只在本页生效）"
+	},
+	"picker_sendFailed": {
+		"message": "发送失败：$error$",
+		"placeholders": { "error": { "content": "$1" } }
+	},
+	"picker_grantHereSuccess": {
+		"message": "已在设置页预填本页 —— 点「授权该页面」即生效"
+	},
+	"picker_grantHereFailed": {
+		"message": "打不开设置页：请手动到扩展选项页里授权"
+	},
+	"picker_pairHereSuccess": {
+		"message": "已在设置页预填本页 —— 选另一个端点即可（另一个页面也要点过一次扩展图标）"
+	},
+	"picker_pairHereFailed": {
+		"message": "打不开设置页：请手动到扩展选项页里添加配对"
+	},
+	"picker_miniCheckingAuth": {
+		"message": "检查授权状态…"
+	},
+	"picker_miniGrantThisPage": {
+		"message": "让 AI 操作本页…"
+	},
+	"picker_miniPairWithPage": {
+		"message": "与另一页配对…"
+	},
+	"picker_miniExit": {
+		"message": "退出"
+	},
+	"picker_grantThisPageHint": {
+		"message": "授权后模型就能在对话里用 browser_page 工具读写这个页面（可随时在选项页收回）"
+	},
+	"picker_pairThisPageHint": {
+		"message": "把本页作为一个端点，去设置页选另一个页面（两个页面都点过扩展图标即可）"
+	},
+
+	"prompt_matchedCss": {
+		"message": "命中的 CSS："
+	},
+
+	"grant_checking_status": {
+		"message": "检查授权状态…"
+	},
+	"grant_checking_label": {
+		"message": "让 AI 操作本页…"
+	},
+	"grant_checking_hint": {
+		"message": "正在问扩展后台：本页有没有被授权给模型操作"
+	},
+	"grant_null_status": {
+		"message": "查不到授权状态"
+	},
+	"grant_null_label": {
+		"message": "让 AI 操作本页…"
+	},
+	"grant_null_hint": {
+		"message": "扩展后台没响应（它可能刚被回收）—— 仍然可以点，授权在扩展设置页完成"
+	},
+	"grant_notHttp_status": {
+		"message": "本页不是 http/https"
+	},
+	"grant_notHttp_label": {
+		"message": "让 AI 操作本页…"
+	},
+	"grant_notHttp_hint": {
+		"message": "模型只能操作普通网页（http/https）—— 浏览器内部页、扩展页、本地文件都不行"
+	},
+	"grant_unauthorized_status": {
+		"message": "未授权"
+	},
+	"grant_unauthorized_label": {
+		"message": "让 AI 操作本页…"
+	},
+	"grant_unauthorized_hint": {
+		"message": "让模型在对话里读写 $origin$（可随时在扩展设置页收回）—— 授权要在扩展自己的页面里点一下",
+		"placeholders": { "origin": { "content": "$1" } }
+	},
+	"grant_authorizedSwitchOff_status": {
+		"message": "已授权 · 总开关关着"
+	},
+	"grant_authorizedSwitchOff_label": {
+		"message": "已授权 · 打开设置页"
+	},
+	"grant_authorizedSwitchOff_hint": {
+		"message": "$name$ 已授权，但扩展设置页里的「允许 AI 操作页面」总开关是关着的 —— 打开它模型才能动手",
+		"placeholders": { "name": { "content": "$1" } }
+	},
+	"grant_authorizedOn_status": {
+		"message": "已授权 · 模型可操作本页"
+	},
+	"grant_authorizedOn_label": {
+		"message": "已授权 · 打开设置页"
+	},
+	"grant_authorizedOn_hint": {
+		"message": "$name$ 已授权：在对话里让模型操作这个页面即可（工具 browser_page）；收回授权在扩展设置页",
+		"placeholders": { "name": { "content": "$1" } }
+	},
+
+	"section_page_label": {
+		"message": "页面上下文"
+	},
+	"section_page_hint": {
+		"message": "URL / 标题 / 视口 / 疑似框架"
+	},
+	"section_selector_label": {
+		"message": "定位信息"
+	},
+	"section_selector_hint": {
+		"message": "选择器 + 标签名 + 尺寸（改代码时几乎总要）"
+	},
+	"section_locator_label": {
+		"message": "XPath 与 DOM 路径"
+	},
+	"section_locator_hint": {
+		"message": "选择器不唯一/失效时的兜底定位"
+	},
+	"section_source_label": {
+		"message": "源码位置"
+	},
+	"section_source_hint": {
+		"message": "React/Vue 文件:行号 + 组件调用链 —— 「一次改对」的关键"
+	},
+	"section_text_label": {
+		"message": "文本内容"
+	},
+	"section_text_hint": {
+		"message": "元素里的文字（过长会截断）"
+	},
+	"section_rules_label": {
+		"message": "命中的 CSS 规则"
+	},
+	"section_rules_hint": {
+		"message": "哪条规则命中了它、来自哪个文件的哪一行"
+	},
+	"section_styles_label": {
+		"message": "计算样式"
+	},
+	"section_styles_hint": {
+		"message": "只报与默认值/继承值不同的项（通常 3~5 行）"
+	},
+	"section_skeleton_label": {
+		"message": "HTML 骨架"
+	},
+	"section_skeleton_hint": {
+		"message": "结构（子节点折叠成 …），比整段 outerHTML 省得多"
+	},
+
+	"preset_lean_label": {
+		"message": "精简（最省上下文）"
+	},
+	"preset_lean_short": {
+		"message": "精简"
+	},
+	"preset_lean_hint": {
+		"message": "只留定位 + 源码位置 + 短文本：大约三五行/元素"
+	},
+	"preset_standard_label": {
+		"message": "标准（推荐）"
+	},
+	"preset_standard_short": {
+		"message": "标准"
+	},
+	"preset_standard_hint": {
+		"message": "再加命中的 CSS、计算样式差异与 HTML 骨架"
+	},
+	"preset_full_label": {
+		"message": "完整"
+	},
+	"preset_full_short": {
+		"message": "完整"
+	},
+	"preset_full_hint": {
+		"message": "全要，并采得更深（选择器/骨架更深、文本更长）"
+	},
+	"preset_source_label": {
+		"message": "只要能改对地方"
+	},
+	"preset_source_short": {
+		"message": "改对地方"
+	},
+	"preset_source_hint": {
+		"message": "选择器 + 源码位置（React/Vue 文件:行号），不报样式"
+	},
+	"preset_styles_label": {
+		"message": "只排查样式"
+	},
+	"preset_styles_short": {
+		"message": "样式"
+	},
+	"preset_styles_hint": {
+		"message": "选择器 + 命中的 CSS + 计算样式差异（间距/颜色/布局问题）"
+	},
+	"preset_text_label": {
+		"message": "只看文案/结构"
+	},
+	"preset_text_short": {
+		"message": "文案"
+	},
+	"preset_text_hint": {
+		"message": "选择器 + 文本 + HTML 骨架，不报源码与样式"
+	},
+
+	"detail_compact": {
+		"message": "精简"
+	},
+	"detail_standard": {
+		"message": "标准"
+	},
+	"detail_full": {
+		"message": "完整"
+	},
+
+	"describeSections_template": {
+		"message": "当前发送：$names$（共 $count$ 项$presetPart$）",
+		"placeholders": {
+			"names": { "content": "$1" },
+			"count": { "content": "$2" },
+			"presetPart": { "content": "$3" }
+		}
+	},
+	"describeSections_empty": {
+		"message": "（都没勾 —— 将回落标准组合）"
+	},
+	"describeSections_presetPart": {
+		"message": "，预设：$label$",
+		"placeholders": { "label": { "content": "$1" } }
+	},
+	"describeSections_custom": {
+		"message": "，自定义"
+	},
+
+	"preset_label": {
+		"message": "预设"
+	},
+	"preset_custom": {
+		"message": "自定义"
+	},
+	"preset_customHint": {
+		"message": "当前是自己勾的组合（点上面的 chip 可套预设）"
+	},
+	"preset_customItem": {
+		"message": "自定义（自己勾）"
+	},
+	"preset_adjustSections": {
+		"message": "调整项 ▾"
+	},
+	"preset_collapseSections": {
+		"message": "收起 ▴"
+	},
+	"preset_depthLabel": {
+		"message": "采集深浅：$detail$",
+		"placeholders": { "detail": { "content": "$1" } }
+	},
+	"preset_hotkeyLabel": {
+		"message": "Alt+1~$max$ 切换",
+		"placeholders": { "max": { "content": "$1" } }
+	},
+	"preset_summaryPreset": {
+		"message": "预设：$label$｜$depth$｜$hotkey$",
+		"placeholders": {
+			"label": { "content": "$1" },
+			"depth": { "content": "$2" },
+			"hotkey": { "content": "$3" }
+		}
+	},
+	"preset_summaryCustom": {
+		"message": "$describe$｜$depth$｜$hotkey$",
+		"placeholders": {
+			"describe": { "content": "$1" },
+			"depth": { "content": "$2" },
+			"hotkey": { "content": "$3" }
+		}
+	},
+	"preset_atLeastOne": {
+		"message": "至少要留一项：全不勾会回落成标准组合"
+	},
+	"preset_chipShortcut": {
+		"message": "（Alt+$n$）",
+		"placeholders": { "n": { "content": "$1" } }
+	},
+
+	"bridge_page_noOpName": {
+		"message": "缺少操作名（op）"
+	},
+	"bridge_page_actionNotSupported": {
+		"message": "不支持的动作 \"$name$\"（支持：$ops$）",
+		"placeholders": {
+			"name": { "content": "$1" },
+			"ops": { "content": "$2" }
+		}
+	},
+	"bridge_page_actionFailed": {
+		"message": "动作失败"
+	},
+	"bridge_page_actionThrew": {
+		"message": "动作 $name$ 抛错：$error$",
+		"placeholders": {
+			"name": { "content": "$1" },
+			"error": { "content": "$2" }
+		}
+	},
+	"bridge_page_bridgeUninstalled": {
+		"message": "页面桥已被卸载"
+	},
+	"bridge_page_noBridge": {
+		"message": "对端页面还没装上页面桥（它可能刚导航过）—— 刷新那个页面再试"
+	},
+	"bridge_page_notAuthorized": {
+		"message": "这个页面没被授权给 AI 操作 —— 在扩展选项页「AI 操作页面」里授权它"
+	},
+	"bridge_page_unexpectedResult": {
+		"message": "对端页面桥返回了意外结果"
+	},
+	"bridge_page_timeout": {
+		"message": "对端在 $ms$ms 内没回（op: $op$）",
+		"placeholders": {
+			"ms": { "content": "$1" },
+			"op": { "content": "$2" }
+		}
+	},
+	"bridge_peerNoResult": {
+		"message": "对端没有返回结果"
+	},
+	"bridge_peerResultTooLarge": {
+		"message": "$message$",
+		"placeholders": { "message": { "content": "$1" } }
+	},
+	"bridge_peerCallFailed": {
+		"message": "对端调用失败"
+	},
+	"bridge_selfPeer": {
+		"message": "对端就是自己 —— 桥是用来跨页面的"
+	},
+	"bridge_noPair": {
+		"message": "$from$ 与 $want$ 之间没有配对（当前配对的是：$peers$）",
+		"placeholders": {
+			"from": { "content": "$1" },
+			"want": { "content": "$2" },
+			"peers": { "content": "$3" }
+		}
+	},
+	"bridge_missingOp": {
+		"message": "调用缺少操作名（op）"
+	},
+	"bridge_controlCharInOp": {
+		"message": "操作名里有控制字符"
+	},
+	"bridge_argsTooLarge": {
+		"message": "参数不合法"
+	},
+	"bridge_argsInvalid": {
+		"message": "参数不合法"
+	},
+	"bridge_argsLabel": {
+		"message": "参数"
+	},
+	"bridge_pairNeedsHttp": {
+		"message": "两端都要是 http/https 地址（如 https://a.example）"
+	},
+	"bridge_pairSameAddress": {
+		"message": "两端不能是同一个地址"
+	},
+	"bridge_noAiPages": {
+		"message": "还没有授权任何页面给 AI —— 在 page-picker 扩展的选项页「AI 操作页面」里授权一个页面"
+	},
+
+	"pickresult_title": {
+		"message": "网页元素拾取（$count$ 个元素）",
+		"placeholders": { "count": { "content": "$1" } }
+	},
+	"pickresult_note": {
+		"message": "整体说明："
+	},
+	"pickresult_more": {
+		"message": "（另有 $count$ 个已拾取元素未展开）",
+		"placeholders": { "count": { "content": "$1" } }
+	},
+	"pickresult_page": {
+		"message": "页面："
+	},
+	"pickresult_dark": {
+		"message": "，深色"
+	},
+	"pickresult_light": {
+		"message": "，浅色"
+	},
+	"pickresult_viewport": {
+		"message": "视口："
+	},
+	"pickresult_framework": {
+		"message": "疑似框架："
+	},
+	"pickresult_element": {
+		"message": "元素 $index$ ·",
+		"placeholders": { "index": { "content": "$1" } }
+	},
+	"pickresult_selector": {
+		"message": "选择器："
+	},
+	"pickresult_source": {
+		"message": "源码："
+	},
+	"pickresult_size": {
+		"message": "尺寸："
+	},
+	"pickresult_text": {
+		"message": "文本："
+	},
+	"pickresult_shot": {
+		"message": "截图：见本轮附图"
+	},
+	"pickresult_xpath": {
+		"message": "XPath："
+	},
+	"pickresult_dom": {
+		"message": "DOM："
+	},
+	"pickresult_note_item": {
+		"message": "备注："
+	},
+	"pickresult_styles": {
+		"message": "计算样式（仅与默认/继承值不同的）："
+	},
+	"pickresult_skeleton": {
+		"message": "HTML 骨架："
+	},
+	"pickresult_cssHit": {
+		"message": "（样式命中位置）"
+	}
+}

@@ -1,0 +1,50 @@
+{
+	"apiVersion": 2,
+	"name": "matrix",
+	"nameEn": "Matrix",
+	"version": "0.1.5",
+	"description": "Matrix 机器人与工作台 (实验功能)：开源去中心化通信协议 Matrix 出站长轮询双工对话（零公网 IP / 智能 Markdown 分块 / 多轮会话隔离）/ 用户白名单准入 / AI matrix 工具",
+	"descriptionEn": "Matrix workspace & Bot (experimental): decentralized Matrix protocol outbound sync duplex chat (zero public IP, structure-aware Markdown chunks, isolated multi-turn sessions), access control whitelist, and AI matrix tool.",
+	"author": "pi-web-ui",
+	"homepage": "https://github.com/xing-shuyin/pi-web-ui/tree/main/plugins/matrix",
+	"icon": "🔮",
+	"iconSvg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 4h3v16H4V4zm13 0h3v16h-3V4z\"/><rect x=\"8.5\" y=\"7\" width=\"7\" height=\"10\" rx=\"1\"/></svg>",
+	"server": "index.mjs",
+	"client": "client/entry.mjs",
+	"permissions": ["ui", "tools", "notify", "storage", "secrets", "llm", "chat"],
+	"ui": {
+		"views": [
+			{
+				"id": "matrix",
+				"label": "Matrix (实验)",
+				"icon": "🔮"
+			}
+		],
+		"topbar": [
+			{
+				"id": "matrix-open",
+				"label": "Matrix",
+				"icon": "🔮",
+				"action": { "type": "view", "viewId": "matrix" },
+				"order": 65
+			}
+		],
+		"statusBar": [
+			{
+				"id": "matrix-status",
+				"label": "🔮 Matrix",
+				"title": "点击打开 Matrix 工作台",
+				"action": { "type": "view", "viewId": "matrix" },
+				"order": 55
+			}
+		],
+		"commands": [
+			{
+				"id": "open",
+				"label": "打开 Matrix 工作台",
+				"icon": "🔮",
+				"action": { "type": "view", "viewId": "matrix" }
+			}
+		]
+	}
+}

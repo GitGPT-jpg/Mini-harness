@@ -1,0 +1,540 @@
+/**
+ * 项目级 SFTP 配置存储 —— 一切以**项目目录里的 `.pi/`** 为准。
+ *
+ *   <项目>/.pi/sftp.json        连接与同步策略（可提交、可分享；凭据只写引用）
+ *   <项目>/.pi/sftp.local.json  本机覆盖（端口/私钥路径/明文口令…），插件会自动加进 .gitignore
+ *
+ * 两层做**深合并**（local 覆盖 base，数组整体替换而非拼接），所以团队共用一份
+ * base、每台机器只写自己那点差异。读取永远合并；**写入分文件**——工具改哪个字段
+ * 就落哪个文件，不会把本机覆盖内容反向灌进 base 造成「一次保存就把团队配置带偏」。
+ *
+ * 这里只做「读写 + 归一化 + 校验」，不碰网络；连接与传输在 lib/ssh.mjs 与 lib/engine.mjs。
+ */
+
+import { promises as fs } from "node:fs";
+import path from "node:path";
+
+export const CONFIG_DIR = ".pi";
+export const BASE_FILE = "sftp.json";
+export const LOCAL_FILE = "sftp.local.json";
+/** 本地垃圾桶（删除保护：删掉的东西先挪这儿，能捞回来）。 */
+export const TRASH_DIR = "sftp-trash";
+
+const DELETE_POLICIES = new Set(["none", "remote-only", "both"]);
+const COMPARE_MODES = new Set(["mtime+size", "size", "always"]);
+const CONFLICT_MODES = new Set(["newer", "local", "remote", "skip"]);
+const DIRECTIONS = new Set(["up", "down", "both"]);
+const AUTH_METHODS = new Set(["password", "key", "agent", "secret"]);
+const SYMLINK_MODES = new Set(["skip", "follow"]);
+
+/** 默认排除：本地开发产物 + 本插件自身配置（`.pi` 里是机器/账号相关的东西，不该外传）。
+ *  `.vscode/sftp.json` 单独列出来：它是 vscode-sftp / 编辑器插件共用的**明文凭据**文件，
+ *  不能被“顺手把 .vscode 也同步上去”带走。（`.vscode` 其余文件不在默认排除里，用户想传就传。） */
+export const DEFAULT_IGNORE = [
+	".git",
+	"node_modules",
+	".pi",
+	".sftp-trash",
+	"*.log",
+	"*.tmp",
+	".vscode/sftp.json",
+	"**/.vscode/sftp.json",
+];
+
+export function configPaths(cwd) {
+	const dir = path.join(cwd, CONFIG_DIR);
+	return {
+		dir,
+		base: path.join(dir, BASE_FILE),
+		local: path.join(dir, LOCAL_FILE),
+		trash: path.join(dir, TRASH_DIR),
+	};
+}
+
+/** 相对配置文件在界面上的展示名（错误提示里用，比绝对路径短）。 */
+export function relLabel(cwd, abs) {
+	return path.relative(cwd, abs).split(path.sep).join("/");
+}
+
+/** 相对路径规范化：反斜杠→斜杠、去掉首尾斜杠与 `./`；返回 null 表示越界（含 `..`）。 */
+export function safeRel(rel) {
+	const raw = String(rel ?? "")
+		.replace(/\\/g, "/")
+		.trim();
+	const out = [];
+	for (const seg of raw.split("/")) {
+		if (!seg || seg === ".") continue;
+		if (seg === "..") {
+			if (!out.length) return null; // 越出根
+			out.pop();
+			continue;
+		}
+		out.push(seg);
+	}
+	return out.join("/");
+}
+
+/** 远端路径拼接（POSIX 语义，永远是绝对路径）。 */
+export function posixJoin(base, rel) {
+	const b = String(base ?? "/").replace(/\/+$/, "");
+	const r = String(rel ?? "").replace(/^\/+/, "");
+	return r ? `${b}/${r}` : b || "/";
+}
+
+/** 远端路径的父目录。 */
+export function posixDir(p) {
+	const s = String(p ?? "");
+	const i = s.lastIndexOf("/");
+	return i <= 0 ? "/" : s.slice(0, i);
+}
+
+function asStringArray(v) {
+	if (!Array.isArray(v)) return [];
+	return [...new Set(v.map((x) => String(x ?? "").trim()).filter(Boolean))];
+}
+
+/** 远端根路径归一化：去掉结尾多余的斜杠（vscode-sftp 习惯写 `/srv/app/`），
+ *  根路径保留 `/`，非绝对路径原样返回交给调用方告警。 */
+export function normalizeRemotePath(v) {
+	const raw = String(v ?? "").trim();
+	const trimmed = raw.replace(/\/+$/, "");
+	if (trimmed) return trimmed;
+	return raw.startsWith("/") ? "/" : "";
+}
+
+function clampInt(v, min, max, fallback) {
+	const n = Math.round(Number(v));
+	if (!Number.isFinite(n)) return fallback;
+	return Math.min(max, Math.max(min, n));
+}
+
+function isPlainObject(v) {
+	return Boolean(v) && typeof v === "object" && !Array.isArray(v);
+}
+
+/** 深合并（数组整体替换；只递归普通对象）。 */
+function deepMerge(base, over) {
+	if (!isPlainObject(base)) return isPlainObject(over) ? { ...over } : over;
+	const out = { ...base };
+	for (const [k, v] of Object.entries(over ?? {})) {
+		out[k] = isPlainObject(v) && isPlainObject(base[k]) ? deepMerge(base[k], v) : v;
+	}
+	return out;
+}
+
+async function readJson(file) {
+	try {
+		return JSON.parse(await fs.readFile(file, "utf8"));
+	} catch (err) {
+		if (err?.code === "ENOENT") return null;
+		throw new Error(`${path.basename(file)} 不是合法 JSON：${err?.message ?? err}`);
+	}
+}
+
+/** 原子写（tmp + rename），避免保存到一半断电留下半截 JSON 把配置读废。 */
+export async function writeJsonAtomic(file, value) {
+	await fs.mkdir(path.dirname(file), { recursive: true });
+	const tmp = `${file}.tmp-${process.pid}`;
+	await fs.writeFile(tmp, `${JSON.stringify(value, null, "\t")}\n`, "utf8");
+	await fs.rename(tmp, file);
+}
+
+/** 归一化一个连接。`defaults` 来自文档级 defaults。 */
+export function normalizeConnection(name, raw, defaults = {}, warnings = []) {
+	const c = isPlainObject(raw) ? raw : {};
+	const warn = (msg) => warnings.push(`${name}: ${msg}`);
+
+	const authRaw = isPlainObject(c.auth) ? c.auth : {};
+	// 兼容扁平写法（host/username/password 同级）与 vscode-sftp 的名字
+	const password = String(authRaw.password ?? c.password ?? "");
+	const privateKeyPath = String(authRaw.privateKeyPath ?? c.privateKeyPath ?? "").trim();
+	const privateKey = String(authRaw.privateKey ?? c.privateKey ?? "");
+	const passphrase = String(authRaw.passphrase ?? c.passphrase ?? "");
+	const agent = String(authRaw.agent ?? c.agent ?? "").trim();
+
+	let method = String(authRaw.method ?? "").trim();
+	if (method && !AUTH_METHODS.has(method)) {
+		warn(`auth.method「${method}」不认识，按内容自动判定`);
+		method = "";
+	}
+	if (!method) {
+		if (password && String(password).startsWith("${secret:")) method = "secret";
+		else method = password ? "password" : agent ? "agent" : "key";
+	}
+	if (method === "secret" && !password) warn("选了加密机密但没配机密");
+	if (method === "password" && !password) warn("选了密码登录但没配密码");
+	// method 为 key 且未给路径时，会自动探测 ~/.ssh/ 默认密钥，无需报警
+
+	const host = String(c.host ?? "").trim();
+	if (!host) warn("缺 host（主机地址）");
+
+	const remotePath = normalizeRemotePath(c.remotePath ?? c.remoteRoot);
+	if (host && !remotePath.startsWith("/")) warn("remotePath 必须是绝对路径（以 / 开头）");
+	const allowRootRemote = Boolean(c.allowRootRemote);
+
+	const syncRaw = isPlainObject(c.sync) ? c.sync : {};
+	let direction = String(syncRaw.direction ?? defaults.direction ?? "up");
+	if (!DIRECTIONS.has(direction)) direction = "up";
+	let del = String(syncRaw.delete ?? defaults.delete ?? "none");
+	if (!DELETE_POLICIES.has(del)) del = "none";
+	let compare = String(syncRaw.compare ?? defaults.compare ?? "mtime+size");
+	if (!COMPARE_MODES.has(compare)) compare = "mtime+size";
+	let conflict = String(syncRaw.conflict ?? defaults.conflict ?? "newer");
+	if (!CONFLICT_MODES.has(conflict)) conflict = "newer";
+	if (del !== "none" && remotePath === "/" && !allowRootRemote) {
+		warn("远端根是 / 且开了删除——已强制降级为 delete:none（要真删请设 allowRootRemote: true）");
+		del = "none";
+	}
+
+	const mappings = (Array.isArray(c.mappings) ? c.mappings : [])
+		.map((m) => {
+			if (!isPlainObject(m)) return null;
+			const local = safeRel(m.local ?? "");
+			const remote = String(m.remote ?? "").trim();
+			if (local === null || local === "" || !remote.startsWith("/")) return null;
+			return { local, remote: remote.replace(/\/+$/, "") || "/" };
+		})
+		.filter(Boolean);
+
+	// 同步根：有 mappings 就只按 mappings 走（各自一棵独立的树，互不重叠）；
+	// 没有就是「工作区根 ↔ remotePath」这一对。
+	const roots = mappings.length
+		? mappings.map((m) => ({ local: m.local, remote: m.remote }))
+		: [{ local: "", remote: remotePath || "/" }];
+
+	const ignore = [...new Set([...(defaults.ignore ?? []), ...asStringArray(c.ignore ?? c.exclude)])];
+
+	return {
+		name,
+		host,
+		port: clampInt(c.port ?? defaults.port ?? 22, 1, 65535, 22),
+		username: String(c.username ?? defaults.username ?? "root").trim() || "root",
+		remotePath: remotePath || "/",
+		allowRootRemote,
+		auth: { method, password, passphrase, privateKey, privateKeyPath, agent },
+		sync: {
+			direction,
+			delete: del,
+			compare,
+			conflict,
+			concurrency: clampInt(syncRaw.concurrency ?? defaults.concurrency ?? 4, 1, 16, 4),
+			symlinks: SYMLINK_MODES.has(String(syncRaw.symlinks)) ? String(syncRaw.symlinks) : "skip",
+		},
+		mappings,
+		roots,
+		ignore,
+		/** 是否配置齐全到可连接（host + 远端根绝对路径）。 */
+		ready: Boolean(host && remotePath.startsWith("/")),
+	};
+}
+
+/** 归一化整份文档。 */
+export function normalizeDoc(raw) {
+	const doc = isPlainObject(raw) ? raw : {};
+	const warnings = [];
+	const d = isPlainObject(doc.defaults) ? doc.defaults : {};
+	const defaults = {
+		ignore: [...new Set([...DEFAULT_IGNORE, ...asStringArray(d.ignore)])],
+		concurrency: clampInt(d.concurrency ?? 4, 1, 16, 4),
+		delete: DELETE_POLICIES.has(String(d.delete)) ? String(d.delete) : "none",
+		compare: COMPARE_MODES.has(String(d.compare)) ? String(d.compare) : "mtime+size",
+		conflict: CONFLICT_MODES.has(String(d.conflict)) ? String(d.conflict) : "newer",
+		direction: DIRECTIONS.has(String(d.direction)) ? String(d.direction) : "up",
+		port: clampInt(d.port ?? 22, 1, 65535, 22),
+		username: String(d.username ?? "root"),
+	};
+
+	const connsRaw = isPlainObject(doc.connections) ? doc.connections : {};
+	const connections = {};
+	for (const [name, c] of Object.entries(connsRaw)) {
+		if (!/^[\w.-]{1,48}$/.test(name)) {
+			warnings.push(`连接名「${name}」含非法字符（只允许字母数字点横线下划线），已跳过`);
+			continue;
+		}
+		connections[name] = normalizeConnection(name, c, defaults, warnings);
+	}
+
+	const active = String(doc.active ?? "").trim();
+	if (active && !connections[active]) warnings.push(`active 指向的连接「${active}」不存在`);
+
+	return {
+		version: 1,
+		active: active || Object.keys(connections)[0] || "",
+		defaults,
+		connections,
+		warnings,
+	};
+}
+
+/** 读取合并后的配置：`{ raw, base, local, doc, files }`。 */
+export async function readConfig(cwd) {
+	const files = configPaths(cwd);
+	const [base, local] = await Promise.all([readJson(files.base), readJson(files.local)]);
+	const merged = deepMerge(base ?? {}, local ?? {});
+	return {
+		base: base ?? null,
+		local: local ?? null,
+		raw: merged,
+		doc: normalizeDoc(merged),
+		files,
+		existed: Boolean(base || local),
+	};
+}
+
+/** 取当前生效的连接（默认 active，可指定 profile）。 */
+export function pickConnection(doc, profile) {
+	const name = String(profile ?? "").trim() || doc.active;
+	return { name, conn: name ? doc.connections[name] : undefined };
+}
+
+/** 写 base 文件（整份替换）。 */
+export async function writeBase(cwd, obj) {
+	const files = configPaths(cwd);
+	await writeJsonAtomic(files.base, obj);
+	return files.base;
+}
+
+/** 写 local 覆盖文件（整份替换）。 */
+export async function writeLocal(cwd, obj) {
+	const files = configPaths(cwd);
+	await writeJsonAtomic(files.local, obj);
+	return files.local;
+}
+
+/**
+ * 新增/更新一个连接。
+ * @param {string} cwd
+ * @param {string} name 连接名
+ * @param {object} patch 只写要改的字段（`null` 表示清除该凭据）
+ * @param {{ target?: "base"|"local", makeActive?: boolean, credentialToLocal?: boolean }} opts
+ */
+export async function upsertConnection(cwd, name, patch, opts = {}) {
+	const clean = String(name ?? "").trim();
+	if (!/^[\w.-]{1,48}$/.test(clean)) throw new Error("连接名只允许字母、数字、点、横线、下划线（1-48 字符）");
+	const { base, local } = await readConfig(cwd);
+	const target = opts.target === "local" ? "local" : "base";
+	const file = target === "local" ? (local ?? {}) : (base ?? {});
+	const conns = isPlainObject(file.connections) ? { ...file.connections } : {};
+	const prev = isPlainObject(conns[clean]) ? conns[clean] : {};
+
+	const next = { ...prev };
+	const put = (k, v) => {
+		if (v === undefined) return;
+		if (v === null) delete next[k];
+		else next[k] = v;
+	};
+
+	put("host", patch.host === undefined ? undefined : String(patch.host).trim());
+	put("port", patch.port === undefined ? undefined : Number(patch.port) || 22);
+	put("username", patch.username === undefined ? undefined : String(patch.username).trim());
+	put("remotePath", patch.remotePath === undefined ? undefined : normalizeRemotePath(patch.remotePath));
+	put("allowRootRemote", patch.allowRootRemote === undefined ? undefined : Boolean(patch.allowRootRemote));
+	if (patch.ignore !== undefined) put("ignore", asStringArray(patch.ignore));
+	if (patch.mappings !== undefined) {
+		put(
+			"mappings",
+			(Array.isArray(patch.mappings) ? patch.mappings : [])
+				.map((m) => ({ local: safeRel(m?.local ?? "") ?? "", remote: String(m?.remote ?? "").trim() }))
+				.filter((m) => m.local && m.remote.startsWith("/")),
+		);
+	}
+
+	// 凭据：统一收进 auth 子对象（同时接受扁平的 patch.password 与嵌套的 patch.auth.password；
+	// 写入时把扁平的旧字段清掉，避免两处说法打架）
+	const authKeys = ["method", "password", "passphrase", "privateKey", "privateKeyPath", "agent"];
+	const authPatch = isPlainObject(patch.auth) ? { ...patch.auth } : {};
+	for (const k of authKeys) {
+		if (patch[k] !== undefined) authPatch[k] = patch[k];
+	}
+	const touchedAuth = Object.keys(authPatch).some((k) => authKeys.includes(k));
+	if (touchedAuth) {
+		const auth = isPlainObject(prev.auth) ? { ...prev.auth } : {};
+		for (const k of authKeys) {
+			if (authPatch[k] === undefined) continue;
+			if (authPatch[k] === null) delete auth[k];
+			else auth[k] = String(authPatch[k]);
+		}
+		if (Object.keys(auth).length) next.auth = auth;
+		else delete next.auth;
+		for (const k of ["password", "passphrase", "privateKey", "privateKeyPath", "agent"]) delete next[k];
+	}
+
+	if (patch.sync !== undefined && isPlainObject(patch.sync)) {
+		const sync = isPlainObject(prev.sync) ? { ...prev.sync } : {};
+		for (const [k, v] of Object.entries(patch.sync)) {
+			if (v === undefined) continue;
+			if (v === null) delete sync[k];
+			else sync[k] = v;
+		}
+		if (Object.keys(sync).length) next.sync = sync;
+		else delete next.sync;
+	}
+
+	conns[clean] = next;
+	file.connections = conns;
+	if (file.version === undefined) file.version = 1;
+	if (opts.makeActive !== false && !file.active) file.active = clean;
+	if (opts.makeActive === true) file.active = clean;
+
+	await (target === "local" ? writeLocal(cwd, file) : writeBase(cwd, file));
+	return { name: clean, target };
+}
+
+/** 删除连接（两层都删）。 */
+export async function removeConnection(cwd, name) {
+	const clean = String(name ?? "").trim();
+	const { base, local } = await readConfig(cwd);
+	const touched = [];
+	for (const [kind, file] of [
+		["base", base],
+		["local", local],
+	]) {
+		if (!isPlainObject(file?.connections) || !(clean in file.connections)) continue;
+		delete file.connections[clean];
+		if (file.active === clean) delete file.active;
+		await (kind === "base" ? writeBase(cwd, file) : writeLocal(cwd, file));
+		touched.push(kind);
+	}
+	return { name: clean, removedFrom: touched };
+}
+
+/** 切换 active（base 里的字段）。 */
+export async function setActive(cwd, name) {
+	const clean = String(name ?? "").trim();
+	const { base, doc } = await readConfig(cwd);
+	if (clean && !doc.connections[clean]) throw new Error(`没有名为「${clean}」的连接`);
+	const file = base ?? { version: 1, connections: {} };
+	if (clean) file.active = clean;
+	else delete file.active;
+	await writeBase(cwd, file);
+	return { active: clean };
+}
+
+/**
+ * 确保 `.pi/sftp.local.json` 不会被提交。
+ * 只在确实是 git 仓库（存在 .git）时动 .gitignore，且幂等：已有等价规则就不重复追加。
+ */
+export async function ensureGitignore(cwd) {
+	const gitDir = path.join(cwd, ".git");
+	try {
+		await fs.access(gitDir);
+	} catch {
+		return { changed: false, reason: "not-a-git-repo" };
+	}
+	const file = path.join(cwd, ".gitignore");
+	let text = "";
+	try {
+		text = await fs.readFile(file, "utf8");
+	} catch (err) {
+		if (err?.code !== "ENOENT") throw err;
+	}
+	const lines = text.split(/\r?\n/).map((l) => l.trim());
+	const wanted = `${CONFIG_DIR}/${LOCAL_FILE}`;
+	const covered = lines.some(
+		(l) =>
+			l === wanted ||
+			l === LOCAL_FILE ||
+			l === `${CONFIG_DIR}/` ||
+			l === CONFIG_DIR ||
+			l === `/${wanted}` ||
+			l === `/${CONFIG_DIR}/` ||
+			l === `**/${LOCAL_FILE}`,
+	);
+	if (covered) return { changed: false, reason: "already-ignored", file };
+	const block = `${text.endsWith("\n") || !text ? "" : "\n"}\n# pi-web-ui SFTP 本机覆盖（可能含明文凭据，勿提交）\n${wanted}\n`;
+	await fs.writeFile(file, text + block, "utf8");
+	return { changed: true, file };
+}
+
+/** 配置里是否存在明文凭据（用于告警）。 */
+export function plaintextCredentials(doc) {
+	const out = [];
+	for (const [name, conn] of Object.entries(doc.connections)) {
+		for (const k of ["password", "passphrase", "privateKey"]) {
+			const v = conn.auth?.[k];
+			if (v && !String(v).startsWith("${")) out.push({ connection: name, field: `auth.${k}` });
+		}
+	}
+	return out;
+}
+
+/** 给界面/模型看的脱敏视图（绝不含明文）。 */
+export function publicConnection(conn) {
+	if (!conn) return null;
+	return {
+		name: conn.name,
+		host: conn.host,
+		port: conn.port,
+		username: conn.username,
+		remotePath: conn.remotePath,
+		allowRootRemote: conn.allowRootRemote,
+		ready: conn.ready,
+		sync: { ...conn.sync },
+		mappings: conn.mappings.map((m) => ({ ...m })),
+		ignore: [...conn.ignore],
+		auth: {
+			method: conn.auth.method,
+			password: describeSafe(conn.auth.password),
+			passphrase: describeSafe(conn.auth.passphrase),
+			privateKey: describeSafe(conn.auth.privateKey),
+			privateKeyPath: conn.auth.privateKeyPath,
+			agent: conn.auth.agent,
+		},
+		hasCredentials: Boolean(
+			conn.auth.password ||
+			conn.auth.privateKey ||
+			conn.auth.privateKeyPath ||
+			conn.auth.agent ||
+			conn.auth.method === "key",
+		),
+	};
+}
+
+/** 引用 → 安全描述（`secret:xxx` / `env:XXX` / `plain` / 空）。 */
+function describeSafe(raw) {
+	if (!raw) return "";
+	if (!String(raw).startsWith("${")) return "plain";
+	const m = /^\$\{(env|secret|file):([^{}]*)\}$/.exec(String(raw).trim());
+	return m ? `${m[1]}:${m[2]}` : "invalid";
+}
+
+/**
+ * 从 VS Code 的 vscode-sftp 配置导入。
+ * 返回归一化后的连接 + 需要写进加密机密的凭据（**明文不落 base 文件**）。
+ */
+export async function importVscodeSftp(cwd) {
+	const src = path.join(cwd, ".vscode", "sftp.json");
+	const raw = await readJson(src);
+	if (!raw || typeof raw !== "object") return null;
+	const name = String(raw.name ?? "").trim() || "default";
+	const secrets = {};
+	const auth = {};
+	if (raw.password) {
+		auth.password = `\${secret:${name}-password}`;
+		secrets[`${name}-password`] = String(raw.password);
+	}
+	if (raw.privateKey) {
+		auth.privateKey = `\${secret:${name}-privateKey}`;
+		secrets[`${name}-privateKey`] = String(raw.privateKey);
+	}
+	if (raw.privateKeyPath) auth.privateKeyPath = String(raw.privateKeyPath);
+	if (raw.passphrase) {
+		auth.passphrase = `\${secret:${name}-passphrase}`;
+		secrets[`${name}-passphrase`] = String(raw.passphrase);
+	}
+	if (raw.agent) auth.agent = String(raw.agent);
+	return {
+		source: src,
+		name,
+		secrets,
+		connection: {
+			host: String(raw.host ?? "").trim(),
+			port: raw.port ?? 22,
+			username: raw.username ?? "root",
+			remotePath: normalizeRemotePath(raw.remotePath ?? raw.remoteRoot ?? "/") || "/",
+			ignore: asStringArray(raw.ignore ?? raw.exclude),
+			uploadOnSaveHint: Boolean(raw.uploadOnSave),
+			auth,
+		},
+	};
+}

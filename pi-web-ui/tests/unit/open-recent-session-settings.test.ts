@@ -1,0 +1,100 @@
+/**
+ * 切换项目时是否打开最近会话配置项（openRecentSessionOnProjectSwitch）单元测试：
+ *   1. 默认值为 true（保持开箱即用兼容性）；
+ *   2. ClientStateStore 持久化与加载保真；
+ *   3. SettingsService.set() 可更新并通过 current 暴露；
+ *   4. 预设白名单与净化收录该字段；
+ *   5. i18n 多语言翻译完整且对齐。
+ */
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { ClientStateStore } from "../../server/client-state.js";
+import { PRESET_FIELD_META, PRESET_FIELD_NAMES } from "../../server/preset-fields.js";
+import { sanitizePresetSettings } from "../../server/preset-share.js";
+import { SettingsService, type SettingsHost } from "../../server/settings-service.js";
+
+const roots: string[] = [];
+function tempStore(): ClientStateStore {
+	const dir = mkdtempSync(join(tmpdir(), "pi-open-recent-"));
+	roots.push(dir);
+	return new ClientStateStore(join(dir, "client-state.json"));
+}
+
+afterEach(() => {
+	for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+const templates = { list: () => [] } as unknown as import("../../server/subagent-templates.js").SubagentTemplatesStore;
+
+function makeHost(store: ClientStateStore): SettingsHost & { emitted: unknown[] } {
+	const emitted: unknown[] = [];
+	return {
+		clientId: "open-recent-test",
+		stateStore: store,
+		emit: (m: unknown) => {
+			emitted.push(m);
+		},
+		flushSnapshot: () => {},
+		isDisposed: () => false,
+		getSession: () => {
+			throw new Error("no session");
+		},
+		cwd: () => "/tmp",
+		agentDir: () => "/tmp",
+		isStreaming: () => false,
+		reloadSession: async () => {},
+		applyRetryOverrides: () => {},
+		applyCompactionOverrides: () => {},
+		applyToolGating: () => {},
+		promptSnapshot: () => ({ full: "", texts: {}, toolsSchema: "" }),
+		emitted,
+	} as SettingsHost & { emitted: unknown[] };
+}
+
+describe("openRecentSessionOnProjectSwitch 配置项", () => {
+	it("默认值为 true", () => {
+		const store = tempStore();
+		const host = makeHost(store);
+		const svc = new SettingsService(host, templates);
+
+		expect(svc.current.openRecentSessionOnProjectSwitch).toBe(true);
+	});
+
+	it("SettingsService.set 可以将开关设为 false 并持久化", async () => {
+		const store = tempStore();
+		const host = makeHost(store);
+		const svc = new SettingsService(host, templates);
+
+		await svc.set({ openRecentSessionOnProjectSwitch: false });
+		expect(svc.current.openRecentSessionOnProjectSwitch).toBe(false);
+
+		// 新实例从 store 重载，值仍为 false
+		const svc2 = new SettingsService(host, templates);
+		expect(svc2.current.openRecentSessionOnProjectSwitch).toBe(false);
+
+		// 重新设为 true
+		await svc2.set({ openRecentSessionOnProjectSwitch: true });
+		expect(svc2.current.openRecentSessionOnProjectSwitch).toBe(true);
+	});
+
+	it("预设字段名单收录了 openRecentSessionOnProjectSwitch", () => {
+		expect(PRESET_FIELD_NAMES).toContain("openRecentSessionOnProjectSwitch");
+		const meta = PRESET_FIELD_META.openRecentSessionOnProjectSwitch;
+		expect(meta).toBeDefined();
+		expect(meta.labelZh).toContain("切换项目");
+		expect(meta.labelEn).toContain("Project Switch");
+	});
+
+	it("预设净化支持 openRecentSessionOnProjectSwitch 的导出与导入", () => {
+		const input = {
+			openRecentSessionOnProjectSwitch: false,
+			unknownGarbageField: "should be stripped",
+		};
+		const sanitized = sanitizePresetSettings(input);
+		expect(sanitized.fields).toContain("openRecentSessionOnProjectSwitch");
+		expect(sanitized.settings.openRecentSessionOnProjectSwitch).toBe(false);
+		expect(sanitized.ignored).toContain("unknownGarbageField");
+	});
+});

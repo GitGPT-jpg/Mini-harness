@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>通知效果预览</title>
+<link rel="stylesheet" href="../web/src/styles.css" id="theme-link">
+<style>
+	body { margin: 0; background: var(--bg); min-height: 100vh; font-family: system-ui, sans-serif; }
+	/* 模拟聊天背景：垫一层文字，验证通知背景不再透出下层内容 */
+	.bg-text {
+		padding: 24px 10%;
+		color: var(--text-faint);
+		font-size: 15px;
+		line-height: 1.9;
+		user-select: none;
+	}
+	.toolbar {
+		position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+		display: flex; gap: 8px; z-index: 100;
+	}
+	.toolbar button {
+		padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border);
+		background: var(--bg-elev2); color: var(--text); cursor: pointer; font-size: 13px;
+	}
+	.toolbar button:hover { border-color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="bg-text">这是垫底的聊天内容文字，用来验证通知背景是否透明。—— 这一层应该完全被通知盖住，不该透出来。</div>
+
+<!-- 模拟真实结构：.notices 容器 + .notice 卡片 -->
+<div class="notices" style="position:fixed">
+	<div class="notice notice-info" id="n-info">
+		<span class="notice-icon">ℹ️</span>
+		<span class="notice-text">这是一条 info 通知 —— 背景应为不透明的深蓝 #1b2544，下面垫的文字不应透出来。</span>
+		<button class="notice-close">✕</button>
+	</div>
+	<div class="notice notice-warning">
+		<span class="notice-icon">⚠️</span>
+		<span class="notice-text">这是一条 warning 通知 —— 不透明深棕 #38251f。</span>
+		<button class="notice-close">✕</button>
+	</div>
+	<div class="notice notice-error paused">
+		<span class="notice-icon">⛔</span>
+		<span class="notice-text">这是一条 error 通知（paused 高亮态）—— 不透明暗红 #401d23。</span>
+		<button class="notice-close">✕</button>
+	</div>
+</div>
+
+<div class="toolbar">
+	<button onclick="document.getElementById('theme-link').href='../web/src/styles.css'">深色主题</button>
+	<button onclick="document.getElementById('theme-link').href='../themes/light.css'">浅色主题</button>
+</div>
+</body>
+</html>

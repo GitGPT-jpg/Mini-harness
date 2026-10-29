@@ -1,0 +1,116 @@
+{
+	"format": "pi-web-ui-preset",
+	"version": 1,
+	"name": "全栈极客沉浸式开发",
+	"description": "专为全栈与系统开发者设计：浮动停靠栏极简 UI（纯图标去文字）、终端交互接管、全套编码与补丁工具、常用开发快捷短语、深度调试指导。",
+	"author": "pi-team",
+	"tags": ["开发", "极客", "UI定制", "终端", "全栈"],
+	"createdAt": "2026-03-31T08:00:00.000Z",
+	"appVersion": "0.99.0",
+	"enabledTools": [
+		"bash",
+		"read",
+		"edit",
+		"write",
+		"patch",
+		"lsp",
+		"eval",
+		"terminal_create",
+		"terminal_input",
+		"terminal_key",
+		"terminal_read",
+		"terminal_wait",
+		"terminal_close",
+		"terminal_list",
+		"claim_files"
+	],
+	"settings": {
+		"promptMode": "append",
+		"customSystemPrompt": "你是一位拥有 15 年经验的资深全栈架构师与系统工程师。编码风格严格遵循 DRY 与 KISS 原则，注重类型安全与异常边界处理。使用现代 ES 模块、严格 TypeScript，并优先编写健壮的单元测试与断言。",
+		"promptTemplate": "",
+		"promptOverrides": {
+			"soul": "务实、敏捷、技术视野开阔。不讲废话，直接给出可执行的生产级解决方案。"
+		},
+		"disabledAgentTools": [
+			"edit_soft",
+			"delegate_task",
+			"ask_user_question",
+			"browser_page",
+			"conversation_read",
+			"plan_update",
+			"present_files",
+			"skill",
+			"schedule",
+			"compact_context",
+			"powershell",
+			"ls",
+			"grep",
+			"find"
+		],
+		"disabledPluginTools": [],
+		"toolPromptOverrides": {
+			"bash": {
+				"description": "执行高性能 shell 命令。优先在后台运行长周期服务并轮询输出日志。",
+				"promptGuidelines": [
+					"严禁在前台执行阻塞式交互命令（如 vi, less, npm init 等）",
+					"必须显式指定 timeout 参数，杜绝会话 hang 死",
+					"对于大文本查看优先使用 head/tail 参数而不是直接 cat"
+				]
+			},
+			"patch": {
+				"description": "基于哈希锚点与语法块的安全代码补丁工具。对大型文件进行多点局部替换时优先使用。"
+			}
+		},
+		"toolLazyLoading": true,
+		"readDirEnabled": true,
+		"toolApprovalEnabled": false,
+		"toolWatchdogTimeoutMs": 1200000,
+		"questionnaireEnabled": false,
+		"editSoftEnabled": false,
+		"terminalToolsEnabled": true,
+		"terminalBash": true,
+		"terminalBashIdleMs": 15000,
+		"terminalBashMaxForegroundMs": 60000,
+		"disabledSkills": [],
+		"disabledExtensions": [],
+		"skillsFullText": [],
+		"retryMaxAttempts": 5,
+		"softCapTokens": 32768,
+		"softCapByModel": {},
+		"subagentDefaultModel": null,
+		"visionBridgeEnabled": true,
+		"visionBridgeModel": null,
+		"visionBridgePromptMode": "append",
+		"visionBridgePrompt": "",
+		"scmCommitMsgPromptMode": "append",
+		"scmCommitMsgPrompt": "按照 Conventional Commits 规范生成简洁动宾提交说明，格式如：feat(core): add feature",
+		"planModePromptMode": "append",
+		"planModePrompt": "",
+		"goalModeEnabled": false,
+		"parallelReminderEnabled": true,
+		"uiLayout": {
+			"sideDockFloat": true,
+			"topbarText": false,
+			"hidden": ["host:brand-name"],
+			"align": {
+				"sidebar.left": "center",
+				"bottombar": "end"
+			},
+			"order": ["host:brand", "host:chat", "host:terminal", "host:files", "host:model"]
+		},
+		"disabledPlugins": [],
+		"thinkingWrap": true,
+		"toolsWrap": true,
+		"toolImagesEnabled": true,
+		"quickPhrasesEnabled": true,
+		"quickPhrases": [
+			"npm test",
+			"git status -s",
+			"运行全量类型检查并修复错误",
+			"重构这段代码，提高内聚度与类型安全性",
+			"分析当前实现的潜在性能瓶颈与异常边界"
+		],
+		"devNoCache": true,
+		"autoReload": true
+	}
+}

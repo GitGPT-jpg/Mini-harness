@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>发送 / 插队 / 排队 — 对半分按钮方案预览</title>
+<!-- 直接复用线上样式表：颜色变量、输入框、chip、工具条都是真身 -->
+<link rel="stylesheet" href="../web/src/styles.css">
+<style>
+	body { margin: 0; background: var(--bg); color: var(--text); }
+	.wrap { max-width: 1120px; margin: 0 auto; padding: 28px 20px 80px; }
+	h1 { font-size: 20px; margin: 0 0 6px; }
+	h2 { font-size: 15px; margin: 0 0 4px; }
+	.lead { color: var(--text-dim); font-size: 13.5px; line-height: 1.8; margin: 0 0 18px; }
+	.lead code { font-family: var(--mono); font-size: 12.5px; color: var(--accent); }
+
+	/* ---- 控制条 ---- */
+	.controls {
+		position: sticky; top: 0; z-index: 20;
+		display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+		padding: 12px 14px; margin-bottom: 20px;
+		background: color-mix(in srgb, var(--bg-elev2) 92%, transparent);
+		backdrop-filter: blur(8px);
+		border: 1px solid var(--border); border-radius: 12px;
+	}
+	.controls .lbl { font-size: 12px; color: var(--text-faint); margin-right: 2px; }
+	.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
+	.seg button {
+		border: none; background: transparent; color: var(--text-dim);
+		font-size: 12.5px; padding: 6px 12px; cursor: pointer;
+	}
+	.seg button + button { border-left: 1px solid var(--border); }
+	.seg button.on { background: var(--accent-soft); color: var(--accent); }
+	.chk { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-dim); cursor: pointer; }
+
+	/* ---- 方案卡 ---- */
+	.grid { display: grid; gap: 18px; }
+	.card {
+		background: var(--bg-elev); border: 1px solid var(--border);
+		border-radius: 16px; padding: 16px 18px 18px;
+	}
+	.card.baseline { border-style: dashed; }
+	.card-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 2px; }
+	.tag {
+		font-size: 11px; padding: 1px 7px; border-radius: 999px;
+		border: 1px solid var(--border); color: var(--text-faint);
+	}
+	.tag.rec { border-color: rgba(139,92,246,.5); color: var(--accent); background: var(--accent-soft); }
+	.desc { font-size: 13px; color: var(--text-dim); margin: 2px 0 14px; line-height: 1.7; }
+	/* 两列：左列全是优点（＋），右列全是缺点（−）——用 column 流，先两行 pro 再两行 con */
+	.meta {
+		display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: auto auto;
+		grid-auto-flow: column; gap: 4px 22px; margin-top: 14px;
+		font-size: 12.5px; line-height: 1.75;
+	}
+	.meta div { color: var(--text-dim); }
+	.meta b { color: var(--text); font-weight: 500; }
+	.meta .pro::before { content: "＋ "; color: var(--green); }
+	.meta .con::before { content: "− "; color: var(--red); }
+	@media (max-width: 720px) { .meta { grid-template-columns: 1fr; grid-template-rows: none; grid-auto-flow: row; } }
+
+	/* ---- 横向对比表 ---- */
+	table.cmp { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 10px; }
+	table.cmp th, table.cmp td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border-soft); }
+	table.cmp th { color: var(--text-faint); font-weight: 500; font-size: 12px; }
+	table.cmp td { color: var(--text-dim); }
+	table.cmp td b { color: var(--text); font-weight: 500; }
+	table.cmp tr:last-child td { border-bottom: none; }
+	table.cmp .win { color: var(--green); }
+
+	/* ---- 假输入框（骨架照搬 .inputbox / .composer-tools 的尺寸） ---- */
+	.stage { background: var(--bg); border: 1px solid var(--border-soft); border-radius: 14px; padding: 12px; }
+	.mock .inputbox { padding: 8px 10px; gap: 6px; }
+	.mock textarea { min-height: 22px; }
+	.mock .chip {
+		display: inline-flex; align-items: center; gap: 5px;
+		padding: 5px 9px; border: 1px solid var(--border); border-radius: 8px;
+		color: var(--text-dim); font-size: 12px; background: transparent;
+	}
+	.right { display: flex; align-items: center; gap: 8px; }
+	.icon36 { display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; border-radius: 50%; }
+	.round {
+		display: inline-flex; align-items: center; justify-content: center;
+		width: 38px; height: 38px; border-radius: 50%;
+		background: var(--send-blue); border: 1px solid var(--send-blue); color: #fff;
+		box-shadow: 0 2px 10px rgba(59,130,246,.35); cursor: pointer; flex-shrink: 0;
+	}
+	.round:hover { background: var(--send-blue-hover); border-color: var(--send-blue-hover); transform: translateY(-1px); }
+	.round svg { width: 17px; height: 17px; }
+	svg.fi { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+	/* ============ 方案 A：对半胶囊（同体蓝，细分隔线） ============ */
+	.A-pill {
+		display: inline-flex; align-items: stretch;
+		width: 78px; height: 38px; border-radius: 999px; overflow: hidden;
+		background: var(--send-blue); border: 1px solid var(--send-blue);
+		box-shadow: 0 2px 10px rgba(59,130,246,.35); flex-shrink: 0;
+	}
+	.A-pill button {
+		flex: 1 1 50%; border: none; background: transparent; color: #fff;
+		display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0;
+	}
+	.A-pill button.q { background: rgba(255,255,255,.14); }
+	.A-pill button + button { border-left: 1px solid rgba(255,255,255,.34); }
+	.A-pill:hover { background: var(--send-blue-hover); border-color: var(--send-blue-hover); }
+	.A-pill button:hover:not(:disabled) { background: rgba(255,255,255,.22); }
+	.A-pill button:disabled { opacity: .45; cursor: default; }
+	/* 两半都无法提交（运行中且输入为空）时整颗胶囊一起变暗，避免「蓝底 = 可点」的误读 */
+	.A-pill:has(button:disabled) { background: color-mix(in srgb, var(--send-blue) 42%, var(--bg-elev2)); border-color: color-mix(in srgb, var(--send-blue) 42%, var(--bg-elev2)); }
+	.A-pill:has(button:disabled):hover { background: color-mix(in srgb, var(--send-blue) 42%, var(--bg-elev2)); border-color: color-mix(in srgb, var(--send-blue) 42%, var(--bg-elev2)); }
+
+	/* ============ 方案 B：对半胶囊（左幽灵 / 右实心，断缝） ============ */
+	.B-pill {
+		display: inline-flex; align-items: stretch; gap: 2px;
+		padding: 2px; border-radius: 999px; background: var(--bg-elev2);
+		border: 1px solid var(--border); flex-shrink: 0;
+	}
+	.B-pill button {
+		flex: 1 1 50%; width: 38px; height: 34px; border: none; cursor: pointer;
+		display: inline-flex; align-items: center; justify-content: center; padding: 0;
+	}
+	.B-pill button.q { border-radius: 999px 6px 6px 999px; background: transparent; color: var(--text-dim); }
+	.B-pill button.q:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
+	.B-pill button.s {
+		border-radius: 6px 999px 999px 6px; background: var(--send-blue); color: #fff;
+		box-shadow: 0 2px 10px rgba(59,130,246,.35);
+	}
+	.B-pill button.s:hover:not(:disabled) { background: var(--send-blue-hover); }
+	.B-pill button:disabled { opacity: .4; cursor: default; }
+	.B-pill:has(.s:disabled) button.s { background: color-mix(in srgb, var(--send-blue) 40%, var(--bg-elev2)); box-shadow: none; }
+	.B-pill:has(.s:disabled) button.s:hover { background: color-mix(in srgb, var(--send-blue) 40%, var(--bg-elev2)); }
+
+	/* ============ 方案 C：上下对半的单圆 ============ */
+	.C-circle {
+		display: inline-flex; flex-direction: column; width: 38px; height: 38px;
+		border-radius: 50%; overflow: hidden; background: var(--send-blue);
+		border: 1px solid var(--send-blue); box-shadow: 0 2px 10px rgba(59,130,246,.35); flex-shrink: 0;
+	}
+	.C-circle button {
+		flex: 1 1 50%; border: none; background: transparent; color: #fff;
+		display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0;
+	}
+	.C-circle button.q { background: rgba(255,255,255,.16); }
+	.C-circle button + button { border-top: 1px solid rgba(255,255,255,.34); }
+	.C-circle button svg { width: 13px; height: 13px; }
+	.C-circle:hover { background: var(--send-blue-hover); border-color: var(--send-blue-hover); }
+	.C-circle button:hover:not(:disabled) { background: rgba(255,255,255,.24); }
+	.C-circle button:disabled { opacity: .45; cursor: default; }
+	.C-circle:has(button:disabled) { background: color-mix(in srgb, var(--send-blue) 42%, var(--bg-elev2)); border-color: color-mix(in srgb, var(--send-blue) 42%, var(--bg-elev2)); }
+	.C-circle:has(button:disabled):hover { background: color-mix(in srgb, var(--send-blue) 42%, var(--bg-elev2)); border-color: color-mix(in srgb, var(--send-blue) 42%, var(--bg-elev2)); }
+
+	/* ============ 方案 D：悬停才分裂 ============ */
+	.D-wrap { display: inline-flex; align-items: center; height: 38px; }
+	.D-pill {
+		display: inline-flex; align-items: stretch; height: 38px;
+		border-radius: 999px; overflow: hidden; flex-shrink: 0;
+		background: var(--send-blue); border: 1px solid var(--send-blue);
+		box-shadow: 0 2px 10px rgba(59,130,246,.35);
+		transition: width .18s ease;
+	}
+	.D-pill button { border: none; background: transparent; color: #fff; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+	.D-pill button.s { width: 36px; flex: none; }
+	.D-pill button.q {
+		width: 0; flex: none; overflow: hidden; opacity: 0;
+		background: rgba(255,255,255,.14);
+		transition: width .18s ease, opacity .12s ease;
+	}
+	.D-wrap:hover .D-pill button.q, .D-pill.keep button.q { width: 40px; opacity: 1; border-right: 1px solid rgba(255,255,255,.34); }
+	.D-pill:hover { background: var(--send-blue-hover); border-color: var(--send-blue-hover); }
+	.D-pill button:hover:not(:disabled) { background: rgba(255,255,255,.22); }
+	.D-pill button:disabled { opacity: .45; cursor: default; }
+	.D-pill:has(.s:disabled) { background: color-mix(in srgb, var(--send-blue) 42%, var(--bg-elev2)); border-color: color-mix(in srgb, var(--send-blue) 42%, var(--bg-elev2)); box-shadow: none; }
+	.D-pill:has(.s:disabled):hover { background: color-mix(in srgb, var(--send-blue) 42%, var(--bg-elev2)); border-color: color-mix(in srgb, var(--send-blue) 42%, var(--bg-elev2)); }
+	.D-hint { font-size: 11.5px; color: var(--text-faint); display: block; margin-top: 8px; }
+	.D-extra { display: flex; align-items: center; gap: 10px; justify-content: flex-end; }
+	.actions-col { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+
+	/* ---- 图标候选 / 备注 ---- */
+	.icon-row { display: flex; flex-wrap: wrap; gap: 22px; margin-top: 6px; }
+	.icon-row figure { margin: 0; display: flex; align-items: center; gap: 9px; }
+	.icon-box {
+		width: 36px; height: 36px; border-radius: 10px; display: inline-flex;
+		align-items: center; justify-content: center;
+		background: rgba(255,255,255,.14); color: #fff; border: 1px solid rgba(255,255,255,.2);
+	}
+	.icon-row figcaption { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+	.icon-row figcaption b { display: block; color: var(--text); font-weight: 500; }
+</style>
+</head>
+<body>
+<div class="wrap">
+	<h1>运行中发送区：插队 + 排队 合并为「对半分」按钮</h1>
+	<p class="lead">
+		现状：空闲时右侧只有 <code>↑ 发送</code> 一颗蓝圆；运行中变成 <code>排队</code>（文字 pill）＋ <code>■ 停止</code>，
+		而「插队」（回车语义）没有可见入口。目标：运行中把发送位改成 <b>插队</b>、排队收成图标，两者合成一颗对半分的按钮。
+		下面 4 个方案都是<b>左右／上下各占 50%</b>，可直接对比几何、配色与空输入时的表现。
+	</p>
+
+	<div class="controls">
+		<span class="lbl">状态</span>
+		<div class="seg" id="seg-state">
+			<button data-state="idle" class="on">空闲（不运行）</button>
+			<button data-state="runEmpty">运行中 · 未输入</button>
+			<button data-state="runText">运行中 · 已输入</button>
+		</div>
+		<label class="chk"><input type="checkbox" id="chk-disabled" checked> 运行中未输入时：按钮保留但两半禁用（不勾 = 整颗隐藏）</label>
+	</div>
+
+	<div class="grid">
+
+		<!-- ================= 现状（对比基线） ================= -->
+		<article class="card baseline">
+			<div class="card-head"><h2>现状（对比基线）</h2><span class="tag">before</span></div>
+			<p class="desc">运行中：<b>排队</b>是带文字的药丸（英文 “Queue” 更宽），插队只能靠回车；和 <b>停止</b> 并排占掉工具条右侧一大块。</p>
+			<div class="stage"><div class="mock" data-opt="now"></div></div>
+		</article>
+
+		<!-- ================= A ================= -->
+		<article class="card">
+			<div class="card-head"><h2>方案 A — 对半胶囊（同体蓝，细分隔线）</h2><span class="tag rec">推荐</span></div>
+			<p class="desc">一颗 78×38 的实心蓝胶囊，中间一条 1px 半透明白线分成两半：<b>左半 = 排队</b>（列表图标，加一层 14% 白底压暗）、<b>右半 = 插队</b>（↑）。停止仍是右侧独立的蓝圆。视觉上是「一颗按钮」，命中区各 39×38。</p>
+			<div class="stage"><div class="mock" data-opt="A"></div></div>
+			<div class="meta">
+				<div class="pro"><b>改动最小</b>：沿用发送按钮的蓝底/阴影/位移悬浮，视觉上与空闲态是同一颗按钮的「变形」。</div>
+				<div class="pro"><b>触屏友好</b>：每半 39×38，都远超 32px 建议命中尺寸；无 hover 也能读懂。</div>
+				<div class="con">两半同为蓝白，<b>主次偏弱</b>：插队才是主操作，却和排队同样亮。</div>
+				<div class="con">插队图标同为空闲态的 ↑，<b>语义切换靠位置</b>（左多了一颗排队），新用户需要一次学习。</div>
+			</div>
+		</article>
+
+		<!-- ================= B ================= -->
+		<article class="card">
+			<div class="card-head"><h2>方案 B — 对半胶囊（左幽灵 / 右实心，2px 断缝）</h2><span class="tag">主次最清晰</span></div>
+			<p class="desc">胶囊外面套一圈 2px 底色壳，内部左右各 38×34 对半：<b>左半线框幽灵</b>（排队、低饱和、hover 才变紫）、<b>右半实心蓝</b>（插队）。主次一眼分明，同时仍是一颗圆角整体。</p>
+			<div class="stage"><div class="mock" data-opt="B"></div></div>
+			<div class="meta">
+				<div class="pro"><b>插队 = 主按钮</b>，排队是安静的副操作，与「回车插队」的心智一致。</div>
+				<div class="pro">幽灵半段复用现有 <code>.btn</code> 的安静风格，夜间不刺眼。</div>
+				<div class="con">外壳 + 断缝让按钮比现状<b>更宽一点</b>（≈92px），窄屏（≤560px）更挤。</div>
+				<div class="con">左半对比度低，<b>可发现性差</b>；触屏没有 hover，排队的可达性靠图标本身。</div>
+			</div>
+		</article>
+
+		<!-- ================= C ================= -->
+		<article class="card">
+			<div class="card-head"><h2>方案 C — 上下对半的单圆（省横向空间）</h2><span class="tag">窄屏</span></div>
+			<p class="desc">保持 38×38 圆形不占额外宽度：上半 12px 高的<b>排队</b>（14% 白底＋列表图标），下半 12px 高的<b>插队</b>（↑），中间 1px 分隔线。横向占用与空闲态完全一致。</p>
+			<div class="stage"><div class="mock" data-opt="C"></div></div>
+			<div class="meta">
+				<div class="pro"><b>零额外宽度</b>，手机端 / 左栏拉窄时最稳，永远不换行不挤压 chip。</div>
+				<div class="pro">与空闲态的几何完全一致，切换时右侧工具条<b>不跳动</b>。</div>
+				<div class="con">每半只有 <b>38×19</b>，触屏极易误点（插队/排队代价相反：误触排队会延迟发送）。</div>
+				<div class="con">上下分半对图标是种浪费（16px 图形塞进 19px 高），语义也不如左右直观。</div>
+			</div>
+		</article>
+
+		<!-- ================= D ================= -->
+		<article class="card">
+			<div class="card-head"><h2>方案 D — 悬停才分裂</h2><span class="tag">最低视觉噪音</span></div>
+			<p class="desc">平时就是原来那颗 38px 蓝圆（↑ 插队，完全复刻空闲态）；<b>鼠标移上去</b>才从左边 180ms 展开「排队」半段，变成 76px 的对半胶囊，移开收回。首次鼠标进入后保持展开（右图 <code>keep</code> 演示常驻展开态）。</p>
+			<div class="stage"><div class="mock" data-opt="D"></div></div>
+			<div class="meta">
+				<div class="pro"><b>运行中与空闲看起来一样</b>，只有功能变了；静止态最干净。</div>
+				<div class="pro">不打断流式界面的安静感，排队是「想找才找」的副操作。</div>
+				<div class="con"><b>触屏基本不可用</b>（没有 hover，排队发现不了）——必须配 <code>@media (hover: none)</code> 回落成方案 A 的常驻胶囊。</div>
+				<div class="con">宽度动画会推动工具条左侧 chip，快速掠过时可能闪动。</div>
+			</div>
+		</article>
+
+		<!-- ================= 图标候选 ================= -->
+		<article class="card">
+			<div class="card-head"><h2>「排队」用哪个图标</h2></div>
+			<p class="desc">插队固定用 <b>↑</b>（与空闲态发送一致，不出戏）。排队候选（都取自项目已用的 react-icons/fi）：</p>
+			<div class="icon-row">
+				<figure>
+					<span class="icon-box" id="ic-list"></span>
+					<figcaption><b>FiList · 队列</b>和 placeholder「点『排队』」文案最贴，静态也有「待办列表」含义。</figcaption>
+				</figure>
+				<figure>
+					<span class="icon-box" id="ic-clock"></span>
+					<figcaption><b>FiClock · 稍后</b>强调「晚点发」，但读起来像历史记录 / 定时。</figcaption>
+				</figure>
+				<figure>
+					<span class="icon-box" id="ic-down"></span>
+					<figcaption><b>FiArrowDown · 下沉</b>「压到后面去」，与 ↑ 构成上下对称的一对，最直观但抽象。</figcaption>
+				</figure>
+				<figure>
+					<span class="icon-box" id="ic-plus"></span>
+					<figcaption><b>FiPlus · 追加</b>「再加一条」，歧义最小也最没有信息量。</figcaption>
+				</figure>
+			</div>
+			<div class="meta">
+				<div class="pro">无论选哪个，两半都必须带 <code>title</code>（排队：加入队列，AI 回答完全结束后才发送 / 插队：立即插队，本回合立刻响应），并补 i18n key。</div>
+				<div class="pro">placeholder 文案（「…或点『排队』…」）不用动，图标态靠 title 兜底。</div>
+				<div class="con">不要用 <b>FiSend</b> 做插队：纸飞机与空闲态发送重复，和排队图标放一起难分辨。</div>
+				<div class="con">不要给两半用同色同图标风格（如都实心蓝）——触屏无 hover，分不清哪半是哪个。</div>
+			</div>
+		</article>
+
+		<!-- ================= 横向对比 ================= -->
+		<article class="card">
+			<div class="card-head"><h2>横向对比</h2></div>
+			<table class="cmp">
+				<thead><tr><th>方案</th><th>横向占用</th><th>主次</th><th>触屏</th><th>实现成本</th><th>一句话</th></tr></thead>
+				<tbody>
+					<tr>
+						<td><b>A 同体蓝胶囊</b></td><td>78px</td><td>平权</td><td class="win">好</td><td>低（纯 CSS + 一个 wrapper）</td>
+						<td>最稳的默认选择，先做它。</td>
+					</tr>
+					<tr>
+						<td><b>B 幽灵 / 实心</b></td><td>≈92px</td><td class="win">清晰</td><td>中（左半偏暗）</td><td>低</td>
+						<td>最像「主按钮 + 副按钮」，但更宽。</td>
+					</tr>
+					<tr>
+						<td><b>C 上下对半圆</b></td><td class="win">38px</td><td>平权</td><td class="win">差（误触）</td><td>低</td>
+						<td>只适合作为 ≤560px 的窄屏降级形态。</td>
+					</tr>
+					<tr>
+						<td><b>D 悬停分裂</b></td><td>38px → 76px</td><td>平权</td><td>差（需回落）</td><td>中（宽度动画 + hover 媒体查询）</td>
+						<td>桌面端最安静，触屏必须走 A。</td>
+					</tr>
+				</tbody>
+			</table>
+			<div class="meta">
+				<div class="pro"><b>可组合</b>：桌面用 D、触屏用 A（<code>@media (hover: none)</code> 切换），窄屏（≤560px）再降 C —— 共用同一段 React 结构，只换 class。</div>
+				<div class="pro">三个状态（空闲 / 运行未输入 / 运行已输入）都要过一遍 snapshot 与 i18n key（<code>steerTip</code>、<code>queueTip</code> 之类的新 key 需要 zh + en + 8 个语言包）。</div>
+				<div class="con">运行中未输入时两半都提交不了：建议<b>保留但禁用</b>（尺寸不跳、位置不跳）+ 整颗胶囊变暗，只有停止可用 —— 预览勾选框右侧的行为即是。例外：纯附件（无文字）也能发，那时两半照常可用。</div>
+				<div class="con">明确<b>不合并停止</b>：停止与插队/排队语义相反，挤进同一颗按钮会误点成中止（或反过来中止失败）。</div>
+			</div>
+		</article>
+	</div>
+</div>
+
+<script>
+	const I = {
+		up: '<svg class="fi" viewBox="0 0 24 24"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>',
+		square: '<svg class="fi" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>',
+		list: '<svg class="fi" viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>',
+		clock: '<svg class="fi" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/></svg>',
+		down: '<svg class="fi" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="5 12 12 19 19 12"/></svg>',
+		plus: '<svg class="fi" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
+		stop: '<svg class="fi" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor"/></svg>',
+		paperclip: '<svg class="fi" viewBox="0 0 24 24"><path d="M21.4 11.05 12.25 20.2a5.5 5.5 0 0 1-7.78-7.78l9.19-9.19a3.6 3.6 0 0 1 5.09 5.09l-9.2 9.19a1.8 1.8 0 0 1-2.54-2.54l8.48-8.49"/></svg>',
+		grid: '<svg class="fi" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>',
+	};
+
+	const TIPQ = '加入队列：AI 回答完全结束后才发送（不打断）';
+	const TIPS = '插队：立即发送，本回合马上响应（Enter）';
+	const TIPSTOP = '停止智能体';
+
+	/* 各自的两半：运行中未输入时两半都无法提交（空文本 submit 直接被拒），所以一起禁用 */
+	const qBtn = (icon, empty) => `<button class="q" title="${TIPQ}" ${empty ? 'disabled' : ''}>${icon}</button>`;
+
+	/* 每种方案在不同状态下右侧动作区的 HTML */
+	function actions(opt, state, showDisabled) {
+		const empty = state === 'runEmpty';
+		const streaming = state !== 'idle';
+		const stopBtn = `<button class="round" title="${TIPSTOP}">${I.square}</button>`;
+
+		if (!streaming) return `<button class="round" title="发送（Enter）">${I.up}</button>`;
+
+		const A = `<span class="A-pill" title="排队 | 插队">
+			${qBtn(I.list, empty)}
+			<button class="s" title="${TIPS}" ${empty ? 'disabled' : ''}>${I.up}</button>
+		</span>`;
+		const B = `<span class="B-pill" title="排队 | 插队">
+			${qBtn(I.list, empty)}
+			<button class="s" title="${TIPS}" ${empty ? 'disabled' : ''}>${I.up}</button>
+		</span>`;
+		const C = `<span class="C-circle" title="排队 | 插队">
+			${qBtn(I.list, empty)}
+			<button class="s" title="${TIPS}" ${empty ? 'disabled' : ''}>${I.up}</button>
+		</span>`;
+		// D：静止态就是一颗纯蓝圆（↑）；真身是 hover 才展开的对半胶囊
+		const D = `<span class="D-wrap">
+			<span class="D-pill">${qBtn(I.list, empty)}<button class="s" title="${TIPS}" ${empty ? 'disabled' : ''}>${I.up}</button></span>
+		</span>`;
+
+		// 现状：运行中且输入为空时，排队药丸根本不渲染（只有停止），保持一致
+		const now = empty ? '' : `<button class="btn supplement" style="width:auto;border-radius:999px;padding:0 16px;gap:5px;font-size:13px" title="${TIPQ}">
+			${I.list} 排队</button>`;
+
+		let main = opt === 'A' ? A : opt === 'B' ? B : opt === 'C' ? C : opt === 'D' ? D : now;
+		if (empty && !showDisabled && opt !== 'now') main = '';
+
+		// D 的两种形态并排给出：静止（上）/ 悬停展开（下），免得靠描述想象
+		const dExtra = opt === 'D'
+			? `<div class="D-extra">
+					<span class="D-pill keep">${qBtn(I.list, empty)}<button class="s" title="${TIPS}" ${empty ? 'disabled' : ''}>${I.up}</button></span>
+					<span class="D-hint" style="margin:0">↑ 左：静止态（鼠标不在上面） · 右：悬停展开态（触屏需回落成方案 A 的常驻胶囊）</span>
+				</div>`
+			: '';
+
+		return `<div class="actions-col"><span class="right">${main}${stopBtn}</span>${dExtra}</div>`;
+	}
+
+	const PH_IDLE = '给 pi 发送消息 — Enter 发送，/ 查看命令';
+	const PH_RUN = '智能体正在工作中…回车插队发送，或点「排队」等回答结束后发送';
+
+	function render() {
+		const state = document.querySelector('#seg-state .on').dataset.state;
+		const showDisabled = document.getElementById('chk-disabled').checked;
+		document.querySelectorAll('.mock').forEach((el) => {
+			const opt = el.dataset.opt;
+			const streaming = state !== 'idle';
+			const text = state === 'runText' ? '先看看 login.ts，别急着改' : '';
+			el.innerHTML = `
+				<div class="inputbox">
+					<textarea rows="1" placeholder="${streaming ? PH_RUN : PH_IDLE}" ${streaming ? 'disabled' : ''}>${text}</textarea>
+					<div class="composer-tools">
+						<div class="composer-tools-left">
+							<button class="btn attach-img" title="上传文件">${I.paperclip}</button>
+							<button class="btn tpl-open" title="提示词模板">${I.grid}</button>
+							<span class="chip">claude-sonnet-4.5</span>
+						</div>
+						<div class="composer-tools-right">${actions(opt, state, showDisabled)}</div>
+					</div>
+				</div>`;
+		});
+	}
+
+	document.getElementById('seg-state').addEventListener('click', (e) => {
+		const b = e.target.closest('button');
+		if (!b) return;
+		document.querySelectorAll('#seg-state button').forEach((x) => x.classList.remove('on'));
+		b.classList.add('on');
+		render();
+	});
+	document.getElementById('chk-disabled').addEventListener('change', render);
+
+	// textarea 自适应（跟线上一致：内容多则长高）
+	document.addEventListener('input', (e) => {
+		if (e.target.tagName === 'TEXTAREA') {
+			e.target.style.height = 'auto';
+			e.target.style.height = Math.min(e.target.scrollHeight, 220) + 'px';
+		}
+	});
+
+	document.getElementById('ic-list').innerHTML = I.list;
+	document.getElementById('ic-clock').innerHTML = I.clock;
+	document.getElementById('ic-down').innerHTML = I.down;
+	document.getElementById('ic-plus').innerHTML = I.plus;
+	render();
+</script>
+</body>
+</html>

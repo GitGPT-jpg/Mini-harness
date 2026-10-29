@@ -1,0 +1,108 @@
+{
+	"format": "pi-web-ui-preset",
+	"version": 1,
+	"name": "极简学术写作与文献审稿",
+	"description": "专注论文撰写、深度研读与学术润色：UI 彻底隐藏开发者与终端图标、保留纯净写作视野、禁用全部写操作与执行工具（仅只读）、超大上下文保留（60k tokens）、学术快捷短语。",
+	"author": "academic-lab",
+	"tags": ["写作", "学术", "只读", "极简", "大上下文"],
+	"createdAt": "2026-03-31T08:30:00.000Z",
+	"appVersion": "0.99.0",
+	"enabledTools": ["read", "present_files"],
+	"settings": {
+		"promptMode": "append",
+		"customSystemPrompt": "你是一位拥有国际一流学术期刊审稿经验的资深学者与中英双语写作专家。精通学术论证逻辑、文献综述规范与严谨的同行评议标准。在行文润色中，杜绝空洞辞藻与陈词滥调，注重论证链条的严密性、术语概念的精确性以及学术语气的客观中立。",
+		"promptTemplate": "",
+		"promptOverrides": {
+			"soul": "严谨、思辨、字句推敲、见解深刻。对论证漏洞与逻辑跳跃保持高度敏感。"
+		},
+		"disabledAgentTools": [
+			"bash",
+			"edit",
+			"write",
+			"patch",
+			"lsp",
+			"eval",
+			"edit_soft",
+			"delegate_task",
+			"ask_user_question",
+			"browser_page",
+			"conversation_read",
+			"claim_files",
+			"plan_update",
+			"skill",
+			"schedule",
+			"compact_context",
+			"powershell",
+			"ls",
+			"grep",
+			"find",
+			"terminal_create",
+			"terminal_list",
+			"terminal_close",
+			"terminal_input",
+			"terminal_key",
+			"terminal_read",
+			"terminal_wait"
+		],
+		"disabledPluginTools": [],
+		"toolPromptOverrides": {
+			"read": {
+				"description": "精确读取文献正文、草稿段落与参考资料，杜绝猜测原文内容。"
+			},
+			"present_files": {
+				"description": "向用户展示论文插图、数据可视化图表与排版产物卡片。"
+			}
+		},
+		"toolLazyLoading": false,
+		"readDirEnabled": true,
+		"toolApprovalEnabled": true,
+		"toolWatchdogTimeoutMs": 600000,
+		"questionnaireEnabled": true,
+		"editSoftEnabled": false,
+		"terminalToolsEnabled": false,
+		"terminalBash": false,
+		"terminalBashIdleMs": 15000,
+		"terminalBashMaxForegroundMs": 60000,
+		"disabledSkills": [],
+		"disabledExtensions": [],
+		"skillsFullText": [],
+		"retryMaxAttempts": 3,
+		"softCapTokens": 60000,
+		"softCapByModel": {},
+		"subagentDefaultModel": null,
+		"visionBridgeEnabled": true,
+		"visionBridgeModel": null,
+		"visionBridgePromptMode": "append",
+		"visionBridgePrompt": "作为学术图表分析助手，请详细提取该学术插图、架构图或图表中的数据坐标轴、核心趋势及关键标注信息。",
+		"scmCommitMsgPromptMode": "append",
+		"scmCommitMsgPrompt": "",
+		"planModePromptMode": "append",
+		"planModePrompt": "",
+		"goalModeEnabled": false,
+		"parallelReminderEnabled": true,
+		"uiLayout": {
+			"sideDockFloat": false,
+			"topbarText": true,
+			"hidden": ["host:terminal", "host:git", "host:branch"],
+			"align": {
+				"topbar.primary": "start",
+				"bottombar": "center"
+			},
+			"order": ["host:brand", "host:chat", "host:files", "host:model", "host:theme"]
+		},
+		"disabledPlugins": [],
+		"thinkingWrap": true,
+		"toolsWrap": false,
+		"toolImagesEnabled": true,
+		"quickPhrasesEnabled": true,
+		"quickPhrases": [
+			"润色以上学术段落，提升论证严密性与逻辑连贯度",
+			"提炼出本文的 3 个核心创新点与主要研究贡献",
+			"检查术语一致性与中英文标点格式规范",
+			"将该中文摘要改写为地道、精确的英文学术论文风格",
+			"梳理当前论点脉络，给出一份层次清晰的学术提纲"
+		],
+		"devNoCache": false,
+		"autoReload": false
+	}
+}

@@ -1,0 +1,19 @@
+{
+	"name": "db-client-plugin",
+	"private": true,
+	"type": "module",
+	"description": "pi-web-ui 数据库连接管理插件（构建用 package.json，不发布；运行时驱动依赖由插件服务端自动安装）",
+	"scripts": {
+		"build": "node build.mjs"
+	},
+	"devDependencies": {
+		"esbuild": "^0.25.5"
+	},
+	"dependencies": {
+		"ioredis": "^6.0.0",
+		"mongodb": "^7.7.0",
+		"mssql": "^12.7.10",
+		"mysql2": "^3.24.6",
+		"pg": "^8.23.1"
+	}
+}

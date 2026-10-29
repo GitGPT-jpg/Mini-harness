@@ -1,0 +1,269 @@
+/**
+ * 插件脚手架端到端（issue #546）：`pi-web-ui plugin create` 生成的骨架必须**真的能用**。
+ *
+ * 已修的两个越界（两者都会让插件在浏览器里整页空白，而服务端完全看不出来）：
+ *   ① `client/entry.mjs` 曾 import `"../sdk/index.mjs"` —— 宿主只暴露
+ *      `/plugins/<id>/client/*`，越界路径落 SPA 兜底返回 HTML，浏览器拒绝执行整个 bundle；
+ *   ② SDK 只拷了 `index.mjs`，而 `index.mjs` 末尾 `export * from "./client-utils.mjs"`
+ *      —— 少它连服务端 `import()` 都 ERR_MODULE_NOT_FOUND（比 ① 更早炸）。
+ *
+ * 覆盖：四个模板逐个生成 → 文件布局/自检/服务端可加载 → 真服务里 attach 清单无 error
+ * → **按浏览器口径抓整条客户端 import 图**（URL 解析 + MIME 校验）→ upgrade-sdk 补拷。
+ *
+ * 运行：先 npm run build:server，再 node tests/plugin-scaffold-test.mjs（零 token）
+ */
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL, fileURLToPath } from "node:url";
+import WebSocket from "ws";
+import { checkPluginImports, staticImportSpecifiers } from "../plugin-sdk/import-check.mjs";
+import { freePort, portUp } from "./lib/port-utils.mjs";
+
+const PORT = 8960;
+const BASE = `http://127.0.0.1:${PORT}`;
+const NODE = realpathSync(process.execPath);
+const REPO = fileURLToPath(new URL("..", import.meta.url));
+const CLI = join(REPO, "bin", "pi-web-ui.mjs");
+const TEMPLATES = ["minimal", "ui-slot", "agent-tool", "renderer"];
+const SDK_TEMPLATES = TEMPLATES.filter((t) => t !== "renderer");
+
+const tmp = mkdtempSync(join(tmpdir(), "piweb-scaffold-"));
+const dataDir = join(tmp, "data");
+const work = join(tmp, "work");
+const pluginsDir = join(dataDir, "plugins");
+mkdirSync(work, { recursive: true });
+
+let failures = 0;
+const check = (name, cond, extra = "") => {
+	if (cond) console.log(`  ✓ ${name}`);
+	else {
+		failures++;
+		console.log(`  ✗ FAIL: ${name}${extra ? ` — ${extra}` : ""}`);
+	}
+};
+const idOf = (t) => `scaffold-${t}`;
+const dirOf = (t) => join(pluginsDir, idOf(t));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** 跑 CLI 并返回 { stdout, status }。 */
+function cli(args) {
+	const r = spawnSync(NODE, [CLI, ...args], { encoding: "utf8", cwd: REPO });
+	return { stdout: `${r.stdout ?? ""}${r.stderr ?? ""}`, status: r.status };
+}
+
+let proc = null;
+let sock = null;
+
+/** 按浏览器口径抓 `entry.mjs` 的整条 import 图（URL 解析 + MIME 校验）。 */
+async function crawlClientGraph(id) {
+	const seen = new Map(); // 相对路径 → { status, contentType }
+	const queue = ["client/entry.mjs"];
+	const problems = [];
+	while (queue.length > 0) {
+		const rel = queue.shift();
+		if (seen.has(rel)) continue;
+		const url = `${BASE}/plugins/${id}/${rel}`;
+		let res;
+		try {
+			res = await fetch(url);
+		} catch (err) {
+			problems.push(`${rel}: fetch 失败 ${err?.message ?? err}`);
+			continue;
+		}
+		const contentType = res.headers.get("content-type") ?? "";
+		seen.set(rel, { status: res.status, contentType });
+		if (res.status !== 200) problems.push(`${rel}: HTTP ${res.status}`);
+		else if (!/javascript/i.test(contentType)) problems.push(`${rel}: content-type=${contentType}（不是 JS）`);
+		if (res.status !== 200 || !/javascript/i.test(contentType)) continue;
+		// 逐条相对 import 按 URL 解析 —— 与浏览器动态 import 同一套规则。
+		for (const spec of staticImportSpecifiers(await res.text())) {
+			if (!spec.startsWith("./") && !spec.startsWith("../")) continue;
+			const target = new URL(spec, url);
+			const prefix = `/plugins/${id}/`;
+			if (!target.pathname.startsWith(prefix)) {
+				problems.push(`${rel}: import "${spec}" 解析到暴露面之外（${target.pathname}）`);
+				continue;
+			}
+			queue.push(target.pathname.slice(prefix.length));
+		}
+	}
+	return { seen, problems };
+}
+
+try {
+	try {
+		freePort(PORT);
+	} catch {}
+
+	// ---- 1. 四个模板逐个生成 + 静态自检 ------------------------------------
+	console.log("▶ 脚手架生成与静态自检");
+	for (const t of TEMPLATES) {
+		const { stdout, status } = cli(["plugin", "create", idOf(t), "--template", t, "--data-dir", dataDir]);
+		check(`${t}：CLI 退出码 0`, status === 0, stdout.trim());
+		check(
+			`${t}：无自检告警`,
+			!stdout.includes("⚠"),
+			stdout
+				.split("\n")
+				.filter((l) => l.includes("⚠"))
+				.join(" "),
+		);
+		const dir = dirOf(t);
+		for (const f of ["manifest.json", "index.mjs", "client/entry.mjs", "sdk/index.mjs", "sdk/client-utils.mjs"])
+			check(`${t}：${f} 已生成`, existsSync(join(dir, f)));
+		const usesClientSdk = SDK_TEMPLATES.includes(t);
+		check(
+			`${t}：client/sdk/${usesClientSdk ? "已拷（客户端要用）" : "不白拷（客户端不用 SDK）"}`,
+			existsSync(join(dir, "client", "sdk", "index.mjs")) === usesClientSdk &&
+				existsSync(join(dir, "client", "sdk", "client-utils.mjs")) === usesClientSdk,
+		);
+		const clientSrc = readFileSync(join(dir, "client/entry.mjs"), "utf8");
+		check(
+			`${t}：客户端 import 落在 client/ 内`,
+			usesClientSdk ? clientSrc.includes('from "./sdk/index.mjs"') : !clientSrc.includes("sdk/index.mjs"),
+		);
+		const scan = checkPluginImports(dir);
+		check(`${t}：import 自检零问题`, scan.problems.length === 0, JSON.stringify(scan.problems));
+	}
+	// 服务端入口真的能被 Node 加载（缺 client-utils.mjs 时这里就炸）
+	for (const t of TEMPLATES) {
+		const mod = await import(pathToFileURL(join(dirOf(t), "index.mjs")).href);
+		check(`${t}：服务端入口可加载`, typeof mod.default?.activate === "function");
+	}
+	// 无 SDK 模板的客户端也自足（renderer 走裸 ESM）
+	check(
+		"renderer：客户端是裸 ESM（renderers 表）",
+		readFileSync(join(dirOf("renderer"), "client/entry.mjs"), "utf8").includes("renderers:"),
+	);
+
+	// ---- 2. upgrade-sdk 把缺的拷贝补齐 --------------------------------------
+	console.log("▶ plugin upgrade-sdk：补齐两处拷贝");
+	const healDir = dirOf("ui-slot");
+	rmSync(join(healDir, "client", "sdk"), { recursive: true, force: true });
+	rmSync(join(healDir, "sdk", "client-utils.mjs"), { force: true });
+	const up = cli(["plugin", "upgrade-sdk", idOf("ui-slot"), "--dir", pluginsDir]);
+	check("upgrade-sdk：退出码 0", up.status === 0, up.stdout.trim());
+	check(
+		"upgrade-sdk：服务端副本补齐 client-utils.mjs",
+		existsSync(join(healDir, "sdk", "client-utils.mjs")) && existsSync(join(healDir, "sdk", "index.mjs")),
+	);
+	check(
+		"upgrade-sdk：客户端副本补建（代码 import ./sdk/ 但目录曾被删）",
+		existsSync(join(healDir, "client", "sdk", "index.mjs")) &&
+			existsSync(join(healDir, "client", "sdk", "client-utils.mjs")),
+		up.stdout.trim(),
+	);
+	// 修好之前生成的坏骨架（客户端 import 越界）→ upgrade-sdk 要点名告警而不是静默
+	const oldBad = join(pluginsDir, "legacy-broken");
+	cli(["plugin", "create", "legacy-broken", "--template", "minimal", "--data-dir", dataDir]);
+	writeFileSync(
+		join(oldBad, "client/entry.mjs"),
+		readFileSync(join(oldBad, "client/entry.mjs"), "utf8").replace('"./sdk/index.mjs"', '"../sdk/index.mjs"'),
+	);
+	rmSync(join(oldBad, "client", "sdk"), { recursive: true, force: true });
+	const legacy = cli(["plugin", "upgrade-sdk", "legacy-broken", "--dir", pluginsDir]);
+	check(
+		"upgrade-sdk：修复前的坏骨架被点名（escapes-client 告警）",
+		legacy.stdout.includes("client/ 之外") || legacy.stdout.includes("outside client/"),
+		legacy.stdout.trim(),
+	);
+
+	// ---- 3. 真服务：清单无 error + 浏览器口径抓客户端 import 图 -------------
+	console.log("▶ 真服务：清单 + 客户端 import 图");
+	proc = spawn(NODE, [join(REPO, "dist", "server", "index.js")], {
+		env: {
+			...process.env,
+			PI_WEB_PORT: String(PORT),
+			PI_WEB_DATA_DIR: dataDir,
+			PI_WEB_CWD: work,
+			PI_WEB_PLUGIN_CATALOG_URL: "",
+		},
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	// 必须把 stdout/stderr 读干净（管道写满会卡住服务），顺便当激活证据用。
+	let serverLog = "";
+	proc.stdout.on("data", (d) => {
+		serverLog += d.toString();
+	});
+	proc.stderr.on("data", (d) => {
+		serverLog += d.toString();
+	});
+	{
+		const t0 = Date.now();
+		while (!(await portUp(PORT))) {
+			if (Date.now() - t0 > 25_000) throw new Error("server not ready");
+			await sleep(250);
+		}
+	}
+	await sleep(800);
+
+	const plugins = await new Promise((res, rej) => {
+		sock = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
+		const timer = setTimeout(() => rej(new Error("attach timeout")), 20_000);
+		sock.on("open", () => sock.send(JSON.stringify({ type: "hello", clientId: "scaffold-test" })));
+		sock.on("message", (raw) => {
+			const m = JSON.parse(raw.toString());
+			if (m.type === "plugins") {
+				clearTimeout(timer);
+				res(m.plugins ?? []);
+			}
+		});
+	});
+	for (const t of TEMPLATES) {
+		const info = plugins.find((p) => p.id === idOf(t));
+		check(`${t}：清单里有它且 hasClient`, info?.hasClient === true, JSON.stringify(info));
+		check(`${t}：激活无 error`, info?.error === undefined, JSON.stringify(info?.error));
+	}
+	// 骨架真的跑到了 activate（不是只有 manifest 合法）——服务端 stdout 里带插件日志。
+	for (const t of TEMPLATES)
+		check(
+			`${t}：activate 真的跑过（服务端有 [plugin:${idOf(t)}] 日志）`,
+			serverLog.includes(`[plugin:${idOf(t)}]`),
+			serverLog
+				.split("\n")
+				.filter((l) => l.includes(idOf(t)))
+				.slice(0, 2)
+				.join(" | "),
+		);
+
+	for (const t of TEMPLATES) {
+		const { seen, problems } = await crawlClientGraph(idOf(t));
+		check(`${t}：客户端 import 图全部可加载`, problems.length === 0, problems.join(" | "));
+		if (SDK_TEMPLATES.includes(t)) {
+			check(
+				`${t}：import 图包含 client/sdk/（index + client-utils）`,
+				seen.has("client/sdk/index.mjs") &&
+					seen.has("client/sdk/client-utils.mjs") &&
+					[...seen.values()].every((v) => /javascript/i.test(v.contentType)),
+			);
+		}
+	}
+	// 暴露面边界：判据是宿主只服务 client/*，所以同级 sdk/ 不是 JS（越界 import 必然拿到 HTML）
+	{
+		const res = await fetch(`${BASE}/plugins/${idOf("ui-slot")}/sdk/index.mjs`);
+		const ct = res.headers.get("content-type") ?? "";
+		check("暴露面边界：/plugins/<id>/sdk/* 不是 JS（故客户端依赖必须拷进 client/）", !/javascript/i.test(ct), ct);
+	}
+} catch (err) {
+	check(`未捕获异常：${err?.message ?? err}`, false);
+	console.error(err?.stack ?? err);
+} finally {
+	try {
+		sock?.close();
+	} catch {}
+	if (proc?.pid) {
+		try {
+			process.kill(proc.pid, "SIGKILL");
+		} catch {}
+	}
+	try {
+		freePort(PORT);
+	} catch {}
+	rmSync(tmp, { recursive: true, force: true });
+	await sleep(200);
+}
+
+console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
+process.exit(failures === 0 ? 0 : 1);

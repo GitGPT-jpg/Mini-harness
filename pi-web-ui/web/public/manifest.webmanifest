@@ -1,0 +1,50 @@
+{
+	"name": "pi-web-ui — pi coding agent",
+	"short_name": "pi-web-ui",
+	"description": "The polished browser cockpit for the pi coding agent. Stream conversations, inspect tool calls, manage files and run your workspace.",
+	"start_url": "./",
+	"scope": "./",
+	"display": "standalone",
+	"orientation": "any",
+	"background_color": "#0f172a",
+	"theme_color": "#0f172a",
+	"categories": ["developer tools", "productivity"],
+	"icons": [
+		{
+			"src": "./icons/icon-192.png",
+			"sizes": "192x192",
+			"type": "image/png",
+			"purpose": "any"
+		},
+		{
+			"src": "./icons/icon-512.png",
+			"sizes": "512x512",
+			"type": "image/png",
+			"purpose": "any"
+		},
+		{
+			"src": "./icons/icon-1024.png",
+			"sizes": "1024x1024",
+			"type": "image/png",
+			"purpose": "any"
+		},
+		{
+			"src": "./icons/maskable-192.png",
+			"sizes": "192x192",
+			"type": "image/png",
+			"purpose": "maskable"
+		},
+		{
+			"src": "./icons/maskable-512.png",
+			"sizes": "512x512",
+			"type": "image/png",
+			"purpose": "maskable"
+		},
+		{
+			"src": "./icons/maskable-1024.png",
+			"sizes": "1024x1024",
+			"type": "image/png",
+			"purpose": "maskable"
+		}
+	]
+}

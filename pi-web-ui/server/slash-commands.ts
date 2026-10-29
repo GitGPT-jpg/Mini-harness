@@ -1,0 +1,507 @@
+/**
+ * slash-commands — 斜杠命令目录与内置命令执行，从 agent-service.ts 抽出。
+ *
+ * 职责：
+ *  - NATIVE_COMMANDS：web 服务端原生实现的斜杠命令清单（pi CLI 的交互式内置命令
+ *    如 /model /new 不经 SDK prompt()——不拦截会被当普通文本发给模型）
+ *  - push()：目录 = 内置命令 + 活动对话的扩展命令 / 提示模板 / 技能（与 SDK
+ *    展开行为一致），推 slash_commands 供输入框选择器使用
+ *  - exec()：拦截执行内置命令；返回 false 表示非内置命令，prompt 落到 SDK
+ *
+ * 经 SlashHost 窄接口与 ClientSession 解耦（同 settings-service/goal-service 模式）。
+ * UI 文案直接中文（服务端 notice 约定）。/help 与 /copy 是纯客户端动作（不到服务端），
+ * 保留在目录里供选择器展示，exec 里吞掉防止 SDK 当文本。
+ */
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import type { ServerMessage, SlashCommandInfo } from "./protocol.js";
+import type { PluginCommandDef } from "./plugins.js";
+
+/** ClientSession 提供给本服务的宿主能力（窄接口，便于独立测试）。 */
+export interface SlashHost {
+	emit: (msg: ServerMessage) => void;
+	/** 当前工作目录（/cwd 无参数时回显）。 */
+	cwd: () => string;
+	/** 活动对话的 session（Pi 引擎专有；其他通用引擎可留空）。 */
+	getSession?: () => AgentSession;
+	/** 新建/切到一个空白对话。返回 false = 没能进入新对话（准入关闭 / 同项目
+	 *  对话数达上限 / runtime 创建失败）——此时 /new <prompt> 不能把首条提示发
+	 *  出去，否则会落进用户原本正在用的那个对话。不返回（void）视为成功。 */
+	newChat: () => Promise<void | boolean>;
+	/** Send a prompt in the active conversation (used by /new <prompt>). */
+	prompt?: (text: string) => Promise<void>;
+	setModel: (modelId: string) => Promise<void>;
+	setCwd: (path: string) => Promise<void>;
+	setThinking: (level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") => void;
+	renameSession?: (name: string) => Promise<void> | void;
+	refreshSessions: () => Promise<void>;
+	/** supervisor 的优雅重启调度；返回 false 时 exec 兜底 process.exit(0)。 */
+	onQuit?: () => boolean;
+	/** 切换计划模式（会话级）。 */
+	setPlanMode?: (enabled: boolean) => Promise<void> | void;
+	/** 获取当前会话是否处于计划模式。 */
+	getPlanMode?: () => boolean;
+	/** session.reload() 之后的钩子（重放终端工具开关等设置门控）。 */
+	afterReload?: () => void;
+	/** 插件注册的斜杠命令（registerCommand）——目录展示 + exec 拦截执行。 */
+	pluginCommands?: () => PluginCommandDef[];
+	/** 执行一个插件命令：找到并调用 run，返回 true；没这个命令返回 false。
+	 *  放在宿主层而不是本服务里，因为 clientId/通知回显需要 ClientSession 环境。 */
+	execPluginCommand?: (name: string, args: string) => Promise<boolean> | boolean;
+
+	/** 通用引擎支持：当前模型信息 */
+	getModel?: () => { id: string; name?: string; provider?: string } | undefined;
+	/** 通用引擎支持：可用模型列表 */
+	getAvailableModels?: () => Promise<Array<{ id: string; name: string; provider?: string }>>;
+	/** 通用引擎支持：磁盘或运行时技能列表 */
+	getSkills?: () =>
+		| Array<{ name: string; description?: string; filePath?: string }>
+		| Promise<Array<{ name: string; description?: string; filePath?: string }>>;
+	/** 通用引擎支持：驱动自定义斜杠命令列表 */
+	getExtraCommands?: () => SlashCommandInfo[] | Promise<SlashCommandInfo[]>;
+	/** 通用引擎支持：驱动执行自定义斜杠命令 */
+	execExtraCommand?: (name: string, args: string) => Promise<boolean> | boolean;
+	/** 通用引擎支持：压缩上下文 */
+	compact?: (instructions?: string) => Promise<void>;
+	/** 通用引擎支持：重新加载 */
+	reload?: () => Promise<void>;
+	/** 当前会话名称获取（若无 AgentSession） */
+	getSessionName?: () => string | undefined;
+}
+
+/** Slash commands implemented natively by the web server (the pi CLI's built-in
+ * interactive commands like /model and /new are NOT handled by the SDK's
+ * prompt() — without this they'd be sent to the model as plain text). Keep in
+ * sync with exec(). */
+export const NATIVE_COMMANDS: {
+	name: string;
+	description: string;
+	descriptionEn: string;
+	argumentHint?: string;
+	argumentHintEn?: string;
+}[] = [
+	{
+		name: "new",
+		description: "新建对话（可带首条提示：/new <提示>）",
+		descriptionEn: "New chat (optional first prompt: /new <prompt>)",
+		argumentHint: "[提示]",
+		argumentHintEn: "[prompt]",
+	},
+	{
+		name: "name",
+		description: "重命名当前会话",
+		descriptionEn: "Set session display name",
+		argumentHint: "<名称>",
+		argumentHintEn: "<name>",
+	},
+	{
+		name: "model",
+		description: "切换模型",
+		descriptionEn: "Switch model",
+		argumentHint: "[名称]",
+		argumentHintEn: "[name]",
+	},
+	{
+		name: "compact",
+		description: "压缩上下文",
+		descriptionEn: "Compact context",
+		argumentHint: "[说明]",
+		argumentHintEn: "[instructions]",
+	},
+	{
+		name: "cwd",
+		description: "切换工作目录",
+		descriptionEn: "Switch workspace",
+		argumentHint: "<路径>",
+		argumentHintEn: "<path>",
+	},
+	{
+		name: "plan",
+		description: "开启或关闭计划模式（/plan [on|off]）",
+		descriptionEn: "Toggle plan mode (/plan [on|off])",
+		argumentHint: "[on|off]",
+		argumentHintEn: "[on|off]",
+	},
+	{
+		name: "thinking",
+		description: "设置思考强度",
+		descriptionEn: "Set thinking level",
+		argumentHint: "<off|low|medium|high|xhigh|max>",
+		argumentHintEn: "<off|low|medium|high|xhigh|max>",
+	},
+	{ name: "resume", description: "刷新会话列表", descriptionEn: "Refresh session list" },
+	{ name: "reload", description: "重新加载扩展、技能与模板", descriptionEn: "Reload extensions, skills & templates" },
+	{ name: "help", description: "显示全部命令", descriptionEn: "Show all commands" },
+	{ name: "copy", description: "复制上一条助手回复", descriptionEn: "Copy last assistant reply" },
+	{ name: "pi-web-ui:quit", description: "退出服务", descriptionEn: "Quit server (supervisor will restart)" },
+];
+
+/** Parse a prompt into "/command args" — returns null when it isn't one. */
+export function parseSlash(text: string): { name: string; args: string } | null {
+	const trimmed = text.trim();
+	if (!trimmed.startsWith("/")) return null;
+	const m = trimmed.match(/^\/([^\s]*)\s*([\s\S]*)$/);
+	if (!m) return null;
+	return { name: m[1] ?? "", args: (m[2] ?? "").trim() };
+}
+
+export class SlashCommandsService {
+	constructor(private readonly host: SlashHost) {}
+
+	/**
+	 * Catalog of slash commands for the chat input: web-native builtins first,
+	 * then the SDK's invokable commands for the ACTIVE conversation (extension
+	 * commands, prompt templates, skills) — the same set the SDK expands when a
+	 * prompt text starts with "/" (see AgentSession.prompt).
+	 */
+	async push(): Promise<void> {
+		const commands: SlashCommandInfo[] = [];
+		const seen = new Set<string>();
+		for (const c of NATIVE_COMMANDS) {
+			commands.push({ ...c, source: "builtin" });
+			seen.add(c.name);
+		}
+		if (this.host.getSession) {
+			try {
+				const s = this.host.getSession();
+				if (s) {
+					// Extension commands — the SDK already suffixes collisions with builtin
+					// names ("new:2"), and those still reach the SDK since exec() only
+					// intercepts the exact native names.
+					for (const cmd of s.extensionRunner?.getRegisteredCommands?.() ?? []) {
+						if (seen.has(cmd.invocationName)) continue;
+						commands.push({
+							name: cmd.invocationName,
+							description: cmd.description,
+							source: "extension",
+						});
+						seen.add(cmd.invocationName);
+					}
+					// Prompt templates: /templatename args
+					for (const t of s.promptTemplates ?? []) {
+						if (seen.has(t.name)) continue;
+						commands.push({
+							name: t.name,
+							description: t.description,
+							source: "prompt",
+						});
+						seen.add(t.name);
+					}
+					// Skills: /skill:name args
+					for (const skill of s.resourceLoader?.getSkills?.()?.skills ?? []) {
+						const name = `skill:${skill.name}`;
+						if (seen.has(name)) continue;
+						commands.push({
+							name,
+							description: skill.description,
+							source: "skill",
+						});
+						seen.add(name);
+					}
+				}
+			} catch {
+				// Session not ready yet — native-only catalog still serves the picker.
+			}
+		}
+		// 外部或通用引擎注入的技能（Universal / DSH）
+		if (this.host.getSkills) {
+			try {
+				const skills = await this.host.getSkills();
+				for (const skill of skills) {
+					const name = skill.name.startsWith("skill:") ? skill.name : `skill:${skill.name}`;
+					if (seen.has(name)) continue;
+					commands.push({
+						name,
+						description: skill.description ?? `Skill ${skill.name}`,
+						source: "skill",
+					});
+					seen.add(name);
+				}
+			} catch {
+				/* ignore */
+			}
+		}
+		// 驱动自定义斜杠命令（如 Claude Code: /cost, /doctor, /init 等）
+		if (this.host.getExtraCommands) {
+			try {
+				const extra = await this.host.getExtraCommands();
+				for (const cmd of extra) {
+					if (seen.has(cmd.name)) continue;
+					commands.push(cmd);
+					seen.add(cmd.name);
+				}
+			} catch {
+				/* ignore */
+			}
+		}
+		// UI 插件注册的命令（host.registerCommand）——全局，不依赖会话就绪。
+		for (const cmd of this.host.pluginCommands?.() ?? []) {
+			if (seen.has(cmd.name)) continue; // 与内置/扩展重名时先到先得（内置优先）
+			commands.push({
+				name: cmd.name,
+				description: cmd.description,
+				descriptionEn: cmd.descriptionEn,
+				argumentHint: cmd.argumentHint,
+				argumentHintEn: cmd.argumentHintEn,
+				source: "plugin",
+			});
+			seen.add(cmd.name);
+		}
+		this.host.emit({ type: "slash_commands", commands });
+	}
+
+	/** Run a native slash command (see NATIVE_COMMANDS). Returns false when the
+	 *  name is not a native command (the prompt falls through to the SDK). */
+	async exec(name: string, args: string): Promise<boolean> {
+		switch (name) {
+			case "new": {
+				const first = args.trim();
+				const ready = await this.host.newChat();
+				// /new <prompt>: deliver the text as the new session's first
+				// prompt, exactly as if typed after the switch. Empty = old
+				// behavior (blank chat, no send). Only when the switch actually
+				// landed on a blank chat — newChat() reports false when it bailed
+				// (cap reached / runtime creation failed) and sending anyway would
+				// drop the text into the conversation the user was already in.
+				if (ready !== false && first && this.host.prompt) await this.host.prompt(first);
+				return true;
+			}
+			case "name": {
+				const trimmed = args.trim();
+				if (!trimmed) {
+					const current = this.host.getSession?.()?.sessionName ?? this.host.getSessionName?.();
+					this.host.emit({
+						type: "notice",
+						level: "info",
+						text: current ? `当前会话名称：${current}。用法：/name <名称>` : `用法：/name <名称>`,
+						textEn: current ? `Current session name: ${current}. Usage: /name <name>` : `Usage: /name <name>`,
+					});
+					return true;
+				}
+				if (this.host.renameSession) {
+					await this.host.renameSession(trimmed);
+				} else if (this.host.getSession) {
+					this.host.getSession().setSessionName(trimmed);
+					await this.host.refreshSessions();
+					this.host.emit({
+						type: "notice",
+						level: "info",
+						text: `已重命名当前会话为「${trimmed}」`,
+						textEn: `Renamed current session to "${trimmed}"`,
+					});
+				}
+				return true;
+			}
+			case "model": {
+				if (!args) {
+					const current = this.host.getSession?.()?.model ?? this.host.getModel?.();
+					const modelDesc = current
+						? current.provider
+							? `${current.name || current.id}（${current.provider}/${current.id}）`
+							: `${current.name || current.id}`
+						: "";
+					this.host.emit({
+						type: "notice",
+						level: "info",
+						text: modelDesc ? `当前模型：${modelDesc}。用法：/model <名称>` : `用法：/model <名称>`,
+						textEn: modelDesc ? `Current model: ${modelDesc}. Usage: /model <name>` : `Usage: /model <name>`,
+					});
+					return true;
+				}
+				const query = args.toLowerCase();
+				let available: readonly { id: string; name: string; provider?: string }[] = [];
+				if (this.host.getSession) {
+					try {
+						available = await this.host.getSession().modelRuntime.getAvailable();
+					} catch {
+						available = [];
+					}
+				}
+				if (available.length === 0 && this.host.getAvailableModels) {
+					available = await this.host.getAvailableModels();
+				}
+				const hasLister = Boolean(this.host.getSession || this.host.getAvailableModels);
+				if (hasLister) {
+					// Prefer an exact "provider/id" match, else id/name substring.
+					const exact = available.find((m) => (m.provider ? `${m.provider}/${m.id}` : m.id) === args.trim());
+					const matches = exact
+						? [exact]
+						: available.filter(
+								(m) =>
+									m.id.toLowerCase().includes(query) ||
+									m.name.toLowerCase().includes(query) ||
+									Boolean(m.provider && m.provider.toLowerCase().includes(query)),
+							);
+					if (matches.length === 0) {
+						this.host.emit({
+							type: "notice",
+							level: "error",
+							text: `没有匹配到模型：${args}（可用模型见顶栏模型列表）`,
+							textEn: `No matching model: ${args} (see the model list in the top bar)`,
+						});
+						return true;
+					}
+					const pick = matches[0];
+					if (matches.length > 1) {
+						this.host.emit({
+							type: "notice",
+							level: "warning",
+							text: `找到 ${matches.length} 个匹配模型，已选用：${pick.name}（精确匹配请用 provider/id）`,
+							textEn: `Found ${matches.length} matching models, using: ${pick.name} (use provider/id for an exact match)`,
+						});
+					}
+					await this.host.setModel(pick.provider ? `${pick.provider}/${pick.id}` : pick.id);
+				} else {
+					await this.host.setModel(args.trim());
+				}
+				return true;
+			}
+			case "compact":
+				try {
+					if (this.host.compact) {
+						await this.host.compact(args || undefined);
+					} else if (this.host.getSession) {
+						await this.host.getSession().compact(args || undefined);
+					} else {
+						this.host.emit({
+							type: "notice",
+							level: "info",
+							text: "当前引擎不支持手动上下文压缩",
+							textEn: "Current engine does not support manual context compaction",
+						});
+					}
+				} catch {
+					// 压缩过程/结果/错误反馈统一由 agent-service onEvent 的
+					// compaction_start / compaction_end 事件处理（含 errorMessage），
+					// 这里不重复发通知；SDK 在 throw 前必发 compaction_end（issue #33）。
+				}
+				return true;
+			case "cwd":
+				if (!args) {
+					this.host.emit({
+						type: "notice",
+						level: "info",
+						text: `当前工作目录：${this.host.cwd()}。用法：/cwd <路径>`,
+						textEn: `Current directory: ${this.host.cwd()}. Usage: /cwd <path>`,
+					});
+				} else {
+					await this.host.setCwd(args);
+				}
+				return true;
+			case "plan": {
+				const trimmed = args.trim().toLowerCase();
+				const current = this.host.getPlanMode ? this.host.getPlanMode() : false;
+				const next = trimmed === "on" ? true : trimmed === "off" ? false : !current;
+				if (this.host.setPlanMode) {
+					await this.host.setPlanMode(next);
+				}
+				return true;
+			}
+			case "thinking": {
+				const ALIAS: Record<string, string> = {
+					off: "off",
+					minimal: "minimal",
+					low: "low",
+					medium: "medium",
+					high: "high",
+					xhigh: "xhigh",
+					max: "max",
+					关闭: "off",
+					极简: "minimal",
+					低: "low",
+					中: "medium",
+					高: "high",
+					极高: "xhigh",
+					最大: "max",
+				};
+				const level = ALIAS[args.trim().toLowerCase()];
+				if (!level) {
+					this.host.emit({
+						type: "notice",
+						level: "error",
+						text: `无效的思考强度：${args || "（空）"}。可用：off / minimal / low / medium / high / xhigh / max`,
+						textEn: `Invalid thinking level: ${args || "(empty)"}. Available: off / minimal / low / medium / high / xhigh / max`,
+					});
+					return true;
+				}
+				this.host.setThinking(level as Parameters<SlashHost["setThinking"]>[0]);
+				return true;
+			}
+			case "resume":
+				await this.host.refreshSessions();
+				this.host.emit({
+					type: "notice",
+					level: "info",
+					text: "会话列表已刷新，请在左侧「历史对话」中选择",
+					textEn: "Session list refreshed — pick one under History on the left",
+				});
+				return true;
+			case "reload":
+				try {
+					// Re-discovers extensions / skills / prompt templates from disk and
+					// re-pushes the picker catalog (the CLI's /reload semantics).
+					if (this.host.reload) {
+						await this.host.reload();
+					} else if (this.host.getSession) {
+						await this.host.getSession().reload();
+					}
+					// reload() 会把 custom 工具加回活跃集——重放设置门控（终端开关等）。
+					this.host.afterReload?.();
+					await this.push();
+					this.host.emit({
+						type: "notice",
+						level: "info",
+						text: "已重新加载扩展、技能与提示模板",
+						textEn: "Reloaded extensions, skills and prompt templates",
+					});
+				} catch (err) {
+					this.host.emit({
+						type: "notice",
+						level: "error",
+						text: `重新加载失败：${(err as Error).message}`,
+						textEn: `Reload failed: ${(err as Error).message}`,
+					});
+				}
+				return true;
+			case "pi-web-ui:quit": {
+				this.host.emit({
+					type: "notice",
+					level: "info",
+					text: "正在退出 pi-web-ui… supervisor 将自动重启服务",
+					textEn: "Quitting pi-web-ui… the supervisor will restart the service",
+				});
+				setTimeout(() => {
+					const didSchedule = this.host.onQuit?.() ?? false;
+					if (!didSchedule) {
+						setTimeout(() => process.exit(0), 100);
+					}
+				}, 300);
+				return true;
+			}
+			case "":
+			case "?":
+			case "help": {
+				void this.push();
+				const cmdList = NATIVE_COMMANDS.map((c) => `/${c.name} : ${c.description}`).join("\n");
+				this.host.emit({
+					type: "notice",
+					level: "info",
+					text: `可用斜杠指令：\n${cmdList}`,
+					textEn: `Available slash commands:\n${cmdList}`,
+				});
+				return true;
+			}
+			case "copy":
+				// Client-side UI actions — the client handles them before sending;
+				// swallow here so the SDK never sees them as plain prompt text.
+				return true;
+			default:
+				// 驱动扩展命令优先拦截
+				if (this.host.execExtraCommand) {
+					const handled = await this.host.execExtraCommand(name, args);
+					if (handled) return true;
+				}
+				// 插件命令：拦截执行（纯配置动作，与内置命令同级，不到 SDK）。
+				return (await this.host.execPluginCommand?.(name, args)) ?? false;
+		}
+	}
+}

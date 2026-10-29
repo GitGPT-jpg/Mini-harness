@@ -1,0 +1,105 @@
+/**
+ * 手写的 chrome API 最小声明（只声明我们真正用到的那几个）。
+ *
+ * 为什么不用 `@types/chrome`：多一个 devDependency 就为了让三个文件过类型检查不划算，
+ * 而且手写这份**顺带记录了我们到底依赖哪些权限**（改权限时先看这里）。
+ */
+declare namespace chrome {
+	namespace runtime {
+		interface MessageSender {
+			tab?: { id?: number; url?: string; title?: string };
+		}
+		function sendMessage(message: unknown): Promise<unknown>;
+		function getURL(path: string): string;
+		/** 扩展自身清单（状态接口要报版本，好用“升级扩展”解释老版本没有的能力）。 */
+		function getManifest(): { version?: string };
+		const onMessage: {
+			addListener(
+				cb: (
+					message: unknown,
+					sender: MessageSender,
+					respond: (response?: unknown) => void,
+				) => boolean | undefined | void,
+			): void;
+		};
+	}
+
+	namespace action {
+		const onClicked: { addListener(cb: (tab: { id?: number; url?: string }) => void): void };
+		function setBadgeText(details: { text: string; tabId?: number }): Promise<void>;
+		function setTitle(details: { title: string; tabId?: number }): Promise<void>;
+	}
+
+	namespace commands {
+		const onCommand: { addListener(cb: (command: string, tab?: { id?: number }) => void): void };
+	}
+
+	namespace scripting {
+		interface InjectionResult<T> {
+			result?: T;
+			frameId: number;
+		}
+		function executeScript<T>(injection: {
+			target: { tabId: number; allFrames?: boolean };
+			files?: string[];
+			/** 注入函数可以同步也可以异步（探测页面的那个会发一次请求）。 */
+			func?: (...args: never[]) => T | Promise<T>;
+			args?: unknown[];
+			world?: "ISOLATED" | "MAIN";
+		}): Promise<InjectionResult<T>[]>;
+	}
+
+	namespace tabs {
+		interface Tab {
+			id?: number;
+			windowId?: number;
+			url?: string;
+			active?: boolean;
+		}
+		function query(info: { url?: string | string[]; active?: boolean; currentWindow?: boolean }): Promise<Tab[]>;
+		function update(tabId: number, props: { active?: boolean }): Promise<Tab>;
+		/** 新开标签页（绑定需要授权时，把用户带到带 `?bind=` 的选项页）。 */
+		function create(props: { url: string }): Promise<Tab>;
+		/** 截当前可见区域（物理像素，需 activeTab / host 权限）。 */
+		function captureVisibleTab(
+			windowId: number | undefined,
+			options: { format: "png" | "jpeg"; quality?: number },
+		): Promise<string>;
+		/** 向某个标签页的 content script 发消息（页面桥的 token 交换走它）。 */
+		function sendMessage<T>(tabId: number, message: unknown): Promise<T>;
+		/** 标签页导航/状态变化（页面桥靠它在新页面上补装）。 */
+		const onUpdated: {
+			addListener(cb: (tabId: number, info: { status?: string; url?: string }, tab: Tab) => void): void;
+		};
+	}
+
+	namespace windows {
+		function update(windowId: number, props: { focused?: boolean }): Promise<unknown>;
+	}
+
+	namespace storage {
+		const sync: {
+			get(keys: string[] | null): Promise<Record<string, unknown>>;
+			set(items: Record<string, unknown>): Promise<void>;
+		};
+		/** 配对表放这里（host 权限是本机的，配对跟着权限走，见 shared/bridge-store.ts）。 */
+		const local: {
+			get(keys: string[] | null): Promise<Record<string, unknown>>;
+			set(items: Record<string, unknown>): Promise<void>;
+		};
+		/** 存储变化监听。拾取浮条也能改预设与勾选项 → 选项页得跟着刷新（老环境/测试里可能没有）。 */
+		const onChanged:
+			| { addListener(cb: (changes: Record<string, { newValue?: unknown }>, areaName: string) => void): void }
+			| undefined;
+	}
+
+	namespace permissions {
+		function contains(perms: { origins?: string[]; permissions?: string[] }): Promise<boolean>;
+		function request(perms: { origins?: string[]; permissions?: string[] }): Promise<boolean>;
+	}
+
+	namespace i18n {
+		function getMessage(messageName: string, substitutions?: string | string[]): string;
+		function getUILanguage(): string;
+	}
+}

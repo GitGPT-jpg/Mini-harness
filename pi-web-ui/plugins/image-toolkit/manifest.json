@@ -1,0 +1,13 @@
+{
+	"apiVersion": 2,
+	"id": "image-toolkit",
+	"name": "图片工作台",
+	"nameEn": "Image Studio & Toolkit",
+	"version": "0.2.4",
+	"view": true,
+	"icon": "🎨",
+	"iconSvg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9z\"/><path d=\"M18 15l.9 2.1L21 18l-2.1.9L18 21l-.9-2.1L15 18l2.1-.9z\"/><path d=\"M4.5 19.5l2.5-2.5\"/></svg>",
+	"description": "一体化 AI 生图与图像处理工作台：一套配置同时接入通义万相、FLUX、OpenAI、Google Imagen/Gemini、智谱 CogView、火山豆包、Stability 与 ComfyUI 等主流生图服务；集成压缩（目标体积二分逼近）、裁剪、缩放、格式转换、水印、滤镜调色与 EXIF 分析；生图与处理在同一工作台内无缝流转。提供 8 个 AI 工具，让 agent 自己生图、配置供应商、分析并加工工作区图片与精准像素取色（附带位置截图）。",
+	"descriptionEn": "All-in-one AI image generation & processing studio: configure DashScope (Wanx), FLUX, OpenAI, Google Imagen/Gemini, Zhipu CogView, Volcengine Seedream, Stability & ComfyUI side by side; compress (with binary search target size), crop, resize, format conversion, watermark, filters & EXIF analysis. Seamlessly flow between generation and editing in one unified workbench. Ships 8 AI tools for generation, provider configuration, analysis, processing, and exact pixel color picking with context screenshot crops.",
+	"permissions": ["fs", "http", "tools", "storage", "secrets", "notify", "net"]
+}

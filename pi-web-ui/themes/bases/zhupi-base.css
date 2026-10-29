@@ -1,0 +1,659 @@
+/* themes/bases/zhupi-base.css — 朱批排版语言基底
+ * 包含：稿纸排版语言、全宽文档流、台账行工具调用、※脚注体深度思考、
+ * 左缘朱笔输入栏、印章风格徽标。
+ */
+
+/* =========================================================================
+   朱批 · Vermilion Manuscript
+   整个界面从「聊天气泡」重构成「一张被 AI 做批注的稿纸」：
+   · 无气泡、无头像 —— 人机内容同处一条全宽文档流
+   · 工具调用 = 台账行（等宽小字 + 点线引导符）
+   · 思考流 = 脚注体（※ 起手）
+   · 输入框 = 命令栏，左缘一抹朱笔
+   · 色彩只有语义：墨、淡墨、朱（唯一强调）、印绿
+   ========================================================================= */
+
+/* ---- 0. 稿纸底色：旧纸的暗角与天头微光，纯渐变无图 ---- */
+body,
+.app-root {
+	background-color: var(--bg);
+	background-image:
+		radial-gradient(ellipse 90% 55% at 50% -8%, rgba(255, 253, 247, 0.85) 0%, rgba(255, 253, 247, 0) 70%),
+		radial-gradient(ellipse 100% 70% at 108% 112%, rgba(166, 140, 100, 0.1) 0%, rgba(166, 140, 100, 0) 70%);
+	background-attachment: fixed;
+}
+
+::selection {
+	background: color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+/* ---- 1. 顶栏隐形化：无底色层次，只一条 hairline，印章品牌 ---- */
+.topbar {
+	background: var(--topbar-bg);
+	border-bottom: 1px solid var(--border-soft);
+	box-shadow: none;
+}
+
+.brand-name {
+	font-family: var(--serif);
+	font-weight: 700;
+	letter-spacing: 0.06em;
+}
+
+/* 顶栏控件全部素色化：无底无框，hover 才现 hairline。兜底所有 button /
+ * [role=button]——不管类名是谁（基线 chip / 插件注入 / capsule 等），顶栏里
+ * 一律裸图标，dropdown 触发器不许再带盒子。 */
+.topbar button,
+.topbar [role="button"],
+.topbar a.chip,
+.topbar .chip {
+	background: transparent;
+	border: 1px solid transparent;
+	border-radius: 3px;
+	box-shadow: none;
+	transition:
+		border-color 0.15s ease,
+		color 0.15s ease;
+}
+
+.topbar button:hover,
+.topbar [role="button"]:hover,
+.topbar a.chip:hover,
+.topbar .chip:hover {
+	border-color: var(--border);
+	background: transparent;
+}
+
+/* 与基线「顶栏归一」契约对齐（分层后的显式复刻）：
+   基线 `@layer base` 里那三条顶栏归一规则（裸幽灵化常态 / .active 强调底 /
+   .newchat·.github 圆角组）原本靠优先级补丁压过主题的通用 `.chip`；分层后 baseline
+   不再能压 theme（普通声明层序恒由 theme 抬胜）。这里把它们在这些控件上**当时实际
+   生效的值**显式写出来，与重构前的渲染结果逐像素一致（例：`.chip` 的 11px 字号在
+   顶栏里从来没生效过，顶栏一直是基线的 12.5px）。 */
+.topbar .chip,
+.topbar .tb-tab,
+.topbar button,
+.topbar a.chip,
+.topbar [role="button"],
+.topbar [role="tab"] {
+	font-size: 12.5px;
+}
+
+.topbar button,
+.topbar .chip.github,
+.topbar .chip.newchat,
+.topbar .chip.ephemeral-chat-btn,
+.topbar .chip.sandbox-chip {
+	border-radius: 8px;
+}
+
+.topbar .chip.active,
+.topbar .tb-tab.active {
+	background: var(--accent-soft);
+}
+
+.topbar .dropdown {
+	background: transparent;
+	border: none;
+	box-shadow: none;
+}
+
+/* ---- 2. 消息区：文档化排版 ----
+ * 消息区左右边缘与输入框/快捷短语行保持一致严丝合缝对齐（继承基线列几何）。 */
+
+.msg {
+	position: relative;
+	padding: 2px 0 10px;
+}
+
+.msg-user {
+	padding-bottom: 2px;
+}
+
+.msg-user .msg-actions {
+	margin-top: 2px;
+}
+
+.msg-user + .msg-assistant {
+	padding-top: 2px;
+}
+
+.msg-user + .msg-assistant .msg-body > :first-child {
+	margin-top: 2px;
+}
+
+/* 操作按钮：卡头只有自己的复制键（.chead-copy），消息级按钮（复制三件套 /
+   分叉 / 回滚 / 朗读）统一在底部 .msg-actions 行，流内排在消息气泡/正文下边，
+   桌面端与手机端保持一致。 */
+
+/* 角色行：书目式小标 */
+.msg-meta {
+	margin-bottom: 4px;
+}
+
+/* head 行左右内边距归零：折叠三角贴齐列左缘（文字同一条线），右侧复制
+ * 按钮贴右缘——head 无边框后，钮与缘之间不能悬空。三角形 28px 盒内 16px
+ * 图标居中内缩 6px，用负外边距做光学对齐。 */
+.chead {
+	padding-left: 0;
+	padding-right: 0;
+}
+
+.chead-toggle {
+	margin-left: -6px;
+}
+
+/* 正文块上的单一复制键去重：卡头现在只有自己的复制键，消息级复制
+   （纯文本 / Markdown / 长图三件套）统一在底部 .msg-actions 行里。 */
+.msg-text-copy {
+	display: none;
+}
+
+/* head 悬浮不再出现底色块：纸面保持完全平整（键盘 focus 的 outline 保留，
+ * 只服务键盘导航） */
+div.chead[role="button"]:hover,
+.chead-toggle:hover {
+	background: transparent;
+}
+
+.msg-role {
+	font-size: 10.5px;
+	font-weight: 600;
+	letter-spacing: 0.18em;
+	color: var(--text-faint);
+}
+
+.msg-time {
+	font-family: var(--mono);
+	font-size: 10.5px;
+}
+
+/* ---- 3. 用户输入：去气泡，「起手式，稿纸批注体 ---- */
+.msg-user .msg-body {
+	position: relative;
+	background: transparent;
+	border: none;
+	border-radius: 0;
+	padding: 0 0 0 1.5em;
+	font-family: var(--serif);
+	font-size: 15.5px;
+	font-weight: 600;
+	line-height: 1.8;
+	color: var(--text);
+}
+
+.msg-user .msg-body::before {
+	content: "「";
+	position: absolute;
+	left: 0;
+	top: -0.12em;
+	font-family: var(--serif);
+	font-size: 1.3em;
+	font-weight: 700;
+	color: var(--accent);
+	line-height: 1;
+}
+
+/* ---- 4. 助手正文：衬线文档体，直接是书页 ---- */
+.msg-assistant .msg-text {
+	font-family: var(--serif);
+	font-size: 15px;
+	line-height: 1.85;
+	color: var(--text);
+}
+
+.msg-assistant .msg-text p:first-child {
+	margin-top: 0;
+}
+
+.msg-assistant .msg-text h1,
+.msg-assistant .msg-text h2,
+.msg-assistant .msg-text h3,
+.msg-assistant .msg-text h4 {
+	font-family: var(--serif);
+	font-weight: 700;
+	color: var(--md-strong);
+	letter-spacing: 0.02em;
+}
+
+.msg-assistant .msg-text blockquote {
+	border-left: 2px solid var(--accent-soft);
+	font-style: normal;
+	color: var(--text-dim);
+}
+
+.msg-assistant .msg-text a {
+	color: var(--link);
+	text-decoration: underline dotted;
+	text-decoration-color: color-mix(in srgb, var(--accent) 50%, transparent);
+	text-underline-offset: 3px;
+}
+
+.msg-assistant .msg-text hr {
+	border: none;
+	border-top: 1px dotted var(--border);
+}
+
+.msg-assistant .msg-text code {
+	background: var(--code-bg);
+	color: var(--code-text, var(--accent));
+	border-radius: 2px;
+	padding: 1px 5px;
+}
+
+/* ---- 5. 工具调用 = 台账行：无框无底，点线引导符填空 ---- */
+.toolcall {
+	margin: 1px 0;
+	border: none;
+	border-radius: 0;
+	background: transparent;
+	box-shadow: none;
+	overflow: visible;
+}
+
+.toolcall-head {
+	display: flex;
+	align-items: center;
+	min-height: 24px;
+	padding: 2px 0;
+	font-family: var(--mono);
+	font-size: 12px;
+}
+
+.toolcall-name {
+	font-family: var(--mono);
+	font-weight: 500;
+	font-size: 12px;
+	letter-spacing: 0.02em;
+	color: var(--text-dim);
+}
+
+/* 点线引导符：账本目录式填空，落在名字与状态之间 */
+.toolcall .toolcall-spacer {
+	border-bottom: 1px dotted var(--border);
+	height: 0.7em;
+	margin: 0 10px;
+}
+
+.toolcall-status {
+	color: var(--text-faint);
+}
+
+.toolcall.run .toolcall-name {
+	color: var(--accent);
+}
+
+.toolcall.run .toolcall-status {
+	color: var(--accent);
+}
+
+.toolcall.run .toolcall-head {
+	background: transparent;
+	border-left: none;
+}
+
+.toolcall.ok .toolcall-status {
+	color: var(--green);
+}
+
+.toolcall.err .toolcall-status {
+	color: var(--red);
+}
+
+.toolcall.err .toolcall-name {
+	color: var(--red);
+}
+
+/* 展开的参数/输出：并入台账，无框零内边距平面文本（--code-border/--code-pad
+   已按全透明主题机制置 transparent/0，连带 .termline 一并生效） */
+.toolcall-args pre,
+.toolcall-output pre {
+	background: transparent;
+	border: none;
+	border-radius: 0;
+	padding: 0;
+}
+
+/* 工具卡体：去掉分隔线与内边距，参数/输出与卡头同距平铺 */
+.toolcall-body {
+	border-top: none;
+	padding: 0 0 6px;
+}
+
+/* 卡内重复的终端图标只剩噪音（卡头已有工具图标），参照全透明主题隐藏 */
+.termline-icon {
+	display: none;
+}
+
+.toolcall-output-label {
+	margin-top: 6px;
+}
+
+.toolcall-kill {
+	border-radius: 3px;
+}
+
+/* ---- 6. 思考流 = 脚注：※ 起手，淡墨小字 ---- */
+.thinking {
+	margin: 4px 0;
+	border: none;
+	border-radius: 0;
+	background: transparent;
+	box-shadow: none;
+}
+
+.thinking-head {
+	font-size: 12px;
+	color: var(--text-faint);
+}
+
+.thinking-body {
+	border-top: none;
+	font-style: normal;
+	font-size: 12.5px;
+	color: var(--text-dim);
+	background: transparent;
+	position: relative;
+	padding: 2px 14px 2px 1.6em;
+}
+
+.thinking-body::before {
+	content: "※";
+	position: absolute;
+	left: 0;
+	top: 2px;
+	color: var(--text-faint);
+}
+
+.thinking-live .thinking-toggle,
+.thinking-live-label {
+	color: var(--accent);
+}
+
+/* ---- 7. 折叠摘要行 / 排队提示：并入台账体系 ---- */
+.msg-collapsed {
+	background: transparent;
+	border: none;
+	border-bottom: 1px dotted var(--border-soft);
+	border-radius: 0;
+	box-shadow: none;
+	padding-left: 0;
+	padding-right: 0;
+}
+
+.msg-collapsed-action::before {
+	margin-left: 0;
+}
+
+.msg-error {
+	background: var(--red-soft);
+	border: none;
+	border-left: 3px solid var(--red);
+	border-radius: 0;
+	font-family: var(--serif);
+}
+
+/* ---- 8. 输入区 = 命令栏：与其他主题同构——只动颜色不动几何，
+        朱笔以 inset 阴影画在边框内侧，外缘与消息列/chips 恒对齐 ---- */
+.inputbar {
+	background: transparent;
+}
+
+.inputbox {
+	background: var(--inputbox-bg);
+	border: none;
+	border-radius: 3px;
+	box-shadow: inset 3px 0 0 0 color-mix(in srgb, var(--accent) 40%, transparent);
+	transition:
+		border-color 0.2s ease,
+		box-shadow 0.2s ease;
+}
+
+.inputbox:focus-within {
+	border: none;
+	box-shadow: inset 3px 0 0 0 var(--accent);
+}
+
+.btn.send {
+	background: var(--send-blue);
+	color: #f6f2e9;
+	border-radius: 50%;
+	box-shadow: none;
+	font-weight: 600;
+}
+
+.btn.send:hover {
+	background: var(--send-blue-hover);
+}
+
+.btn.stop {
+	background: var(--stop-red);
+	color: #f6f2e9;
+	border-radius: 50%;
+}
+
+/* 输入框底部模型选择、思考强度、预设等按钮：去边框、透明底，hover 现 hairline */
+.composer-tools {
+	border-top: none;
+}
+
+.composer-tools .chip,
+.composer-tools .capsule-segment {
+	font-size: 13px;
+	padding: 4px 10px;
+	gap: 6px;
+	background: transparent;
+	border: 1px solid transparent;
+	box-shadow: none;
+	border-radius: 3px;
+	transition:
+		border-color 0.15s ease,
+		background 0.15s ease;
+}
+
+.composer-tools .model-thinking-capsule {
+	background: transparent;
+	border: none;
+	box-shadow: none;
+	padding: 0;
+}
+
+.composer-tools .model-thinking-capsule .capsule-divider {
+	display: none;
+}
+
+.composer-tools .chip:hover,
+.composer-tools .capsule-segment:hover {
+	border-color: var(--border);
+	background: transparent;
+}
+
+.composer-tools-left {
+	gap: 6px;
+}
+
+.composer-tools .chip-model,
+.composer-tools .chip-sub,
+.composer-tools .capsule-model-name,
+.composer-tools .capsule-thinking-text {
+	font-size: 12.5px;
+}
+
+/* ---- 9. 底栏 / 状态栏：hairline 收边 ---- */
+.statusbar {
+	background: var(--statusbar-bg);
+	border-top: 1px solid var(--border-soft);
+	box-shadow: none;
+}
+
+.goalbar {
+	background: transparent;
+	border-top: 1px solid var(--border-soft);
+	box-shadow: none;
+}
+
+/* ---- 10. 左右面板：素纸文件栏 ----
+ * 激活态不做红洗（accent-soft 洗在纸上是一块脏粉），改为中性墨面 5% +
+ * 左缘 2px 朱标；圆角统一 8px。 */
+.panel {
+	background: var(--panel-bg);
+	border-color: var(--border-soft);
+}
+
+.session-item,
+.project-item,
+.file-item,
+.scm-file {
+	border-radius: 8px;
+}
+
+.session-item.active,
+.project-item.active {
+	background: rgba(38, 34, 24, 0.05);
+	border: none;
+	box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.session-item.active {
+	padding: 8px 10px;
+}
+
+.project-item.active {
+	padding: 7px 10px;
+}
+
+/* ---- 11. 代码块与终端：纸凹版 + 暖墨终端 ---- */
+.codeblock {
+	background: var(--code-bg);
+	border: 1px solid var(--border-soft);
+	border-radius: 3px;
+	box-shadow: none;
+}
+
+.codeblock pre,
+.msg-text pre {
+	background: var(--code-bg);
+	color: var(--code-text);
+}
+
+/* ---- 11b. 语法高亮适配纸面（全局捆绑的是 github-dark，必须整套覆盖）---- */
+.hljs {
+	color: #33301f;
+	background: transparent;
+}
+
+.hljs-comment,
+.hljs-quote {
+	color: #948b78;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-doctag,
+.hljs-formula {
+	color: #a03618;
+}
+
+.hljs-string,
+.hljs-regexp {
+	color: #3f6c4f;
+}
+
+.hljs-number,
+.hljs-literal {
+	color: #8a5c1e;
+}
+
+.hljs-title,
+.hljs-title.function_,
+.hljs-section {
+	color: #6b3fa0;
+}
+
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-type,
+.hljs-name {
+	color: #8a4a2e;
+}
+
+.hljs-built_in {
+	color: #2f5f8a;
+}
+
+.hljs-deletion {
+	color: #7a2718;
+	background: rgba(194, 64, 42, 0.12);
+}
+
+.hljs-addition {
+	color: #2f6b4f;
+	background: rgba(61, 122, 85, 0.14);
+}
+
+/* ---- 12. 弹层与菜单：纸面实底 + hairline，方角家族 ---- */
+.modal,
+.tool-info-modal,
+.settings-modal,
+.model-modal,
+.tpl-modal,
+.dd-menu,
+.dialog-inline {
+	border-radius: 4px;
+	border: 1px solid var(--border);
+	box-shadow:
+		0 1px 2px rgba(38, 34, 24, 0.06),
+		0 16px 40px -12px rgba(38, 34, 24, 0.25);
+}
+
+.dd-menu {
+	background: var(--menu-bg);
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	box-shadow: 0 12px 32px -8px rgba(38, 34, 24, 0.28);
+}
+
+.dd-item:hover,
+.dd-all-item:hover {
+	background: var(--accent-soft);
+}
+
+/* ---- 13. chips / 徽标：账目标签体 ---- */
+.chip {
+	background: var(--chip-bg);
+	border: 1px solid var(--border-soft);
+	border-radius: 2px;
+	box-shadow: none;
+	font-family: var(--mono);
+	font-size: 11px;
+}
+
+/* ---- 14. 滚动条：细墨线 ---- */
+::-webkit-scrollbar {
+	width: 6px;
+	height: 6px;
+}
+
+::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+	background: var(--scroll-thumb);
+	border-radius: 0;
+}
+
+::-webkit-scrollbar-thumb:hover {
+	background: var(--scroll-thumb-hover);
+}
+
+/* ---- 15. 通知条：hairline 左线式 ---- */
+.notice-err,
+.notice-warn,
+.notice-info {
+	border-radius: 0;
+	border-width: 1px;
+	border-left-width: 3px;
+}

@@ -1,0 +1,138 @@
+/* theme-name: 极客雪白 */
+/* theme-name-en: Geist Light */
+/* theme-group: classic */
+:root {
+	color-scheme: light;
+	--bg: #ffffff;
+	--bg-elev: #fafafa;
+	--bg-elev2: #f4f4f5;
+	--border: #eaeaea;
+	--border-soft: #f2f2f2;
+	--text: #000000;
+	--text-dim: #666666;
+	--text-faint: #767676;
+	--accent: #0070f3;
+	--accent-soft: rgba(0, 112, 243, 0.12);
+	--green: #047d58;
+	--on-green: #ffffff;
+	--green-soft: rgba(5, 150, 105, 0.12);
+	--red: #df0000;
+	--on-red: #ffffff;
+	--red-soft: rgba(238, 0, 0, 0.1);
+	--amber: #9c6407;
+	--blue: #0f66f4;
+	--blue-soft: rgba(59, 130, 246, 0.12);
+	--term-bg: #fafafa;
+	--term-fg: #000000;
+	--term-cursor: #000000;
+	--term-cursor-accent: #ffffff;
+	--term-selection: rgba(0, 112, 243, 0.2);
+	--term-black: #000000;
+	--term-red: #ee0000;
+	--term-green: #059669;
+	--term-yellow: #f5a623;
+	--term-blue: #0070f3;
+	--term-magenta: #7928ca;
+	--term-cyan: #50e3c2;
+	--term-white: #fafafa;
+	--term-bright-black: #666666;
+	--term-bright-red: #ff0000;
+	--term-bright-green: #047857;
+	--term-bright-yellow: #f5a623;
+	--term-bright-blue: #0070f3;
+	--term-bright-magenta: #7928ca;
+	--term-bright-cyan: #50e3c2;
+	--term-bright-white: #ffffff;
+	--mono: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+	--mermaid-font-size: 12px;
+	--tooltip-bg: #ffffff;
+	--code-bg: #f7f7f8;
+	--code-text: #111111;
+	--code-border: var(--border-soft);
+	--code-pad: 8px 10px;
+	--card-body-pad: 4px 14px 12px;
+	--err-text: #df0000;
+	--red-text: #df0000;
+	--amber-text: #9c6407;
+	--info-blue: #0069e4;
+	--link: #0069e4;
+	--link-hover: #0051b3;
+	--link-soft: #0069e4;
+	--md-strong: #000000;
+	--skill-blue: #0069e4;
+	--plugin-purple: #8440ff;
+	--auth-green: #047d58;
+	--scroll-thumb: #d4d4d4;
+	--scroll-thumb-hover: #a3a3a3;
+	--notice-err-bg: color-mix(in srgb, var(--bg-elev) 90%, var(--red));
+	--notice-warn-bg: color-mix(in srgb, var(--bg-elev) 90%, var(--amber));
+	--notice-info-bg: color-mix(in srgb, var(--bg) 95%, var(--info-blue));
+	--notice-err-border: var(--red);
+	--notice-warn-border: var(--amber);
+	--notice-info-border: var(--info-blue);
+	--send-blue: #000000;
+	--send-blue-hover: #333333;
+	--stop-red: #ef4444;
+	--stop-red-hover: #dc2626;
+	--brand-grad-a: #000000;
+	--brand-grad-b: #0070f3;
+	--on-amber: #ffffff;
+	--search-active-fg: #1a1d26;
+	--switch-knob: #ffffff;
+	--bg-elev3: rgba(255, 255, 255, 0.06);
+	--sunken-bg: rgba(0, 0, 0, 0.15);
+	--glow-015: rgba(255, 255, 255, 0.015);
+	--glow-025: rgba(255, 255, 255, 0.025);
+	--glow-03: rgba(255, 255, 255, 0.03);
+	--glow-04: rgba(255, 255, 255, 0.04);
+	--glow-05: rgba(255, 255, 255, 0.05);
+	--glow-12: rgba(255, 255, 255, 0.12);
+	--glow-18: rgba(255, 255, 255, 0.18);
+	--glow-22: rgba(255, 255, 255, 0.22);
+	--glow-38: rgba(255, 255, 255, 0.38);
+	--control-fg: #444444;
+	--control-bg: #fafafa;
+	--control-border: #eaeaea;
+	--bg-image: none;
+	--bg-image-dim: 0.78;
+	--bg-image-blur: 0px;
+	--wallpaper-panel-alpha: 100%;
+	--topbar-bg: #ffffff;
+	--statusbar-bg: #fafafa;
+	--panel-bg: #ffffff;
+	--card-bg: #ffffff;
+	--chip-bg: #f4f4f5;
+	--msgs-bg: #ffffff;
+	--inputbox-bg: #f4f4f5;
+	--menu-bg: var(--bg-elev2);
+}
+
+/* ---- syntax highlighting (Geist Light) ---- */
+.hljs {
+	color: #111111;
+	background: #f7f7f8;
+}
+.hljs-keyword,
+.hljs-meta .hljs-keyword {
+	color: #e00000;
+	font-weight: 600;
+}
+.hljs-title,
+.hljs-title.function_ {
+	color: #0070f3;
+}
+.hljs-number,
+.hljs-literal {
+	color: #7928ca;
+}
+.hljs-string {
+	color: #0284c7;
+}
+.hljs-built_in,
+.hljs-type {
+	color: #f5a623;
+}
+.hljs-comment {
+	color: #888888;
+	font-style: italic;
+}

@@ -1,0 +1,125 @@
+import { memo } from "react";
+import type { UiMessage } from "../types";
+import { useT } from "../i18n";
+import { asBash, asImage, asText, asThinking, asToolCall, roleLabel } from "./Message";
+import { isExportableMessage, toggleExportImageSelect, useExportImage } from "../export-image-state";
+
+import { parseSkillBlock } from "../skill-block";
+
+interface CollapsedMessageProps {
+	message: UiMessage;
+	onExpand: (messageId: string) => void;
+	/** 调用方指定的摘要（不传则按旧口径取正文预览；目标审查回合的指令/结论用它）。 */
+	summary?: string;
+}
+
+/**
+ * Cheap summary row for messages outside the recent window. Renders NO heavy
+ * content (no Markdown, no thinking, no tool output, no attachments) — just a
+ * role label, a plain-text preview, and block-type counts. The full message is
+ * only rendered after the user clicks to expand.
+ */
+export const CollapsedMessage = memo(function CollapsedMessage({ message, onExpand, summary }: CollapsedMessageProps) {
+	const t = useT();
+	const exportImage = useExportImage();
+	const exportable = isExportableMessage(message);
+	const exportSelected = exportImage.open && exportImage.selectedIds.includes(message.id);
+	const showExportCheck = exportImage.open && exportable;
+
+	// 调用方摘要优先（目标审查回合的指令/结论行）；否则按旧口径取正文预览。
+	// Plain-text preview (first text block, first line, ~90 chars — no Markdown).
+	let preview = summary ?? "";
+	if (!preview) {
+		for (const b of message.content) {
+			const text = asText(b);
+			if (text && text.text.trim()) {
+				// Skill invocations collapse to a `skill:name · <args>` chip instead
+				// of the raw SKILL.md dump.
+				const sb = parseSkillBlock(text.text);
+				if (sb) {
+					preview = `skill:${sb.name}` + (sb.userMessage ? ` · ${sb.userMessage.replace(/\s+/g, " ").trim()}` : "");
+				} else {
+					preview = text.text.replace(/\s+/g, " ").trim();
+				}
+				break;
+			}
+		}
+	}
+	// Attached files get their name as the preview.
+	if (!preview && message.role === "custom" && message.customType === "file") {
+		const details = (message.details ?? {}) as { name?: string; path?: string };
+		preview = details.name ?? details.path ?? "";
+	}
+	const truncated = preview.length > 90;
+	if (truncated) preview = `${preview.slice(0, 90)}…`;
+
+	// Count heavy block types for the summary chips.
+	let thinking = 0;
+	let tools = 0;
+	let bash = 0;
+	let images = 0;
+	for (const b of message.content) {
+		if (asThinking(b)) thinking++;
+		else if (asToolCall(b)) tools++;
+		else if (asBash(b)) bash++;
+		else if (asImage(b)) images++;
+	}
+	const chips: string[] = [];
+	if (thinking) chips.push(`${t("thinking")} ${thinking}`);
+	if (tools) chips.push(`${t("toolCalls")} ${tools}`);
+	if (bash) chips.push(`${t("bashRuns")} ${bash}`);
+	if (images) chips.push(`${t("images")} ${images}`);
+
+	return (
+		<div
+			role="button"
+			tabIndex={0}
+			className={`msg-collapsed${exportSelected ? " msg-export-selected" : ""}`}
+			data-msg-id={message.id}
+			title={`${t("expandMsg")} · ${preview || chips.join(" · ") || message.role}`}
+			onClick={() => onExpand(message.id)}
+			onKeyDown={(e) => {
+				if (e.key === "Enter" || e.key === " ") {
+					e.preventDefault();
+					onExpand(message.id);
+				}
+			}}
+		>
+			{showExportCheck && (
+				<input
+					type="checkbox"
+					className="msg-export-check"
+					checked={exportSelected}
+					title={t("copyImage")}
+					aria-label={t("copyImage")}
+					onClick={(e) => e.stopPropagation()}
+					onChange={() => toggleExportImageSelect(message.id)}
+				/>
+			)}
+			<span className={`msg-collapsed-role role-${message.role}`}>
+				{message.role === "custom" && message.customType === "file" ? t("attachment") : roleLabel(message.role, t)}
+			</span>
+			<span className="msg-collapsed-body">
+				{preview && <span className="msg-collapsed-preview">{preview}</span>}
+				{chips.length > 0 && (
+					<span className="msg-collapsed-chips">
+						{chips.map((c, i) => (
+							<span key={i} className="msg-collapsed-chip">
+								{c}
+							</span>
+						))}
+					</span>
+				)}
+			</span>
+			{message.timestamp ? <span className="msg-collapsed-time">{formatTime(message.timestamp)}</span> : null}
+			<span className="msg-collapsed-action">{t("expandMsg")}</span>
+		</div>
+	);
+});
+
+function formatTime(ts: number): string {
+	const d = new Date(ts);
+	const hh = String(d.getHours()).padStart(2, "0");
+	const mm = String(d.getMinutes()).padStart(2, "0");
+	return `${hh}:${mm}`;
+}

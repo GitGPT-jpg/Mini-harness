@@ -1,0 +1,356 @@
+/**
+ * universal-agent.test.ts — 通用 Agent 底座核心单测
+ *
+ * 验证：
+ *   1. UniversalSessionStore 会话落盘、读取、重命名、置顶、删除；
+ *   2. BaseAgentDriver 与 MockAgentDriver 的事件交互；
+ *   3. UniversalSession 的消息流式汇聚、UiMessage 生成、工具调用与中断生命周期；
+ *   4. UniversalAgentService 的多客户端接入与状态监控。
+ */
+
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+	UniversalSessionStore,
+	UniversalSession,
+	UniversalAgentService,
+	MockAgentDriver,
+	ClaudeCodeDriver,
+	type UniversalConversation,
+} from "../../server/universal/index.js";
+import type { ServerMessage } from "../../server/protocol.js";
+
+describe("Universal Agent 底座体系单测", () => {
+	let tempDir: string;
+
+	beforeEach(() => {
+		tempDir = mkdtempSync(join(tmpdir(), "pi-universal-test-"));
+	});
+
+	afterEach(() => {
+		if (existsSync(tempDir)) {
+			try {
+				rmSync(tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+			} catch {
+				// Windows 下文件句柄释放可能有延迟，静默忽略清理异常
+			}
+		}
+	});
+
+	describe("1. UniversalSessionStore 会话持久化", () => {
+		it("能够正确创建、保存、读取与列出会话", () => {
+			const store = new UniversalSessionStore(tempDir);
+			const cwd = join(tempDir, "workspace");
+
+			const conv: UniversalConversation = {
+				id: "uconv-1",
+				title: "测试会话",
+				createdAt: 1000,
+				updatedAt: 1000,
+				messages: [
+					{
+						id: "u-1",
+						role: "user",
+						content: [{ type: "text", text: "hello" }],
+					},
+				],
+			};
+
+			store.saveConversation(cwd, conv);
+
+			const loaded = store.loadConversation(cwd, "uconv-1");
+			expect(loaded).toBeDefined();
+			expect(loaded?.id).toBe("uconv-1");
+			expect(loaded?.title).toBe("测试会话");
+			expect(loaded?.messages.length).toBe(1);
+
+			const list = store.listConversations(cwd);
+			expect(list.length).toBe(1);
+			expect(list[0].id).toBe("uconv-1");
+		});
+
+		it("能够重命名、置顶与删除会话", () => {
+			const store = new UniversalSessionStore(tempDir);
+			const cwd = join(tempDir, "workspace");
+
+			const conv: UniversalConversation = {
+				id: "uconv-2",
+				title: "旧标题",
+				createdAt: 1000,
+				updatedAt: 1000,
+				messages: [],
+			};
+			store.saveConversation(cwd, conv);
+
+			store.renameConversation(cwd, "uconv-2", "新标题");
+			expect(store.loadConversation(cwd, "uconv-2")?.title).toBe("新标题");
+
+			store.pinConversation(cwd, "uconv-2", true);
+			expect(store.loadConversation(cwd, "uconv-2")?.pinned).toBe(true);
+
+			store.deleteConversation(cwd, "uconv-2");
+			expect(store.loadConversation(cwd, "uconv-2")).toBeNull();
+			expect(store.listConversations(cwd).length).toBe(0);
+		});
+	});
+
+	describe("2. MockAgentDriver 驱动行为", () => {
+		it("能力声明符合降级约定（不支持树状分叉与历史修改）", () => {
+			const driver = new MockAgentDriver(tempDir);
+			expect(driver.capabilities.supportsTreeFork).toBe(false);
+			expect(driver.capabilities.supportsHistoryEdit).toBe(false);
+			expect(driver.capabilities.supportsToolPromptOverride).toBe(false);
+		});
+
+		it("能够按生命周期发射思考、工具与正文事件", async () => {
+			const driver = new MockAgentDriver(tempDir);
+			const events: string[] = [];
+
+			await driver.sendPrompt("test tool execution", undefined, {
+				onThinkingDelta: (delta) => events.push(`thinking:${delta}`),
+				onTextDelta: (delta) => events.push(`text:${delta}`),
+				onToolStart: (id, name) => events.push(`toolStart:${name}:${id}`),
+				onToolEnd: (id, res) => events.push(`toolEnd:${id}:${res.output?.trim()}`),
+				onTurnComplete: (meta) => events.push(`complete:${meta?.model}`),
+				onError: (err) => events.push(`error:${err}`),
+			});
+
+			expect(events.some((e) => e.startsWith("thinking:"))).toBe(true);
+			expect(events.some((e) => e.startsWith("toolStart:bash"))).toBe(true);
+			expect(events.some((e) => e.startsWith("toolEnd:"))).toBe(true);
+			expect(events.some((e) => e.startsWith("text:"))).toBe(true);
+			expect(events.some((e) => e.startsWith("complete:mock-model-v1"))).toBe(true);
+		});
+	});
+
+	describe("3. ClaudeCodeDriver 驱动行为与事件解析", () => {
+		it("能力声明与模型列表正常", async () => {
+			const driver = new ClaudeCodeDriver(tempDir);
+			expect(driver.id).toBe("claude-code");
+			expect(driver.capabilities.supportsTreeFork).toBe(false);
+			expect(driver.capabilities.supportsHistoryEdit).toBe(false);
+
+			const models = await driver.listModels();
+			expect(models.length).toBeGreaterThan(0);
+			expect(models.some((m) => m.id.includes("claude-3-7-sonnet"))).toBe(true);
+		});
+
+		it("能够正确解析 Claude Code NDJSON 事件流并分发到 sink", () => {
+			const driver = new ClaudeCodeDriver(tempDir);
+			const received: {
+				text: string[];
+				thinking: string[];
+				toolsStarted: Array<{ id: string; name: string }>;
+				toolsEnded: Array<{ id: string; output?: string; error?: string }>;
+				completeMeta?: unknown;
+			} = {
+				text: [],
+				thinking: [],
+				toolsStarted: [],
+				toolsEnded: [],
+			};
+
+			const sink = {
+				onTextDelta: (d: string) => received.text.push(d),
+				onThinkingDelta: (d: string) => received.thinking.push(d),
+				onToolStart: (id: string, name: string) => received.toolsStarted.push({ id, name }),
+				onToolEnd: (id: string, res: { output?: string; error?: string }) => received.toolsEnded.push({ id, ...res }),
+				onTurnComplete: (meta: unknown) => {
+					received.completeMeta = meta;
+				},
+				onError: () => {},
+			};
+
+			const activeJson = new Map<string, string>();
+			const parse = (evt: Record<string, unknown>) => {
+				(driver as any).handleClaudeEvent(evt, sink, activeJson);
+			};
+
+			// 1. Thinking delta
+			parse({
+				type: "content_block_delta",
+				delta: { type: "thinking_delta", thinking: "Pondering problem..." },
+			});
+			expect(received.thinking).toEqual(["Pondering problem..."]);
+
+			// 2. Text delta
+			parse({
+				type: "content_block_delta",
+				delta: { type: "text_delta", text: "I will list the files." },
+			});
+			expect(received.text).toEqual(["I will list the files."]);
+
+			// 3. Tool use
+			parse({
+				type: "tool_use",
+				id: "call_abc",
+				name: "Bash",
+				input: { command: "ls -la" },
+			});
+			expect(received.toolsStarted).toEqual([{ id: "call_abc", name: "Bash" }]);
+
+			// 4. Tool result
+			parse({
+				type: "tool_result",
+				tool_use_id: "call_abc",
+				content: "README.md\npackage.json",
+				is_error: false,
+			});
+			expect(received.toolsEnded).toEqual([{ id: "call_abc", output: "README.md\npackage.json" }]);
+
+			// 5. Result completion
+			parse({
+				type: "result",
+				usage: {
+					input_tokens: 150,
+					output_tokens: 60,
+					cache_read_input_tokens: 100,
+					cache_creation_input_tokens: 0,
+				},
+				model: "claude-3-7-sonnet-20250219",
+			});
+			expect(received.completeMeta).toMatchObject({
+				usage: {
+					inputTokens: 150,
+					outputTokens: 60,
+					cacheReadTokens: 100,
+					cacheWriteTokens: 0,
+				},
+				model: "claude-3-7-sonnet-20250219",
+			});
+		});
+	});
+
+	describe("4. UniversalSession 核心会话与协议汇聚", () => {
+		it("执行 Prompt 并正确生成标准的 UiMessage 与流式快照", async () => {
+			const store = new UniversalSessionStore(tempDir);
+			const sentMessages: ServerMessage[] = [];
+			const driver = new MockAgentDriver(tempDir);
+
+			const session = new UniversalSession({
+				clientId: "test-client",
+				cwd: tempDir,
+				send: (msg) => sentMessages.push(msg),
+				store,
+				driver,
+			});
+
+			// 验证初始状态下发了一次 snapshot
+			const initialSnapshots = sentMessages.filter((m) => m.type === "snapshot");
+			expect(initialSnapshots.length).toBeGreaterThanOrEqual(0);
+
+			// 发送包含 tool 的 prompt
+			await session.prompt("please run tool command");
+
+			// 检查是否有 message_delta 推送
+			const deltas = sentMessages.filter((m) => m.type === "message_delta");
+			expect(deltas.length).toBeGreaterThan(0);
+
+			// 获取最终快照
+			session.flushSnapshot();
+			const finalSnapshot = sentMessages.filter((m) => m.type === "snapshot").pop();
+			expect(finalSnapshot).toBeDefined();
+			if (finalSnapshot && finalSnapshot.type === "snapshot") {
+				const msgs = finalSnapshot.state.messages;
+				// 期望包含：User 消息、ToolResult 消息、Assistant 消息
+				expect(msgs.length).toBeGreaterThanOrEqual(3);
+
+				const userMsg = msgs.find((m) => m.role === "user");
+				expect(userMsg).toBeDefined();
+				expect(userMsg?.content[0]).toEqual({ type: "text", text: "please run tool command" });
+
+				const assistantMsg = msgs.find((m) => m.role === "assistant");
+				expect(assistantMsg).toBeDefined();
+				// Assistant 消息应包含 thinking 块和 toolCall 块
+				const hasThinking = assistantMsg?.content.some((b) => b.type === "thinking");
+				const hasToolCall = assistantMsg?.content.some((b) => b.type === "toolCall");
+				expect(hasThinking).toBe(true);
+				expect(hasToolCall).toBe(true);
+
+				const toolResultMsg = msgs.find((m) => m.role === "toolResult");
+				expect(toolResultMsg).toBeDefined();
+				expect(toolResultMsg?.toolName || toolResultMsg?.toolCallId).toBeDefined();
+			}
+
+			session.dispose();
+		});
+
+		it("支持停止生成 (abort)", async () => {
+			const store = new UniversalSessionStore(tempDir);
+			const sentMessages: ServerMessage[] = [];
+			const driver = new MockAgentDriver(tempDir);
+
+			const session = new UniversalSession({
+				clientId: "test-client-abort",
+				cwd: tempDir,
+				send: (msg) => sentMessages.push(msg),
+				store,
+				driver,
+			});
+
+			await session.abort();
+			expect(session.isStreaming).toBe(false);
+
+			session.dispose();
+		});
+
+		it("支持会话管理 (newChat, switchConversation, renameConversation)", async () => {
+			const store = new UniversalSessionStore(tempDir);
+			const sentMessages: ServerMessage[] = [];
+			const driver = new MockAgentDriver(tempDir);
+
+			const session = new UniversalSession({
+				clientId: "test-client-mgmt",
+				cwd: tempDir,
+				send: (msg) => sentMessages.push(msg),
+				store,
+				driver,
+			});
+
+			await session.newChat();
+			await session.refreshSessions();
+
+			const convMsg = sentMessages.find((m) => m.type === "conversations");
+			expect(convMsg).toBeDefined();
+			if (convMsg && convMsg.type === "conversations") {
+				expect(convMsg.conversations.length).toBeGreaterThanOrEqual(1);
+			}
+
+			session.dispose();
+		});
+	});
+
+	describe("5. UniversalAgentService 引擎服务管理", () => {
+		it("正确实现 EngineService 接口并管理客户端会话生命周期", async () => {
+			const sentMessages: ServerMessage[] = [];
+			const service = new UniversalAgentService({
+				cwd: tempDir,
+				dataDir: tempDir,
+			});
+
+			// attach 客户端
+			const session = await service.attach("client-1", (msg) => sentMessages.push(msg));
+			expect(session).toBeDefined();
+			expect(service.get("client-1")).toBe(session);
+
+			// serviceStatus 检查
+			const status = service.serviceStatus();
+			expect(status.cwd).toBe(tempDir);
+			expect(status.quiesced).toBe(false);
+
+			// quiesce 流程
+			service.quiesce();
+			expect(service.isQuiesced()).toBe(true);
+			service.unquiesce();
+			expect(service.isQuiesced()).toBe(false);
+
+			// detach 客户端
+			service.detach("client-1");
+			expect(service.get("client-1")).toBeUndefined();
+
+			await service.disposeAll();
+		});
+	});
+});

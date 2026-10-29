@@ -1,0 +1,105 @@
+{
+	"format": "pi-web-ui-preset",
+	"version": 1,
+	"name": "敏捷架构设计与代码审查",
+	"description": "专为技术主管与架构师打造：UI 强化计划与审查入口、内置目标模式 2.0 审查者提示词与 Plan Mode 规划约束、写操作强审批门禁、架构级审查快捷短语。",
+	"author": "ciso-team",
+	"tags": ["架构", "审查", "目标模式", "计划", "安全"],
+	"createdAt": "2026-03-31T09:00:00.000Z",
+	"appVersion": "0.99.0",
+	"enabledTools": ["read", "patch", "lsp", "plan_update", "ask_user_question", "claim_files", "present_files"],
+	"settings": {
+		"promptMode": "append",
+		"customSystemPrompt": "你是一位拥有大型分布式系统架构与安全防御背景的主任架构师。在代码审查与技术方案评审中，优先考察高内聚低耦合、模块边界、并发竞态、资源回收以及故障熔断机制。拒绝单次倾倒大量未经推导的修改，倡导分阶段渐进式重构。",
+		"promptTemplate": "",
+		"promptOverrides": {
+			"soul": "沉稳、审慎、具备大局观。对潜在系统风险一针见血，并给出可落地的防范架构。"
+		},
+		"reviewPrompt": "【审查准则】重点审查：1) 是否存在破坏向后兼容性的公共 API 变更；2) 是否有未捕获的异步异常或内存泄漏隐患；3) 并发安全与锁竞争；4) 单元测试与边界用例是否完整覆盖。若发现缺陷，给出具体的修改依据与安全重构示例。",
+		"reviewDisabledSkills": [],
+		"disabledAgentTools": [
+			"bash",
+			"write",
+			"edit",
+			"eval",
+			"edit_soft",
+			"delegate_task",
+			"browser_page",
+			"conversation_read",
+			"skill",
+			"schedule",
+			"compact_context",
+			"powershell",
+			"ls",
+			"grep",
+			"find",
+			"terminal_create",
+			"terminal_list",
+			"terminal_close",
+			"terminal_input",
+			"terminal_key",
+			"terminal_read",
+			"terminal_wait"
+		],
+		"disabledPluginTools": [],
+		"toolPromptOverrides": {
+			"plan_update": {
+				"description": "更新结构化架构实施看板。每一步骤必须具备清晰的目标说明、预期修改文件范围以及可执行的验收标准。"
+			},
+			"patch": {
+				"description": "执行原子化代码补丁。严禁覆盖无关业务逻辑，保证每一处行修改均有据可查。"
+			}
+		},
+		"toolLazyLoading": true,
+		"readDirEnabled": true,
+		"toolApprovalEnabled": true,
+		"toolWatchdogTimeoutMs": 1800000,
+		"questionnaireEnabled": true,
+		"editSoftEnabled": false,
+		"terminalToolsEnabled": false,
+		"terminalBash": false,
+		"terminalBashIdleMs": 15000,
+		"terminalBashMaxForegroundMs": 60000,
+		"disabledSkills": [],
+		"disabledExtensions": [],
+		"skillsFullText": [],
+		"retryMaxAttempts": 4,
+		"softCapTokens": 40960,
+		"softCapByModel": {},
+		"subagentDefaultModel": null,
+		"visionBridgeEnabled": true,
+		"visionBridgeModel": null,
+		"visionBridgePromptMode": "append",
+		"visionBridgePrompt": "提取系统架构图、UML 时序图或网络拓扑图中的核心组件模块与数据交互链路。",
+		"scmCommitMsgPromptMode": "append",
+		"scmCommitMsgPrompt": "根据代码改动生成清晰的架构级说明，重点写明设计意图与影响范围。",
+		"planModePromptMode": "append",
+		"planModePrompt": "【计划模式约束】禁止倾倒完整代码实现。仅允许输出设计方案、模块拆解、依赖时序、验收准则与不超过 20 行的关键类型签名片段。",
+		"goalModeEnabled": true,
+		"parallelReminderEnabled": true,
+		"uiLayout": {
+			"sideDockFloat": true,
+			"topbarText": true,
+			"hidden": ["host:brand-logo"],
+			"align": {
+				"sidebar.left": "end",
+				"bottombar": "center"
+			},
+			"order": ["host:brand", "host:chat", "host:goal", "host:scm", "host:files", "host:model"]
+		},
+		"disabledPlugins": [],
+		"thinkingWrap": true,
+		"toolsWrap": true,
+		"toolImagesEnabled": true,
+		"quickPhrasesEnabled": true,
+		"quickPhrases": [
+			"开始进行架构级代码审查",
+			"检查是否存在安全漏洞、竞态条件或资源泄漏",
+			"制定分阶段重构计划，并拆解为可独立验证的步骤",
+			"审查当前的 git diff 改动并给出整改建议",
+			"验证核心业务流程的异常处理与回滚策略"
+		],
+		"devNoCache": false,
+		"autoReload": true
+	}
+}

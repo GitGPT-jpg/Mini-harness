@@ -1,0 +1,50 @@
+{
+	"apiVersion": 2,
+	"name": "telegram",
+	"nameEn": "Telegram",
+	"version": "0.1.5",
+	"description": "Telegram 机器人：出站长轮询双工对话（零公网 IP / 智能 Markdown 分块 / 多轮会话隔离）/ 用户白名单准入 / AI telegram 工具（密钥加密存储，零外部依赖）",
+	"descriptionEn": "Telegram Bot: outbound long-polling duplex chat (zero public IP, structure-aware Markdown chunks, isolated multi-turn sessions), access control whitelist, and AI telegram tool.",
+	"author": "pi-web-ui",
+	"homepage": "https://github.com/xing-shuyin/pi-web-ui/tree/main/plugins/telegram",
+	"icon": "✈️",
+	"iconSvg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><line x1=\"22\" y1=\"2\" x2=\"11\" y2=\"13\"/><polygon points=\"22 2 15 22 11 13 2 9 22 2\"/></svg>",
+	"server": "index.mjs",
+	"client": "client/entry.mjs",
+	"permissions": ["ui", "tools", "notify", "storage", "secrets", "llm", "chat"],
+	"ui": {
+		"views": [
+			{
+				"id": "telegram",
+				"label": "Telegram",
+				"icon": "✈️"
+			}
+		],
+		"topbar": [
+			{
+				"id": "telegram-open",
+				"label": "Telegram",
+				"icon": "✈️",
+				"action": { "type": "view", "viewId": "telegram" },
+				"order": 58
+			}
+		],
+		"statusBar": [
+			{
+				"id": "telegram-status",
+				"label": "✈️ Telegram",
+				"title": "点击打开 Telegram 工作台",
+				"action": { "type": "view", "viewId": "telegram" },
+				"order": 48
+			}
+		],
+		"commands": [
+			{
+				"id": "open",
+				"label": "打开 Telegram 工作台",
+				"icon": "✈️",
+				"action": { "type": "view", "viewId": "telegram" }
+			}
+		]
+	}
+}

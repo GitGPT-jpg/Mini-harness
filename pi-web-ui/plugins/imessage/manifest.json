@@ -1,0 +1,50 @@
+{
+	"apiVersion": 2,
+	"name": "imessage",
+	"nameEn": "iMessage",
+	"version": "0.1.5",
+	"description": "iMessage 机器人与工作台：Apple macOS 原生 iMessage 通道（零公网 IP / 苹果生态随身触达 / 多轮会话隔离）/ 用户白名单准入 / AI imessage 工具",
+	"descriptionEn": "iMessage workspace & Bot: Apple macOS native iMessage bridge (zero public IP, Apple ecosystem companion, isolated multi-turn sessions), access control whitelist, and AI imessage tool.",
+	"author": "pi-web-ui",
+	"homepage": "https://github.com/xing-shuyin/pi-web-ui/tree/main/plugins/imessage",
+	"icon": "💬",
+	"iconSvg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z\"/></svg>",
+	"server": "index.mjs",
+	"client": "client/entry.mjs",
+	"permissions": ["ui", "tools", "notify", "storage", "secrets", "llm", "chat"],
+	"ui": {
+		"views": [
+			{
+				"id": "imessage",
+				"label": "iMessage",
+				"icon": "💬"
+			}
+		],
+		"topbar": [
+			{
+				"id": "imessage-open",
+				"label": "iMessage",
+				"icon": "💬",
+				"action": { "type": "view", "viewId": "imessage" },
+				"order": 64
+			}
+		],
+		"statusBar": [
+			{
+				"id": "imessage-status",
+				"label": "💬 iMessage",
+				"title": "点击打开 iMessage 工作台",
+				"action": { "type": "view", "viewId": "imessage" },
+				"order": 54
+			}
+		],
+		"commands": [
+			{
+				"id": "open",
+				"label": "打开 iMessage 工作台",
+				"icon": "💬",
+				"action": { "type": "view", "viewId": "imessage" }
+			}
+		]
+	}
+}

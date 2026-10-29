@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="UTF-8" />
+		<title data-i18n="options_title">pi-web-ui 元素拾取 · 设置</title>
+		<style>
+			:root {
+				color-scheme: dark;
+				--bg: #0f172a;
+				--card: #1e293b;
+				--line: #334155;
+				--text: #e2e8f0;
+				--dim: #94a3b8;
+				--accent: #2563eb;
+			}
+			body {
+				margin: 0;
+				padding: 28px;
+				background: var(--bg);
+				color: var(--text);
+				font:
+					14px/1.6 -apple-system,
+					"Segoe UI",
+					"Microsoft YaHei",
+					sans-serif;
+			}
+			main {
+				max-width: 680px;
+				margin: 0 auto;
+			}
+			h1 {
+				font-size: 18px;
+				margin: 0 0 4px;
+			}
+			.hint {
+				color: var(--dim);
+				font-size: 13px;
+				margin-bottom: 20px;
+			}
+			fieldset {
+				border: 1px solid var(--line);
+				border-radius: 10px;
+				background: var(--card);
+				padding: 14px 16px;
+				margin: 0 0 14px;
+			}
+			legend {
+				padding: 0 6px;
+				color: var(--dim);
+				font-size: 12px;
+			}
+			label.row {
+				display: flex;
+				align-items: center;
+				gap: 10px;
+				margin: 8px 0;
+			}
+			label.row > span:first-child {
+				flex: 0 0 190px;
+			}
+			input[type="text"],
+			input[type="password"],
+			select {
+				flex: 1 1 auto;
+				min-width: 0;
+				padding: 6px 9px;
+				border-radius: 6px;
+				border: 1px solid var(--line);
+				background: #0b1220;
+				color: var(--text);
+				font-size: 13px;
+			}
+			label.check {
+				display: flex;
+				gap: 8px;
+				align-items: flex-start;
+				margin: 8px 0;
+			}
+			label.check span b {
+				display: block;
+				font-weight: 600;
+			}
+			label.check span i {
+				color: var(--dim);
+				font-style: normal;
+				font-size: 12px;
+			}
+			.actions {
+				display: flex;
+				gap: 8px;
+				align-items: center;
+				flex-wrap: wrap;
+			}
+			button {
+				padding: 7px 12px;
+				border-radius: 7px;
+				border: 1px solid var(--line);
+				background: #24324a;
+				color: var(--text);
+				font-size: 13px;
+				cursor: pointer;
+			}
+			button.primary {
+				background: var(--accent);
+				border-color: var(--accent);
+				color: #fff;
+				font-weight: 600;
+			}
+			.status {
+				margin-left: auto;
+				font-size: 12px;
+			}
+			.status.ok {
+				color: #4ade80;
+			}
+			.status.err {
+				color: #f87171;
+			}
+			.status.info {
+				color: var(--dim);
+			}
+			.status.warn {
+				color: #fbbf24;
+			}
+			.grant-state {
+				margin-top: 10px;
+				font-size: 12px;
+			}
+			.grant-state.ok {
+				color: #4ade80;
+			}
+			.grant-state.warn {
+				color: #fbbf24;
+			}
+			.cols {
+				display: grid;
+				grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+				gap: 2px 14px;
+				margin-top: 4px;
+			}
+			.cols label.check span b {
+				font-weight: 500;
+				font-size: 13px;
+			}
+			.cols label.check span i {
+				display: block;
+			}
+			select#preset {
+				flex: 1 1 auto;
+			}
+			.bind-panel {
+				margin-top: 12px;
+				padding: 12px;
+				border: 1px solid var(--accent);
+				border-radius: 8px;
+				background: rgba(37, 99, 235, 0.12);
+			}
+			.bind-panel b {
+				display: block;
+				margin-bottom: 4px;
+			}
+			.pair-list {
+				margin-top: 12px;
+				display: flex;
+				flex-direction: column;
+				gap: 8px;
+			}
+			.pair {
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				padding: 10px 12px;
+				background: #0b1220;
+			}
+			.pair .who {
+				font-weight: 600;
+				word-break: break-all;
+			}
+			.pair .meta {
+				color: var(--dim);
+				font-size: 12px;
+				margin-top: 2px;
+			}
+			.pair .actions {
+				margin-top: 8px;
+			}
+			.pair.off {
+				opacity: 0.6;
+			}
+			.empty {
+				color: var(--dim);
+				font-size: 13px;
+			}
+			.hidden {
+				display: none !important;
+			}
+			code {
+				background: #0b1220;
+				padding: 1px 5px;
+				border-radius: 4px;
+				font-size: 12px;
+			}
+		</style>
+	</head>
+	<body>
+		<main>
+			<h1 data-i18n="options_title">pi-web-ui 元素拾取</h1>
+			<div class="hint" data-i18n-html="options_hint">
+				在开发网页上按扩展图标（或 <code>Alt+Shift+P</code>）开始拾取，选中的元素会整理成上下文注入 pi-web-ui 的输入框，
+				你补一句说明再发送。
+			</div>
+
+			<fieldset>
+				<legend data-i18n="options_serverSection">pi-web-ui 服务</legend>
+				<label class="row"
+					><span data-i18n="options_serverUrlLabel">服务地址</span><input id="serverUrl" type="text" data-i18n-ph="options_serverUrlPlaceholder" placeholder="http://127.0.0.1:8787"
+				/></label>
+				<label class="row"
+					><span data-i18n="options_tokenLabel">访问口令 PI_WEB_TOKEN</span><input id="token" type="password" data-i18n-ph="options_tokenPlaceholder" placeholder="没开鉴权就留空"
+				/></label>
+				<div class="actions">
+					<button id="grant" data-i18n="options_grantButton">授权该地址</button>
+					<button id="test" data-i18n="options_testButton">测试连接</button>
+					<span id="status" class="status info"></span>
+				</div>
+				<div class="hint" style="margin: 10px 0 0" data-i18n-html="options_serverHint">
+					只预置了 <code>localhost</code> / <code>127.0.0.1</code> 的权限。换成局域网 IP、域名或 https
+					地址（<b>远程部署就是这种</b>）后： 先点「授权该地址」。<br />
+					<b>更省事的办法：直接在 pi-web-ui 页面上点扩展图标</b> —— 扩展会认出那个页面，
+					在页面上问你「要不要把它设为服务地址」，地址和端口都不用手打。<br />
+					投递是往<b>浏览器里打开的那个 pi-web-ui 页面</b
+					>注入内容的，所以这个地址的页面得开着（可以在另一个标签页/窗口，不必是当前标签）； 页面关着时会退化成「复制
+					Markdown 到剪贴板」。
+				</div>
+				<div class="grant-state warn" id="grantState"></div>
+				<div class="bind-panel hidden" id="bindPanel">
+					<b id="bindTitle">检测到 pi-web-ui 页面</b>
+					<div class="hint" id="bindBody" style="margin: 0"></div>
+					<div class="actions" style="margin-top: 10px">
+						<button class="primary" id="bindAccept" data-i18n="options_bindAcceptNotGranted">授权并绑定</button>
+						<button id="bindDismiss" data-i18n="options_bindDismiss">忽略</button>
+					</div>
+				</div>
+			</fieldset>
+
+			<fieldset>
+				<legend data-i18n="options_aiControlSection">AI 操作页面（让模型能读写网页）</legend>
+				<div class="hint" style="margin: 0 0 10px" data-i18n-html="options_aiControlHint">
+					授权之后，模型在对话里就能用 <code>browser_page</code> 工具操作那个页面：
+					<code>read</code>（读文本 / 查元素）、<code>click</code>、<code>type</code>、<code>scroll</code>、<code>goto</code>、
+					<code>wait</code>，以及开关打开后的 <code>eval</code>（执行任意 JS）。<br />
+					<strong>另一端固定是 pi-web-ui 页面本身</strong>：模型的动作要从浏览器里那个 pi-web-ui 页面
+					送进扩展，所以<b>那个标签页得开着</b>（与拾取投递同一个取舍）；这里只需要授权被操作的那个页面。<br />
+					<strong>只对你信任的页面授权</strong>：授权后模型能点它、在它里面输入、读它的内容。可以随时收回。
+				</div>
+				<label class="check"
+					><input id="aiControl" type="checkbox" />
+					<span><b data-i18n="options_aiControlToggle">允许 AI 操作页面（总开关）</b><i data-i18n="options_aiControlToggleDesc">关掉后模型的所有页面动作会被直接拒绝</i></span></label
+				>
+				<label class="check"
+					><input id="allowEval" type="checkbox" />
+					<span
+						><b data-i18n="options_allowEvalToggle">允许执行任意 JS（eval，默认关）</b
+						><i data-i18n="options_allowEvalToggleDesc">开了等于把页面交给模型写的脚本：能改数据、能提交表单、能发请求</i></span
+					></label
+				>
+				<label class="check"
+					><input id="allowShot" type="checkbox" />
+					<span
+						><b data-i18n="options_allowShotToggle">允许截图（默认开）</b
+						><i data-i18n-html="options_allowShotToggleDesc"
+							>模型能看到页面长什么样。<b>打开它会申请「读取您在所有网站上的数据」</b>：浏览器的截图 API 只认这个权限（或你点图标那一刻的临时授权），普通授权不够。<br />
+							另外截图只能截「当前活动标签页」，所以扩展会先把目标页切到前台、截完立刻切回（焦点会跳一下）。<br />
+							不想给这个权限就保持关闭 —— 模型仍能靠 read 读 DOM 文本，只是“看不见”页面。</i
+						></span
+					></label
+				>
+				<label class="row"
+					><span data-i18n="options_aiPageInputLabel">授权一个页面</span><input id="aiPageInput" type="text" list="piOrigins" data-i18n-ph="options_aiPageInputPlaceholder" placeholder="http://localhost:5173"
+				/></label>
+				<div class="actions">
+					<button class="primary" id="aiGrant" data-i18n="options_aiGrantButton">授权该页面</button>
+					<span id="aiStatus" class="status info"></span>
+				</div>
+				<div class="pair-list" id="aiList"></div>
+				<div class="hint" style="margin: 10px 0 0" data-i18n="options_aiHint">
+					地址不用手打：在目标页面上点一次扩展图标，它就会出现在候选里；或者在开发页的拾取浮条上点
+					「让 AI 操作本页…」，本页会自动预填好。
+				</div>
+			</fieldset>
+
+			<fieldset>
+				<legend data-i18n="options_bridgeSection">页面桥（让两个页面互相读写）</legend>
+				<div class="hint" style="margin: 0 0 10px" data-i18n-html="options_bridgeHint">
+					配对之后，这两个页面里的脚本可以互相调用： 对端用
+					<code>window.__piBridge.on("readOrders", () =&hellip;)</code> 注册能力，这边用
+					<code>await window.__piBridge.call({ op: "readOrders" })</code> 拿到结果。跨源、跨标签页、跨窗口都行
+					—— 浏览器里只有扩展能做到这件事。<br />
+					<strong>桥默认关闭</strong>：只有下面列出的配对能通，两端的 host 权限由你在这里授权。
+					被配对的页面里，<b>任何脚本</b>（包括第三方广告/统计脚本）都摸得到
+					<code>window.__piBridge</code>，所以<b>只对你信任的页面开桥</b>。
+				</div>
+				<label class="row"
+					><span data-i18n="options_pairALabel">端点 A（origin）</span><input id="pairA" type="text" list="piOrigins" data-i18n-ph="options_aiPageInputPlaceholder" placeholder="http://localhost:5173"
+				/></label>
+				<label class="row"
+					><span data-i18n="options_pairBLabel">端点 B（origin）</span><input id="pairB" type="text" list="piOrigins" placeholder="https://tools.example"
+				/></label>
+				<label class="row"
+					><span data-i18n="options_pairNoteLabel">备注（可选）</span><input id="pairNote" type="text" data-i18n-ph="options_pairNotePlaceholder" placeholder="订单页 ↔ 本地工具页"
+				/></label>
+				<datalist id="piOrigins"></datalist>
+				<div class="actions">
+					<button class="primary" id="pairAdd" data-i18n="options_pairAddButton">授权并添加配对</button>
+					<span id="pairStatus" class="status info"></span>
+				</div>
+				<div class="pair-list" id="pairList"></div>
+				<div class="hint" style="margin: 10px 0 0" data-i18n-html="options_bridgeHint2">
+					<strong>地址不用手打</strong>：在要配对的两个页面里各点一次扩展图标，它们就会出现在上面两个输入框的
+					<b>候选下拉</b>里（点一下就填好了）；在开发页的拾取浮条上点「与另一页配对…」还能直接把本页预填好。<br />
+					例子：在开发页里读线上后台的数据（<code>on("orders", &hellip;)</code> 在后台页）， 或者让 A 页控制 B
+					页（<code>on("highlight", ({id}) =&gt; document.querySelector(`#${id}`)?.scrollIntoView())</code>）。
+					对端页面没打开、或者没注册那个 op 时会得到一句说明原因的错误，而不是「没反应」。
+				</div>
+			</fieldset>
+
+			<fieldset>
+				<legend data-i18n="options_sendSection">发送什么（可多选）</legend>
+				<div class="hint" style="margin: 0 0 10px" data-i18n-html="options_sendHint">
+					每一项都是一类信息，勾了就采、也发；没勾的<strong>根本不采</strong>（既省上下文也省时间）。
+					嫌信息多就先挑一个预设，再按需增减。
+				</div>
+				<label class="row"
+					><span data-i18n="options_presetLabel">预设</span>
+					<select id="preset"></select
+				></label>
+				<div class="cols" id="sectionList"></div>
+				<label class="check" style="margin-top: 12px"
+					><input id="screenshots" type="checkbox" />
+					<span><b data-i18n="options_screenshotsToggle">采集元素截图</b><i data-i18n="options_screenshotsToggleDesc">作为附件一并送进对话（纯文本模型请看视觉桥）</i></span></label
+				>
+				<div class="hint" id="sectionSummary" style="margin-top: 6px"></div>
+			</fieldset>
+
+			<fieldset>
+				<legend data-i18n="options_deliverSection">投递</legend>
+				<label class="check"
+					><input id="copyToClipboard" type="checkbox" />
+					<span><b data-i18n="options_copyToClipboardToggle">同时复制 Markdown 到剪贴板</b><i data-i18n="options_copyToClipboardToggleDesc">注入失败时的兜底，建议开着</i></span></label
+				>
+				<label class="check"
+					><input id="focusTarget" type="checkbox" />
+					<span><b data-i18n="options_focusTargetToggle">注入后切到 pi-web-ui 标签页</b><i data-i18n="options_focusTargetToggleDesc">关掉则留在当前网页继续看</i></span></label
+				>
+			</fieldset>
+
+			<div class="actions">
+				<button id="reset" data-i18n="options_resetButton">恢复默认</button>
+			</div>
+		</main>
+		<script type="module" src="dist/options.js"></script>
+	</body>
+</html>

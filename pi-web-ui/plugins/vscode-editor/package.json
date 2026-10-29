@@ -1,0 +1,32 @@
+{
+	"name": "vscode-editor-plugin",
+	"private": true,
+	"type": "module",
+	"description": "pi-web-ui 编辑器插件（类 VSCode + Remote-SSH；构建用 package.json，不发布。运行时依赖 ssh2 由插件服务端自动安装）",
+	"scripts": {
+		"build": "node build.mjs"
+	},
+	"dependencies": {
+		"@codemirror/autocomplete": "^6.18.6",
+		"@codemirror/commands": "^6.8.0",
+		"@codemirror/lang-css": "^6.3.1",
+		"@codemirror/lang-html": "^6.4.9",
+		"@codemirror/lang-javascript": "^6.2.3",
+		"@codemirror/lang-json": "^6.0.1",
+		"@codemirror/lang-markdown": "^6.3.2",
+		"@codemirror/lang-python": "^6.1.7",
+		"@codemirror/language": "^6.10.8",
+		"@codemirror/lint": "^6.8.5",
+		"@codemirror/search": "^6.5.10",
+		"@codemirror/state": "^6.5.2",
+		"@codemirror/theme-one-dark": "^6.1.2",
+		"@codemirror/view": "^6.36.5",
+		"@xterm/addon-fit": "^0.11.0",
+		"@xterm/xterm": "^6.0.0",
+		"codemirror": "^6.0.1"
+	},
+	"devDependencies": {
+		"esbuild": "^0.25.5",
+		"ssh2": "^1.11.0"
+	}
+}

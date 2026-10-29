@@ -1,0 +1,253 @@
+{
+	"id": "bili-scroll",
+	"name": "bili-scroll",
+	"version": "2.0.1",
+	"icon": "📺",
+	"iconSvg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"2\" y=\"7\" width=\"20\" height=\"15\" rx=\"3\"/><polyline points=\"17 2 12 7 7 2\"/><line x1=\"8\" y1=\"12\" x2=\"8\" y2=\"12.01\"/><line x1=\"16\" y1=\"12\" x2=\"16\" y2=\"12.01\"/></svg>",
+	"description": "每天替你刷一轮 B 站：通读原文字幕深度排雷、三档位精选、默认私信投递、支持私信双向对话与分享看片、视频卡片墙与自动收藏。",
+	"descriptionEn": "Autonomous Bilibili duty agent: reads raw subtitles to filter fluff, delivers curated video digests directly to private DMs, supports bidirectional DM chat, video card wall, and auto-favorite.",
+	"apiVersion": 2,
+	"permissions": ["tools", "http", "ui", "storage", "net", "chat", "llm"],
+	"view": true,
+	"settings": [
+		{
+			"key": "perDay",
+			"type": "number",
+			"label": "定量刷：每天最多挑几条",
+			"labelEn": "Daily Curation Quota",
+			"default": 5,
+			"min": 1,
+			"max": 30,
+			"hint": "每天挑出值得精读的视频数量上限，挑够后当日自动停刷",
+			"hintEn": "Maximum number of high-quality videos to curate per day"
+		},
+		{
+			"key": "peakValley",
+			"type": "boolean",
+			"label": "峰谷自动刷（总开关）",
+			"labelEn": "Peak-Valley Auto Schedule",
+			"default": true,
+			"hint": "在优惠谷时时段自动巡检（中午 12:00-14:00、夜间 00:30-08:30）",
+			"hintEn": "Enable automated curation rounds during off-peak hours"
+		},
+		{
+			"key": "noon",
+			"type": "boolean",
+			"label": "午间巡检窗口 (12:00–14:00)",
+			"labelEn": "Noon Window (12:00-14:00)",
+			"default": true,
+			"hint": "中午时段自动执行一轮巡检",
+			"hintEn": "Automatically run one curation round at noon"
+		},
+		{
+			"key": "night",
+			"type": "boolean",
+			"label": "夜间/早间巡检窗口 (00:30–08:30)",
+			"labelEn": "Night Window (00:30-08:30)",
+			"default": true,
+			"hint": "夜间至清晨时段自动执行一轮巡检",
+			"hintEn": "Automatically run one curation round at night/early morning"
+		},
+		{
+			"key": "dmMode",
+			"type": "select",
+			"label": "投递方式（2.0 默认私信）",
+			"labelEn": "Delivery Mode",
+			"default": "only",
+			"options": ["only", "off", "both"],
+			"hint": "only=只私信（完全不公开发评论，不打扰别人）；off=只发公开评论；both=公评与私信兼有",
+			"hintEn": "only: send DM only (silent & private); off: public comment only; both: both comment and DM"
+		},
+		{
+			"key": "dmUid",
+			"type": "number",
+			"label": "私信发给谁（UID）",
+			"labelEn": "Target Receiver UID for DM",
+			"default": 0,
+			"hint": "接收速报私信的 B站 用户 UID（可留空，将自动根据下方昵称查询）",
+			"hintEn": "Target Bilibili user UID; leave empty to resolve from username automatically"
+		},
+		{
+			"key": "mentionName",
+			"type": "string",
+			"label": "要 @ 谁 / 私信接收人昵称",
+			"labelEn": "Target Username / Mention",
+			"default": "",
+			"hint": "你的 B站 昵称。私信模式留空 UID 时会按此昵称自动查询 UID；开启公评时会在评论中 @ 该昵称",
+			"hintEn": "Bilibili username used for @ mention and resolving UID"
+		},
+		{
+			"key": "dmWatch",
+			"type": "boolean",
+			"label": "私信双向对话（看片与回信）",
+			"labelEn": "Bidirectional DM Watcher",
+			"default": true,
+			"hint": "默认开启。纯代码轮询主人发来的私信，主人发视频链接时自动读字幕后回信，零成本不花多余 token",
+			"hintEn": "Watch master's DMs and reply; analyzes shared videos via subtitles"
+		},
+		{
+			"key": "dmWatchMinutes",
+			"type": "number",
+			"label": "私信监听轮询间隔（分钟）",
+			"labelEn": "DM Watch Interval (min)",
+			"default": 1,
+			"min": 1,
+			"max": 60,
+			"hint": "私信轮询频率，默认每 1 分钟检测一次主人未读私信",
+			"hintEn": "Frequency to poll for new DMs from the owner"
+		},
+		{
+			"key": "dmReplyPerDay",
+			"type": "number",
+			"label": "私信回复每日上限（条）",
+			"labelEn": "Daily DM Reply Limit",
+			"default": 20,
+			"min": 0,
+			"max": 100,
+			"hint": "防止私信频繁刷屏或超支，0 为不限",
+			"hintEn": "Max auto-replies sent via DM per day (0 for unlimited)"
+		},
+		{
+			"key": "model",
+			"type": "string",
+			"label": "指定研读模型 (provider/model)",
+			"labelEn": "Designated AI Model",
+			"default": "",
+			"hint": "留空跟随当前对话模型；支持填入如 deepseek/deepseek-chat, openai/gpt-4o 等",
+			"hintEn": "Specific model override (e.g. deepseek/deepseek-chat); leave empty to follow active conversation"
+		},
+		{
+			"key": "reasoningEffort",
+			"type": "select",
+			"label": "思考强度 (Reasoning Effort)",
+			"labelEn": "Reasoning / Thinking Effort",
+			"default": "medium",
+			"options": ["off", "low", "medium", "high"],
+			"hint": "控制 AI 研读字幕排雷时的思考深度：off=关闭思考，low=轻度快速，medium=中等深度，high=深度推演",
+			"hintEn": "Thinking depth when analyzing video subtitles: off, low, medium, or high"
+		},
+		{
+			"key": "workspace",
+			"type": "string",
+			"label": "指定工作区目录 (Workspace)",
+			"labelEn": "Custom Workspace Directory",
+			"default": "",
+			"hint": "指定工作区绝对路径（如 Obsidian 库）。挑中的视频笔记会自动同步投递到该目录的 bili-notes/ 下",
+			"hintEn": "Custom directory path (e.g. Obsidian vault); curated notes will be mirrored to <workspace>/bili-notes/"
+		},
+		{
+			"key": "personaPrompt",
+			"type": "string",
+			"label": "它按什么说话（人设提示词）",
+			"labelEn": "Assistant Persona Prompt",
+			"default": "",
+			"hint": "留空按中性说话；支持一键从当前工作区导入 AGENTS.md",
+			"hintEn": "Custom persona prompt; leave empty for neutral tone or import from workspace AGENTS.md"
+		},
+		{
+			"key": "keywords",
+			"type": "string",
+			"label": "关注关键词列表",
+			"labelEn": "Target Keywords",
+			"default": "DeepSeek,大模型,AI智能体,开源项目",
+			"hint": "刷视频时重点检索的主题或关键词，逗号分隔或每行一个",
+			"hintEn": "Comma or newline separated keywords to prioritize"
+		},
+		{
+			"key": "excludeKeywords",
+			"type": "string",
+			"label": "排除/黑名单关键词",
+			"labelEn": "Excluded Keywords",
+			"default": "短剧,八卦,引流",
+			"hint": "命中这些词的视频将被直接跳过不予精选",
+			"hintEn": "Excluded keywords to filter out"
+		},
+		{
+			"key": "favFolderId",
+			"type": "number",
+			"label": "自动收藏到（收藏夹 fid）",
+			"labelEn": "Auto-Favorite Folder ID",
+			"default": 0,
+			"hint": "0 为不收藏；大于 0 时每轮挑中的视频自动存入该收藏夹（可在设置页下拉选择）",
+			"hintEn": "Target favorite folder ID (0 to disable)"
+		},
+		{
+			"key": "reportLevel",
+			"type": "select",
+			"label": "日报写多细",
+			"labelEn": "Report Detail Level",
+			"default": "full",
+			"options": ["full", "brief", "off"],
+			"hint": "full=完整详尽；brief=每条一两行；off=不写报告（只私信/评论）",
+			"hintEn": "full: complete digest; brief: one-liners; off: do not write markdown report"
+		},
+		{
+			"key": "autoComment",
+			"type": "boolean",
+			"label": "允许自动评论并 @ 用户（安全闸）",
+			"labelEn": "Allow Auto-Comment (Safety Gate)",
+			"default": false,
+			"hint": "默认关闭。开启且投递方式非 only 时，每轮向特别推荐的视频公开发布评论并 @ 昵称",
+			"hintEn": "Disabled by default. Post public comments when enabled"
+		},
+		{
+			"key": "commentPerRound",
+			"type": "number",
+			"label": "每轮最多发几条公开评论",
+			"labelEn": "Max Comments Per Round",
+			"default": 1,
+			"min": 0,
+			"max": 20,
+			"hint": "每轮最多发几条公开评论，0 为不发",
+			"hintEn": "Maximum comments posted per round"
+		},
+		{
+			"key": "replyToComments",
+			"type": "boolean",
+			"label": "回复评论（楼中楼互动）",
+			"labelEn": "Reply to Comment Replies",
+			"default": false,
+			"hint": "默认关闭。开启后仅回复自己评论下方的楼中楼提问与轻互动",
+			"hintEn": "Reply to sub-replies under our comments"
+		},
+		{
+			"key": "replyPerRound",
+			"type": "number",
+			"label": "每轮最多回几条评论",
+			"labelEn": "Max Replies Per Round",
+			"default": 1,
+			"min": 1,
+			"max": 10,
+			"hint": "每轮最多回复楼中楼的条数",
+			"hintEn": "Max replies to sub-comments per round"
+		},
+		{
+			"key": "transcribe",
+			"type": "boolean",
+			"label": "本地 Whisper 转写（无字幕备选）",
+			"labelEn": "Local Whisper Transcription",
+			"default": false,
+			"hint": "对无字幕视频使用本地 Whisper 提取音频并转写；需在高级页安装转写依赖",
+			"hintEn": "Use local Whisper to transcribe videos without subtitles"
+		},
+		{
+			"key": "asrModel",
+			"type": "select",
+			"label": "Whisper 模型规格",
+			"labelEn": "Whisper Model Size",
+			"default": "small",
+			"options": ["tiny", "base", "small", "medium"],
+			"hint": "Whisper 模型尺寸：tiny(~75MB), base(~145MB), small(~538MB), medium(~1.5GB)",
+			"hintEn": "Whisper model size: tiny, base, small, medium"
+		},
+		{
+			"key": "pythonPath",
+			"type": "string",
+			"label": "Python 解释器路径",
+			"labelEn": "Python Path",
+			"default": "python",
+			"hint": "Python 执行路径，点击「装主依赖」后会自动指向插件独立环境 .venv",
+			"hintEn": "Path to Python interpreter, auto-configured after installing dependencies"
+		}
+	]
+}

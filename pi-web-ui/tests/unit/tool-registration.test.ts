@@ -1,0 +1,155 @@
+/**
+ * 注册→目录守卫（静态源码检查，不启动服务）。
+ *
+ * 为什么需要：claim_files 当年就是从这里漏的——在 agent-service.ts 的 customTools
+ * 里注册了，却没进 AGENT_TOOL_CATALOG，全程静默，没有任何测试变红。
+ * settings-tool-rows 只守「目录→设置行」，不管「注册→目录」。
+ *
+ * 规则：agent-service.ts 里调用的每个 make*Tool(s) 工厂，必须在 FACTORY_TOOLS 里
+ * 登记它的产出；每个产出的工具名要么在目录里（可开关），要么在 INTRINSIC 内核
+ * 白名单里（bash/read：覆盖 SDK 内置，与 write/edit 一起走设置页「核心工具」区开关、
+ * 不占目录行——见 tool-manager.ts 的 CORE_BUILTIN_TOOL_NAMES）。
+ * 加新工具 = 在这里给它的工厂登记一行，逼着你当场决定：入目录还是内核。
+ * 插件工具走 enabledPluginToolDefs 动态区，不经过 make*Tool 调用，不管。
+ */
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import {
+	AGENT_TOOL_CATALOG,
+	ASK_USER_QUESTION_TOOL_NAME,
+	BROWSER_PAGE_TOOL_NAME,
+	CANVAS_TOOL_NAME,
+	CLAIM_FILES_TOOL_NAME,
+	CODEMODE_TOOL_NAME,
+	COMPACT_CONTEXT_TOOL_NAME,
+	CONVERSATION_READ_TOOL_NAME,
+	DELEGATE_TASK_TOOL_NAME,
+	EDIT_SOFT_TOOL_NAME,
+	EVAL_TOOL_NAME,
+	LSP_TOOL_NAME,
+	MCP_MANAGE_TOOL_NAME,
+	SANDBOX_TOOL_NAME,
+	WORKTREE_TOOL_NAME,
+	LOAD_TOOLS_TOOL_NAME,
+	PATCH_TOOL_NAME,
+	PLAN_UPDATE_TOOL_NAME,
+	PRESENT_FILES_TOOL_NAME,
+	SCHEDULE_TOOL_NAME,
+	SKILL_TOOL_NAME,
+	SUBAGENT_TOOL_NAMES,
+	TERMINAL_TOOL_NAMES,
+	TOOL_SEARCH_TOOL_NAME,
+} from "../../server/tool-manager.js";
+
+const AGENT_SERVICE_SRC = readFileSync(join(__dirname, "..", "..", "server", "agent-service.ts"), "utf8");
+
+/** 覆盖 SDK 内置的内核工具（与 write/edit 同走设置页「核心工具」区，不占目录行；
+ *  目录行是 OTHER_AGENT_TOOLS 自动渲染的细粒度开关，核心四件套不在其中）。 */
+const INTRINSIC = new Set(["bash", "read"]);
+
+/** 常驻脚手架工具（不入目录、不可单独关掉）：它们是机制的入口，关掉机制就断了。
+ *  load_tools = 延迟加载模式的唯一拉取入口（见 server/load-tools-tool.ts）。 */
+const HARNESS = new Set([LOAD_TOOLS_TOOL_NAME]);
+
+/** 工厂 → 它注册的工具名（与各工厂的 name: 对齐；makeSubagentTools 产出 7 个子代理工具，见 subagents.ts）。 */
+const FACTORY_TOOLS: Record<string, string[]> = {
+	makeAdaptiveBashTool: ["bash"],
+	makeKillableBashTool: ["bash"],
+	makeTerminalBashTool: ["bash"],
+	makePersistentTerminalTools: [...TERMINAL_TOOL_NAMES],
+	makeReadDirTool: ["read"],
+	makeEditSoftTool: [EDIT_SOFT_TOOL_NAME],
+	makeSubagentTools: [...SUBAGENT_TOOL_NAMES],
+	makeDelegateTaskTool: [DELEGATE_TASK_TOOL_NAME],
+	makeAskUserQuestionTool: [ASK_USER_QUESTION_TOOL_NAME],
+	makeBrowserPageTool: [BROWSER_PAGE_TOOL_NAME],
+	makeConversationReadTool: [CONVERSATION_READ_TOOL_NAME],
+	makeClaimFilesTool: [CLAIM_FILES_TOOL_NAME],
+	makePlanUpdateTool: [PLAN_UPDATE_TOOL_NAME],
+	makePresentFilesTool: [PRESENT_FILES_TOOL_NAME],
+	makeSkillTool: [SKILL_TOOL_NAME],
+	makeCompactContextTool: [COMPACT_CONTEXT_TOOL_NAME],
+	makeScheduleTool: [SCHEDULE_TOOL_NAME],
+	makeEvalTool: [EVAL_TOOL_NAME],
+	makePatchTool: [PATCH_TOOL_NAME],
+	makeLspTool: [LSP_TOOL_NAME],
+	makeMcpManageTool: [MCP_MANAGE_TOOL_NAME],
+	makeSandboxTool: [SANDBOX_TOOL_NAME],
+	makeWorktreeTool: [WORKTREE_TOOL_NAME],
+	makeCanvasTool: [CANVAS_TOOL_NAME],
+	makeLoadToolsTool: [LOAD_TOOLS_TOOL_NAME],
+	createCodemodeExtension: [CODEMODE_TOOL_NAME],
+	createToolSearchExtension: [TOOL_SEARCH_TOOL_NAME],
+};
+
+/** agent-service.ts 里实际调用的工厂（去注释、防定义行，只认 `makeXxxTool(` 或 `createCodemodeExtension(` 或 `createToolSearchExtension(` 调用）。 */
+function calledFactories(): Set<string> {
+	const lines = AGENT_SERVICE_SRC.replace(/\/\*[\s\S]*?\*\//g, "")
+		.split("\n")
+		.filter((l) => !/^\s*(\/\/|\*)/.test(l) && !/function\s+make/.test(l))
+		.map((l) => l.replace(/\/\/.*$/, ""));
+	const found = new Set<string>();
+	for (const m of lines
+		.join("\n")
+		.matchAll(/\b(make[A-Za-z]*Tools?|createCodemodeExtension|createToolSearchExtension)\(/g))
+		found.add(m[1]);
+	return found;
+}
+
+describe("注册→目录", () => {
+	it("每个注册工厂都在对照表里登记（新工厂必须当场分类：入目录还是内核）", () => {
+		const unknown = [...calledFactories()].filter((f) => !(f in FACTORY_TOOLS));
+		expect(
+			unknown,
+			`以下工厂在 agent-service.ts 里注册了工具，却没在 FACTORY_TOOLS 登记：${unknown.join(", ")}（入目录 or 内核白名单，二选一）`,
+		).toEqual([]);
+	});
+
+	it("每个产出的工具名都有归属：目录 或 内核白名单", () => {
+		const known = new Set(AGENT_TOOL_CATALOG.map((t) => t.name));
+		const homeless: string[] = [];
+		for (const [factory, tools] of Object.entries(FACTORY_TOOLS)) {
+			for (const name of tools) {
+				if (!known.has(name) && !INTRINSIC.has(name) && !HARNESS.has(name)) homeless.push(`${name}（来自 ${factory}）`);
+			}
+		}
+		expect(
+			homeless,
+			`以下工具注册了却无处可去：${homeless.join("、")}（进 AGENT_TOOL_CATALOG 或 INTRINSIC，二选一）`,
+		).toEqual([]);
+	});
+
+	it("目录里的每个工具都被某个工厂注册（反向：有目录无注册 = 开关摆设）", () => {
+		const produced = new Set(Object.values(FACTORY_TOOLS).flat());
+		const unregistered = AGENT_TOOL_CATALOG.map((t) => t.name).filter((n) => !produced.has(n));
+		expect(
+			unregistered,
+			`以下工具在目录里、却没有任何工厂注册它：${unregistered.join(", ")}（开关开了也没东西可开）`,
+		).toEqual([]);
+	});
+
+	it("核心内置工具不入目录（它们走设置页「核心工具」区，不占 OTHER_AGENT_TOOLS 目录行）", () => {
+		const known = new Set(AGENT_TOOL_CATALOG.map((t) => t.name));
+		expect([...INTRINSIC].filter((n) => known.has(n))).toEqual([]);
+	});
+
+	it("所有 Type.Unsafe 参数均显式声明 type（防 Moonshot 等严格端点 HTTP 400，#590）", () => {
+		const serverDir = join(__dirname, "..", "..", "server");
+		const missingType: string[] = [];
+		for (const file of readdirSync(serverDir).filter((f) => f.endsWith(".ts"))) {
+			const src = readFileSync(join(serverDir, file), "utf8");
+			for (const m of src.matchAll(/Type\.Unsafe(?:<[^>]*>)?\(\s*\{([\s\S]*?)\}\s*\)/g)) {
+				const body = m[1];
+				if (!/\btype\s*:/.test(body)) {
+					const line = src.slice(0, m.index ?? 0).split("\n").length;
+					missingType.push(`${file}:${line}`);
+				}
+			}
+		}
+		expect(
+			missingType,
+			`以下 Type.Unsafe({...}) 缺少显式 type 字段，会导致严格校验端点返回 HTTP 400：${missingType.join(", ")}`,
+		).toEqual([]);
+	});
+});

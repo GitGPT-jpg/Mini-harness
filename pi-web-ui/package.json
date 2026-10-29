@@ -1,0 +1,173 @@
+{
+	"name": "pi-web-ui",
+	"version": "0.111.0",
+	"description": "Just open your browser to get all your work done — browser cockpit for AI coding agents (chat, code, files, terminal, Git in one tab)",
+	"license": "MIT",
+	"author": {
+		"name": "xingshuyin",
+		"email": "xingshuyin@users.noreply.github.com"
+	},
+	"type": "module",
+	"publishConfig": {
+		"access": "public",
+		"registry": "https://registry.npmjs.org/"
+	},
+	"bin": {
+		"pi-web-ui": "bin/pi-web-ui.mjs",
+		"piwebui": "bin/pi-web-ui.mjs"
+	},
+	"main": "bin/pi-web-ui.mjs",
+	"files": [
+		"bin/",
+		"dist/",
+		"!dist/desktop",
+		"web/dist/",
+		"web/public/",
+		"themes/",
+		"deploy/",
+		"extensions/",
+		"plugin-sdk/",
+		"plugins/catalog.json",
+		"docs/dsh-engine.md",
+		"CHANGELOG.md",
+		"README.md",
+		"LICENSE"
+	],
+	"keywords": [
+		"pi",
+		"pi-package",
+		"coding-agent",
+		"ai",
+		"chat",
+		"web-ui",
+		"terminal",
+		"llm"
+	],
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/xing-shuyin/pi-web-ui.git"
+	},
+	"pi": {
+		"extensions": [
+			"./extensions"
+		],
+		"image": "https://raw.githubusercontent.com/xing-shuyin/pi-web-ui/main/assets/chat-prompts.jpeg"
+	},
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"scripts": {
+		"prepublishOnly": "npm run build",
+		"dev": "concurrently -k -n server,web -c blue,green \"npm:dev:server\" \"npm:dev:web\"",
+		"dev:server": "cross-env PI_WEB_PORT=8788 PI_WEB_ALLOW_ORIGINS=http://localhost:5173,http://127.0.0.1:5173 node --watch --import tsx server/index.ts",
+		"dev:web": "vite --config web/vite.config.ts",
+		"build": "npm run build:web && npm run build:server && npm run build:dsh-runtime && npm run build:mermaid-vendor && npm run build:runtrace-vendor",
+		"build:web": "vite build --config web/vite.config.ts",
+		"build:server": "tsc -p tsconfig.server.json",
+		"build:dsh-runtime": "node scripts/copy-dsh-runtime.mjs",
+		"build:mermaid-vendor": "node scripts/build-mermaid-vendor.mjs",
+		"build:extension": "node plugins/page-picker/extension/build.mjs",
+		"pack:extension": "node plugins/page-picker/extension/pack.mjs",
+		"build:runtrace-vendor": "node scripts/build-runtrace-vendor.mjs",
+		"typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p web/tsconfig.json --noEmit && tsc -p tsconfig.tests.json --noEmit && tsc -p desktop/tsconfig.json --noEmit && tsc -p plugins/page-picker/extension/tsconfig.json --noEmit",
+		"test": "vitest run",
+		"test:unit": "vitest run",
+		"test:smoke": "node tests/run-smoke.mjs",
+		"test:smoke:core": "node tests/run-smoke.mjs --core",
+		"check:protocol": "node scripts/check-protocol-sync.mjs",
+		"i18n:diff": "node scripts/i18n-diff.mjs",
+		"i18n:check": "node scripts/i18n-diff.mjs --check-packs",
+		"i18n:sync": "node scripts/sync-locales.mjs",
+		"release:notes": "node scripts/release-notes.mjs",
+		"changelog:i18n": "node scripts/release-notes.mjs --unreleased",
+		"test:freeze": "node tests/freeze-test.mjs",
+		"plugins:link": "node scripts/link-plugins.mjs",
+		"plugins:unlink": "node scripts/link-plugins.mjs --unlink",
+		"start": "node --import ./dist/server/resolve-global-sdk.js dist/server/index.js",
+		"build:desktop": "tsc -p desktop/tsconfig.json",
+		"desktop:dev": "npm run build:desktop && electron dist/desktop/main.js",
+		"desktop:dist": "npm run build && npm run build:desktop && electron-builder -c desktop/electron-builder.yml",
+		"desktop:portable": "npm run build && npm run build:desktop && node scripts/make-portable.mjs",
+		"desktop:portable:full": "npm run build && npm run build:desktop && node scripts/make-portable.mjs --with-git",
+		"format": "prettier --write server/ web/src/ extensions/ scripts/ bin/ desktop/ tests/*.mjs tests/unit/ *.mjs",
+		"format:check": "prettier --check server/ web/src/ extensions/ scripts/ bin/ desktop/ tests/*.mjs tests/unit/ *.mjs",
+		"lint": "oxlint server/ web/src/ extensions/ scripts/ bin/ desktop/",
+		"lint:fix": "oxlint --fix server/ web/src/ extensions/ scripts/ bin/ desktop/",
+		"audit:themes": "node scripts/theme-audit.mjs --out .theme-audit/current",
+		"audit:diff": "node scripts/theme-diff.mjs .theme-audit/baseline .theme-audit/current"
+	},
+	"dependencies": {
+		"@deepseek-ai/dsh-sdk-jsonrpc-server": "^0.2.1-rc.2",
+		"@deepseek-ai/dsh-sdk-protocol": "^0.2.1-rc.2",
+		"compression": "^1.8.2",
+		"electron-updater": "^6.8.9",
+		"express": "^5.2.1",
+		"node-pty": "^1.1.0",
+		"ssh2": "^1.17.0",
+		"tar": "^7.5.22",
+		"undici": "^8.9.0",
+		"ws": "^8.21.3",
+		"yauzl": "^3.4.0"
+	},
+	"optionalDependencies": {
+		"@earendil-works/pi-coding-agent": ">=1.1.0",
+		"typebox": "^1.3.34"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"typebox": "*"
+	},
+	"peerDependenciesMeta": {
+		"@earendil-works/pi-coding-agent": {
+			"optional": true
+		},
+		"typebox": {
+			"optional": true
+		}
+	},
+	"devDependencies": {
+		"@types/compression": "^1.8.1",
+		"@types/express": "^5.0.6",
+		"@types/node": "^26.6.1",
+		"@types/react": "^19.3.0",
+		"@types/react-dom": "^19.3.0",
+		"@types/ssh2": "^1.15.6",
+		"@types/ws": "^8.18.1",
+		"@types/yauzl": "^3.4.0",
+		"@vitejs/plugin-react": "^6.1.1",
+		"@xterm/addon-fit": "^0.11.0",
+		"@xterm/xterm": "^6.0.0",
+		"concurrently": "^10.0.5",
+		"cross-env": "^10.1.0",
+		"electron": "^44.4.2",
+		"electron-builder": "^26.15.3",
+		"esbuild": "^0.28.2",
+		"highlight.js": "^11.12.0",
+		"html-to-image": "^1.11.13",
+		"jsdom": "^30.1.0",
+		"katex": "^0.16.47",
+		"mermaid": "^12.0.0",
+		"oxlint": "^1.83.0",
+		"playwright-core": "^1.63.0",
+		"prettier": "^3.9.8",
+		"react": "^19.3.0",
+		"react-dom": "^19.3.0",
+		"react-icons": "^5.7.0",
+		"react-markdown": "^10.1.0",
+		"rehype-highlight": "^7.0.2",
+		"rehype-katex": "^7.0.1",
+		"rehype-raw": "^7.0.0",
+		"rehype-sanitize": "^6.0.0",
+		"remark-breaks": "^4.0.0",
+		"remark-gfm": "^4.0.1",
+		"remark-math": "^6.0.0",
+		"tsx": "^4.23.13",
+		"typescript": "^7.0.2",
+		"vis-timeline": "^8.5.4",
+		"vite": "^8.3.0",
+		"vitest": "^5.0.1"
+	},
+	"allowScripts": {
+		"node-pty@1.1.0": true
+	}
+}

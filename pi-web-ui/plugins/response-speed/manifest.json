@@ -1,0 +1,31 @@
+{
+	"id": "response-speed",
+	"name": "响应速度",
+	"nameEn": "Response Speed",
+	"version": "0.3.1",
+	"icon": "⚡",
+	"iconSvg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polygon points=\"13 2 3 14 12 14 11 22 21 10 12 10 13 2\"/></svg>",
+	"description": "在底部状态栏实时显示当前对话最新请求与平均 AI 响应速度（TTFT），每个对话独立记录，支持 AI 自循环每次独立测速，点击底栏可查看当前对话的统计明细看板与历史记录。",
+	"descriptionEn": "Real-time tracking of AI response speed (TTFT) for the current conversation showing both latest and average in the bottom status bar, with independent records per conversation and per AI turn/self-loop, and click-to-view details dashboard.",
+	"apiVersion": 2,
+	"view": false,
+	"preload": true,
+	"permissions": ["ui", "http", "storage"],
+	"ui": {
+		"bottombar": [
+			{
+				"id": "response-speed-badge",
+				"label": "--/--",
+				"labelEn": "--/--",
+				"icon": "⚡",
+				"iconSvg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polygon points=\"13 2 3 14 12 14 11 22 21 10 12 10 13 2\"/></svg>",
+				"kind": "action",
+				"action": "response-speed:show-details",
+				"align": "start",
+				"order": 16,
+				"hint": "⚡ AI 响应速度统计（最新/均速，点击查看明细看板）",
+				"hintEn": "⚡ AI response speed statistics (Latest/Avg, click for details)"
+			}
+		]
+	}
+}
