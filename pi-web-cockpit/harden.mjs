@@ -888,7 +888,7 @@ try {
     `\t\t\t\ttry{\n` +
     `\t\t\t\t\tvar gi0=document.querySelector('.goalbar-input');var isOpen=!!(gi0&&gi0.getBoundingClientRect().width>10);\n` +
     `\t\t\t\t\tvar d0=document.getElementById('mh-loop-dock');\n` +
-    `\t\t\t\t\tif(isOpen){if(d0)d0.style.display='none';return;}\n` +
+    `\t\t\t\t\tif(isOpen||document.getElementById('mh-code-loop-modal')){if(d0)d0.style.display='none';return;}\n` +
     `\t\t\t\t\tvar row=document.querySelector('.goalbar-collapsed');if(!row){if(d0)d0.style.display='none';return;}\n` +
     `\t\t\t\t\tvar native=row.querySelector('.goalbar-hint');if(native&&native.style.opacity!=='0')native.style.opacity='0';\n` +
     `\t\t\t\t\tvar d=document.getElementById('mh-loop-dock');\n` +
