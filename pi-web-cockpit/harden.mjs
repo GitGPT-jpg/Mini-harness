@@ -529,6 +529,10 @@ try {
     `\t\t\t.mh-code-loop-btn{align-self:center;display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 9px;margin-left:6px;font-size:12px;border-radius:6px;cursor:pointer;color:#c4b5fd;background:rgba(168,85,247,.12);border:1px solid rgba(168,85,247,.45);white-space:nowrap;}\n` +
     `\t\t\t.mh-code-loop-btn:hover{background:rgba(168,85,247,.22);color:#ddd6fe;}\n` +
     `\t\t\t.mh-llm-hint{font-size:11px;color:#7f8897;padding:6px 2px 0;line-height:1.5;}\n` +
+    `\t\t\t.goalbar-active.wizard{position:relative;overflow:hidden;}\n` +
+    `\t\t\t.goalbar-active.wizard::after{content:"";position:absolute;left:-45%;bottom:0;height:2px;width:45%;border-radius:2px;background:linear-gradient(90deg,transparent,#a855f7,#c084fc,transparent);animation:mhWizSweep 1.7s linear infinite;}\n` +
+    `\t\t\t@keyframes mhWizSweep{0%{left:-45%;}100%{left:100%;}}\n` +
+    `\t\t\t.goalbar-active.wizard .goalbar-detail.mh-wiz-wait{color:#34d399;font-weight:600;}\n` +
     `\t\t\t#mh-code-loop-modal{position:fixed;inset:0;z-index:2147483500;display:flex;align-items:center;justify-content:center;background:rgba(15,17,21,.72);backdrop-filter:blur(3px);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;}\n` +
     `\t\t\t#mh-code-loop-modal .cl-card{width:min(560px,92vw);background:#1b1e24;color:#e7e9ee;border:1px solid #333a45;border-radius:14px;padding:24px 26px;box-shadow:0 18px 60px rgba(0,0,0,.5);}\n` +
     `\t\t\t#mh-code-loop-modal h2{margin:0 0 6px;font-size:17px;font-weight:700;}\n` +
@@ -611,6 +615,13 @@ try {
     `\t\t\t\t\t\tslot.querySelectorAll('button').forEach(function(b){var t=(b.textContent||'').trim();if(t==='提炼')b.textContent='帮我细化';else if(t==='发送')b.textContent='开始';});\n` +
     `\t\t\t\t\t\treplaceText(slot,'调研模型','规划模型');replaceText(slot,'细化模型','规划模型');replaceText(slot,'最大轮数','最多尝试');\n` +
     `\t\t\t\t\t\tvar wc=document.querySelector('.goalbar-active.wizard .goalbar-chip');if(wc&&(wc.textContent||'').indexOf('轮')!==-1)wc.textContent=wc.textContent.replace('轮','题');\n` +
+    `\t\t\t\t\t\tvar wa=document.querySelector('.goalbar-active.wizard');\n` +
+    `\t\t\t\t\t\tif(wa){var det=wa.querySelector('.goalbar-detail');\n` +
+    `\t\t\t\t\t\t\tif(det){var tx=(det.textContent||'').trim();var mm=tx.match(/第\\s*(\\d+)\\s*题/);\n` +
+    `\t\t\t\t\t\t\t\tif(/请回答/.test(tx)&&mm){if(det.textContent!=='等你选择第 '+mm[1]+' 题')det.textContent='等你选择第 '+mm[1]+' 题';det.classList.add('mh-wiz-wait');}\n` +
+    `\t\t\t\t\t\t\t\telse if(/调研中/.test(tx)){det.classList.remove('mh-wiz-wait');if(det.textContent!=='AI 正在调研，请稍候…')det.textContent='AI 正在调研，请稍候…';}\n` +
+    `\t\t\t\t\t\t\t}\n` +
+    `\t\t\t\t\t\t}\n` +
     `\t\t\t\t\t\tensureReviewChip(slot);\n` +
     `\t\t\t\t\t\tif(!slot.querySelector('.goalbar')){slot.querySelectorAll('.mh-llm-hint').forEach(function(h){h.remove();});}\n` +
     `\t\t\t\t\t\tif(slot.querySelector('.goalbar')&&!slot.querySelector('.mh-llm-hint:not(.mh-llm-same)')){\n` +
@@ -816,9 +827,39 @@ try {
   const newGuide =
     "`- Call goal_ask FIRST: this session has no read/ls/find/grep tools. Base every question on the requirement and the conversation context above. Never attempt the actual task during scoping.`, // eslint-disable-line max-len";
   if (gs.includes(oldGuide)) gs = gs.split(oldGuide).join(newGuide);
-  const ok = gs.includes("HARDENED:wizard-ask-first") && gs.includes("Call goal_ask FIRST");
-  if (gs !== before) { fs.writeFileSync(gsFile, gs); log("目标调研向导：已改为先提问（去掉探索工具）"); }
-  else log(ok ? "目标调研向导：已是先提问（跳过）" : "WARN: 目标调研向导锚点未命中（pi-web-ui 可能升级，需重新适配）");
+  // 7g-2) 计划确认门禁：调研完不直接开跑，先给「计划大纲」让用户 check，确认后才输出 GOAL。
+  const tailRe = /^ {8}`Once you have enough to write an unambiguous[\s\S]*?what you already know\.`, \/\/ eslint-disable-line max-len\n/m;
+  const newTail = [
+    "        'Once you have enough information, do NOT emit the goal yet: the plan MUST be approved by the user first.',",
+    "        'PLAN CHECK (mandatory, never skip): call goal_ask one final time to present the plan outline and get explicit approval.',",
+    "        '- question: begin with \"计划大纲：\" then one goal line and 2 to 6 numbered steps, each with how to verify, for example:',",
+    "        '  计划大纲：',",
+    "        '  目标：<一句话说清交付物与验收标准>',",
+    "        '  步骤：1) <做什么> -- <怎么验证> 2) <做什么> -- <怎么验证>',",
+    "        '  确认后开始执行。',",
+    "        '- options, recommended first: \"开始执行：按上面的计划跑\" / \"我要修改：先调整目标或步骤\" / \"取消：不执行\"',",
+    "        '- If the user picks 开始执行, reply with EXACTLY this format and nothing else (no preamble, no bullets):',",
+    "        'GOAL: <one concrete, verifiable sentence describing the deliverable and its acceptance criteria>',",
+    "        'STEPS:',",
+    "        '1. <first step title> | <brief description / acceptance check>',",
+    "        '2. <second step title> | <brief description / acceptance check>',",
+    "        '(include 2 to 6 concrete, sequential steps for executing the goal)',",
+    "        '- If the user picks 我要修改, ask what to change via goal_ask, apply it, then present the plan outline again.',",
+    "        '- If the user picks 取消, reply with exactly CANCELLED and nothing else.',",
+  ].join("\n") + "\n";
+  if (!gs.includes("PLAN CHECK (mandatory")) gs = gs.replace(tailRe, newTail);
+  // 7g-3) 取消语义：用户点「取消」或关掉对话框 => 只回 CANCELLED，不再自动设目标开跑。
+  const rawAnchor = "const rawAssistantText = wizard.getLastAssistantText()?.trim() ?? \"\";";
+  const rawPatched = rawAnchor + "\n            if (/^\\s*CANCELLED\\b/i.test(rawAssistantText)) { this.wizardCancelled = true; /* HARDENED:wizard-cancel */ }";
+  if (gs.includes(rawAnchor) && !gs.includes("HARDENED:wizard-cancel")) gs = gs.split(rawAnchor).join(rawPatched);
+  const cancelledZh = "\"(用户已取消调研，请直接给出你当前收敛的目标文本作为最终答案)\"";
+  const cancelledEn = "\"(The user cancelled the survey — reply with your best-effort goal text as the final answer)\"";
+  if (gs.includes(cancelledZh)) gs = gs.split(cancelledZh).join("\"(用户关闭了对话框，请直接回复 CANCELLED 结束调研)\"");
+  if (gs.includes(cancelledEn)) gs = gs.split(cancelledEn).join("\"(The user dismissed the dialog — reply with exactly CANCELLED and end the survey)\"");
+  const ok = gs.includes("HARDENED:wizard-ask-first") && gs.includes("Call goal_ask FIRST")
+    && gs.includes("PLAN CHECK (mandatory") && gs.includes("HARDENED:wizard-cancel");
+  if (gs !== before) { fs.writeFileSync(gsFile, gs); log("目标调研向导：先提问 + 计划确认门禁已生效"); }
+  else log(ok ? "目标调研向导：已是先提问 + 计划确认（跳过）" : "WARN: 目标调研向导锚点未命中（pi-web-ui 可能升级，需重新适配）");
 } catch (e) {
   log("WARN: 目标调研向导加固失败", e.message);
 }
