@@ -609,7 +609,7 @@ try {
     `\t\t\t\t\tvar slot=document.querySelector('.goalbar-slot');\n` +
     `\t\t\t\t\tif(slot){\n` +
     `\t\t\t\t\t\tslot.querySelectorAll('button').forEach(function(b){var t=(b.textContent||'').trim();if(t==='提炼')b.textContent='帮我细化';else if(t==='发送')b.textContent='开始';});\n` +
-    `\t\t\t\t\t\treplaceText(slot,'调研模型','细化模型');replaceText(slot,'规划模型','细化模型');replaceText(slot,'最大轮数','最多尝试');\n` +
+    `\t\t\t\t\t\treplaceText(slot,'调研模型','规划模型');replaceText(slot,'细化模型','规划模型');replaceText(slot,'最大轮数','最多尝试');\n` +
     `\t\t\t\t\t\tensureReviewChip(slot);\n` +
     `\t\t\t\t\t\tif(!slot.querySelector('.goalbar')){slot.querySelectorAll('.mh-llm-hint').forEach(function(h){h.remove();});}\n` +
     `\t\t\t\t\t\tif(slot.querySelector('.goalbar')&&!slot.querySelector('.mh-llm-hint:not(.mh-llm-same)')){\n` +
