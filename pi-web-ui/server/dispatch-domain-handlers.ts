@@ -505,6 +505,25 @@ export function handlePlanAndGoalMessage(msg: ClientMessage, cs: DispatchSession
 				execModel: msg.execModel,
 			});
 			return true;
+		case "loop_start_request":
+			void cs.startLoop?.({
+				goal: msg.goal,
+				validateCmd: msg.validateCmd,
+				mode: msg.mode,
+				maxRounds: msg.maxRounds,
+				plannerModel: msg.plannerModel,
+				reviewerModel: msg.reviewerModel,
+				useReviewer: msg.useReviewer,
+				worktree: msg.worktree,
+				taskId: msg.taskId,
+			});
+			return true;
+		case "loop_stop":
+			void cs.stopLoop?.(msg.runId);
+			return true;
+		case "loop_resume":
+			void cs.resumeLoop?.(msg.runId);
+			return true;
 		case "plan_update":
 			cs.updatePlan?.(msg.steps, msg.activeStepId, msg.conversationId);
 			return true;

@@ -1339,3 +1339,8 @@ export function stopRunExternal(runId: string, reason = "user-stop"): { ok: bool
 	journal(st, "stop", { source: "server", reason, epoch: st.epoch });
 	return { ok: true };
 }
+
+/** 服务端按 runId 读落盘状态（resume 显式绑定校验用）。 */
+export function loadLoopState(runId: string) {
+	return loadState(runId);
+}

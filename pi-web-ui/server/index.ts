@@ -1438,6 +1438,19 @@ export interface DispatchSession {
 		locked?: boolean;
 		execModel?: string;
 	}): Promise<void>;
+	startLoop?(msg: {
+		goal: string;
+		validateCmd?: string;
+		mode?: "code" | "llm";
+		maxRounds?: number;
+		plannerModel?: string;
+		reviewerModel?: string;
+		useReviewer?: boolean;
+		worktree?: boolean;
+		taskId?: string;
+	}): Promise<void>;
+	stopLoop?(runId?: string): Promise<void>;
+	resumeLoop?(runId: string): Promise<void>;
 	pushSettings(): void;
 	setSettings(partial: {
 		promptMode?: "append" | "replace";

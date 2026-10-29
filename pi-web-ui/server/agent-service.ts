@@ -54,7 +54,14 @@ import {
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { BG_CLEANUP_FALLBACK_MIN, BgServerTracker } from "./bg-servers.js";
-import { createLoopExtension } from "./loop/extension.js";
+import {
+	createLoopExtension,
+	setLoopEventReporter,
+	markLoopRequestPending,
+	stopRunExternal,
+	loadLoopState,
+	type LoopEvent,
+} from "./loop/extension.js";
 import {
 	checkAll as checkAllUpdates,
 	collectTargets,
@@ -313,6 +320,7 @@ import type {
 	AgentEngineCapabilities,
 	McpScope,
 	UiMcpServer,
+	LoopUiState,
 } from "./protocol.js";
 import {
 	listAllMcpServers,
@@ -591,6 +599,10 @@ export interface Conversation {
 	delegateMode?: boolean;
 	/** 常驻执行对话 id（仅本进程；null/缺省 = 还没建）。 */
 	delegateConvId?: string | null;
+	/** mini-harness Loop 状态（server/loop/ 运行时；仅内存，不落盘）。挂起
+	 *  启动记录（pending）→ 扩展上报 run（事件驱动，每次落盘刷新）→ 启动
+	 *  失败（request-failed）。null = 本对话没有进行中的 Loop。 */
+	loop: LoopUiState | null;
 	/** 临时会话（inMemory，不落盘、不进历史、不占持久会话名额）。 */
 	isEphemeral?: boolean;
 	/** 本对话的审批放行策略（仅内存，不落盘）：allowAll = 「本对话全部允许」，
@@ -2533,8 +2545,7 @@ export class ClientSession {
 			activeConv: () => this.conv,
 			getConv: (id) => this.convs.get(id),
 			cwd: () => this.cwd,
-			gitDiff: (dir) => this.gitDiff(dir),
-			// 任务计划看板（#389 目标与计划联动）：审查者核验步骤看板，向导产物注入看板
+			gitDiff: (dir) => this.gitDiff(dir), // 任务计划看板（#389 目标与计划联动）：审查者核验步骤看板，向导产物注入看板
 			getPlan: (convId) => this.planManager.getPlan(convId),
 			describePlan: (convId) => this.planManager.describePlan(convId),
 			setPlan: (convId, steps) => {
@@ -2695,6 +2706,10 @@ export class ClientSession {
 			pushModels: async () => this.listModels(),
 			onOAuthActivated: (provider) => this.stateStore.deleteProviderEverywhere(provider),
 		});
+		// mini-harness Loop 事件上报（server/loop/extension.ts 的全局单上报器）：
+		// 按 sessionId 路由到本客户端的对应会话 → 更新 conv.loop → 刷快照。
+		setLoopEventReporter((e) => this.handleLoopEvent(e));
+
 		// Prune dead background tasks every 30s (only spawns netstat/lsof while
 		// the list is non-empty). unref: must not keep the process alive.
 		this.bg.start();
@@ -3528,6 +3543,7 @@ export class ClientSession {
 				"workspace-write-never",
 			planMode: readPlanModeFromSession(runtime.session.sessionManager) === true,
 			delegateMode: readDelegateModeFromSession(runtime.session.sessionManager) === true,
+			loop: null,
 			// A brand-new conversation is not yet LISTED — it enters the running
 			// list only when it is displaced to the background while still
 			// streaming (its runtime is what `listed` protects). A blank chat is
@@ -5153,6 +5169,8 @@ export class ClientSession {
 			// 审查者模式同样是**会话级**：布尔恒给（理由同 planMode），另带执行对话 id。
 			delegateMode: conv?.delegateMode === true,
 			delegateConvId: conv?.delegateConvId ?? null,
+			// mini-harness Loop 同样是会话级：恒给 LoopUiState 或 null（理由同 plan）。
+			loop: conv?.loop ?? null,
 			subagentHandoffs: this.subagentHandoffs.length > 0 ? [...this.subagentHandoffs] : undefined,
 			agentPreset: conv
 				? {
@@ -13549,6 +13567,151 @@ export class ClientSession {
 		},
 	): Promise<void> {
 		return this.goalSvc.setGoal(goalText, opts);
+	}
+
+	// -----------------------------------------------------------------------
+	// mini-harness Loop（server/loop/extension.ts）：挂起登记→提示词→扩展上报。
+	// 修#1：提示词发出前先落 pending 记录（快照可见），模型没调 loop_start 的
+	// 回合结束时上报 request-failed（扩展侧），这里路由进快照。
+	// 修#2：resume 按 runId 显式绑定 + per-runId 互斥（在途续跑拒绝重复）。
+	// -----------------------------------------------------------------------
+	/** 在途续跑互斥（runId 集合；修复#2：同一 run 双续跑并发）。 */
+	private loopResuming = new Set<string>();
+
+	/** 扩展事件路由：run-state/request-failed → 对应会话的 conv.loop → 刷快照。 */
+	private handleLoopEvent(e: LoopEvent): void {
+		if (this.disposed) return;
+		const conv = [...this.convs.values()].find(
+			(c) => c.session?.sessionId === (e.type === "run-state" ? e.st.sessionId : e.sessionId),
+		);
+		if (!conv) return;
+		if (e.type === "run-state") {
+			const st = e.st;
+			conv.loop = {
+				kind: "run",
+				taskId: st.taskId ?? null,
+				goal: st.goal,
+				runId: st.runId,
+				mode: st.mode,
+				stage: st.stage,
+				round: st.round,
+				maxRounds: st.maxRounds,
+				status: st.status,
+				stopReason: st.stopReason,
+				lastVerdict: st.lastVerdict ?? null,
+				createdAt: st.createdAt,
+			};
+		} else {
+			conv.loop = {
+				kind: "request-failed",
+				taskId: e.taskId,
+				goal: e.goal,
+				reason: e.reason,
+				createdAt: new Date().toISOString(),
+			};
+			this.emitNotice("warning", `Loop 启动失败：${e.reason}`);
+		}
+		this.flushSnapshot();
+	}
+
+	/** 启动受控 Loop：先落 pending 记录（修#1），再把启动提示词发进当前会话。 */
+	async startLoop(msg: {
+		goal: string;
+		validateCmd?: string;
+		mode?: "code" | "llm";
+		maxRounds?: number;
+		plannerModel?: string;
+		reviewerModel?: string;
+		useReviewer?: boolean;
+		worktree?: boolean;
+		taskId?: string;
+	}): Promise<void> {
+		const goal = msg.goal?.trim();
+		if (!goal) {
+			this.emitNotice("warning", "Loop 启动失败：goal 不能为空");
+			return;
+		}
+		const conv = this.conv;
+		if (!conv?.session) return;
+		const sessionId = conv.session.sessionId;
+		const taskId = msg.taskId ?? `loop-${Date.now().toString(36)}`;
+		// 修#1：先有可见记录，再有执行 —— 扩展侧据此在本回合结束时上报 request-failed。
+		markLoopRequestPending(sessionId, taskId, goal);
+		conv.loop = { kind: "pending", taskId, goal, createdAt: new Date().toISOString() };
+		this.flushSnapshot();
+		const lines = [
+			"用 loop_start 启动一个受控运行（不要用普通对话硬跑），然后 loop_plan 写出计划并直接完成工作，最后 loop_done。",
+			`goal: ${goal}`,
+		];
+		if (msg.validateCmd) lines.push(`validateCmd: ${msg.validateCmd}`);
+		if (msg.mode) lines.push(`mode: ${msg.mode}`);
+		if (msg.maxRounds) lines.push(`maxRounds: ${msg.maxRounds}`);
+		if (msg.plannerModel) lines.push(`plannerModel: ${msg.plannerModel}`);
+		if (msg.reviewerModel) lines.push(`reviewerModel: ${msg.reviewerModel}`);
+		if (msg.useReviewer === false) lines.push("useReviewer: false");
+		if (msg.worktree) lines.push("worktree: true");
+		lines.push(`taskId: ${taskId}`);
+		lines.push("不要向用户提问；运行时会自动验证，失败自动进入下一轮。");
+		await this.prompt(lines.join("\n"));
+	}
+
+	/** 停止当前会话的活跃 Loop（与 loop_stop 工具同语义：epoch+1，在途回调失效）。 */
+	async stopLoop(runId?: string): Promise<void> {
+		const conv = this.conv;
+		const target = runId ?? conv?.loop?.runId;
+		if (!target) {
+			this.emitNotice("info", "没有可停止的 Loop（当前会话无活跃 run）");
+			return;
+		}
+		const r = stopRunExternal(target, "user-stop");
+		if (!r.ok) this.emitNotice("warning", `Loop 停止失败：${r.error}`);
+	}
+
+	/** 显式续跑：runId 绑定（sessionId 必须匹配本会话）+ 在途互斥（修#2）。 */
+	async resumeLoop(runId: string): Promise<void> {
+		const conv = this.conv;
+		if (!conv?.session) return;
+		if (this.loopResuming.has(runId)) {
+			this.emitNotice("warning", `Loop ${runId} 已在续跑中，忽略重复请求`);
+			return;
+		}
+		// runId 显式绑定：从磁盘读 run 校验 sessionId 归属（不按 cwd 兜底接管）。
+		const st = loadLoopState(runId);
+		if (!st) {
+			this.emitNotice("warning", `Loop 续跑失败：run 不存在（${runId}）`);
+			return;
+		}
+		if (st.sessionId !== conv.session.sessionId) {
+			this.emitNotice("warning", "Loop 续跑失败：该 run 不属于当前会话（显式绑定，不做 cwd 接管）");
+			return;
+		}
+		if (st.status !== "active") {
+			this.emitNotice("warning", `Loop 续跑失败：run 已是终态（${st.status}）`);
+			return;
+		}
+		this.loopResuming.add(runId);
+		try {
+			conv.loop = {
+				kind: "run",
+				taskId: st.taskId ?? null,
+				goal: st.goal,
+				runId: st.runId,
+				mode: st.mode,
+				stage: st.stage,
+				round: st.round,
+				maxRounds: st.maxRounds,
+				status: st.status,
+				lastVerdict: st.lastVerdict ?? null,
+				createdAt: st.createdAt,
+			};
+			this.flushSnapshot();
+			await this.prompt(
+				`继续执行当前受控运行（runId: ${runId}）：先查看当前状态，从上次中断处继续，` +
+					"完成后调用 loop_done(summary)。不要重复已完成的步骤，不要向用户提问。",
+			);
+		} finally {
+			this.loopResuming.delete(runId);
+		}
 	}
 
 	async startGoalWizard(
