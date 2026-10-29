@@ -659,10 +659,11 @@ try {
     `\t\t\t.mh-code-loop-btn:hover{background:rgba(168,85,247,.22);color:#ddd6fe;}\n` +
     `\t\t\t#mh-loop-dock{position:fixed;z-index:2147483520;display:flex;flex-direction:column;align-items:center;gap:8px;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;}\n` +
     `\t\t\t.mh-loop-row{display:flex;align-items:center;gap:8px;}\n` +
-    `\t\t\t.mh-cluster-btn{height:30px;padding:0 16px;border-radius:999px;background:rgba(168,85,247,.12);border:1px solid rgba(168,85,247,.45);color:#ddd6fe;font-size:12.5px;font-weight:600;cursor:pointer;backdrop-filter:blur(10px);transition:background .15s,border-color .15s,color .15s;}\n` +
-    `\t\t\t.mh-cluster-btn:hover{background:rgba(168,85,247,.22);border-color:rgba(168,85,247,.7);}\n` +
-    `\t\t\t.mh-cluster-btn:active{opacity:.7;}\n` +
-    `\t\t\t.mh-cluster-btn.ok{background:rgba(52,211,153,.10);border-color:rgba(52,211,153,.45);color:#6ee7b7;}\n` +
+    `\t\t\t.inputbox .btn.mh-cluster-inline{position:relative;color:#8b93a1;}\n` +
+    `\t\t\t.inputbox .btn.mh-cluster-inline:hover{color:#c4b5fd;background:rgba(168,85,247,.12);}\n` +
+    `\t\t\t.inputbox .btn.mh-cluster-inline::after{content:"";position:absolute;right:4px;bottom:4px;width:6px;height:6px;border-radius:50%;background:#f87171;box-shadow:0 0 0 2px #15181e;}\n` +
+    `\t\t\t.inputbox .btn.mh-cluster-inline.ok{color:#6ee7b7;}\n` +
+    `\t\t\t.inputbox .btn.mh-cluster-inline.ok::after{background:#34d399;}\n` +
     `\t\t\t#mh-cluster-modal{position:fixed;inset:0;z-index:2147483580;display:flex;align-items:center;justify-content:center;background:rgba(15,17,21,.72);backdrop-filter:blur(3px);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;}\n` +
     `\t\t\t#mh-cluster-modal .kc-card{width:min(620px,92vw);background:#1b1e24;color:#e7e9ee;border:1px solid #333a45;border-radius:14px;padding:22px 24px;box-shadow:0 18px 60px rgba(0,0,0,.5);}\n` +
     `\t\t\t#mh-cluster-modal h2{margin:0 0 6px;font-size:17px;}\n` +
@@ -948,6 +949,21 @@ try {
     `\t\t\t\tsetTimeout(function(){goal.focus();},80);\n` +
     `\t\t\t}\n` +
     `\t\t\t// 自绘 Dock：固定在原生入口条位置上方，避免被 React 重渲染冲掉导致闪烁\n` +
+    `\t\t\t// 连接集群：输入框右下、发送箭头左侧的小按钮（连接状态用角标点表示）\n` +
+    `\t\t\tfunction ensureClusterInline(){\n` +
+    `\t\t\t\ttry{\n` +
+    `\t\t\t\t\tvar send=document.querySelector('.inputbox .btn.send');if(!send)return;\n` +
+    `\t\t\t\t\tvar b=document.getElementById('mh-cluster-inline');\n` +
+    `\t\t\t\t\tif(!b){b=document.createElement('button');b.type='button';b.id='mh-cluster-inline';b.className='btn mh-cluster-inline';\n` +
+    `\t\t\t\t\t\tb.innerHTML='<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2.4"/><circle cx="5" cy="18" r="2.4"/><circle cx="19" cy="18" r="2.4"/><path d="M10.3 7.2 6.6 15.6M13.7 7.2l3.7 8.4M7.4 18h9.2"/></svg>';\n` +
+    `\t\t\t\t\t\tb.addEventListener('click',function(e){e.stopPropagation();openClusterModal();});\n` +
+    `\t\t\t\t\t\tsend.parentNode.insertBefore(b,send);\n` +
+    `\t\t\t\t\t}\n` +
+    `\t\t\t\t\tvar on=!!__mhCluster.connected;b.classList.toggle('ok',on);\n` +
+    `\t\t\t\t\tvar tip=on?'集群已连接 · 点击更新 kubeconfig':(__mhCluster.configured?'kubeconfig 已配置但未连通 · 点击重试':'连接集群：填写 kubeconfig');\n` +
+    `\t\t\t\t\tif(b.title!==tip)b.title=tip;\n` +
+    `\t\t\t\t}catch(e){}\n` +
+    `\t\t\t}\n` +
     `\t\t\t// ---- 连接集群：弹窗填 kubeconfig + 左下角双状态 ----
 ` +
     `\t\t\tfunction getTok(){return new URLSearchParams(location.search).get('token')||'';}\n` +
@@ -991,8 +1007,7 @@ try {
     `\t\t\t\tif(__mhClusterBusy)return;__mhClusterBusy=true;\n` +
     `\t\t\t\tfetch(withTok('/api/mini-harness/cluster'),{headers:authHdr()}).then(function(r){return r.ok?r.json():null;}).then(function(j){\n` +
     `\t\t\t\t\tif(j)__mhCluster=j;\n` +
-    `\t\t\t\t\tvar btn=document.getElementById('mh-cluster-btn');\n` +
-    `\t\t\t\t\tif(btn){var on=!!__mhCluster.connected;var t=on?'集群已连接':'连接集群';if(btn.textContent!==t)btn.textContent=t;btn.classList.toggle('ok',on);}\n` +
+    `\t\t\t\t\tensureClusterInline();\n` +
     `\t\t\t\t\trenderClusterStatus();\n` +
     `\t\t\t\t}).catch(function(){}).then(function(){__mhClusterBusy=false;});\n` +
     `\t\t\t}\n` +
@@ -1005,10 +1020,10 @@ try {
     `\t\t\t\t\tvar native=row.querySelector('.goalbar-hint');if(native&&native.style.opacity!=='0')native.style.opacity='0';\n` +
     `\t\t\t\t\tvar d=document.getElementById('mh-loop-dock');\n` +
     `\t\t\t\t\tif(!d){d=document.createElement('div');d.id='mh-loop-dock';\n` +
-    `\t\t\t\t\t\td.innerHTML='<button type="button" class="mh-cluster-btn" id="mh-cluster-btn">连接集群</button><div class="mh-loop-row"><button type="button" class="mh-loop-card llm">LLM loop</button><button type="button" class="mh-loop-card code">代码 loop</button></div>';\n` +
+    `\t\t\t\t\t\td.innerHTML='<div class="mh-loop-row"><button type="button" class="mh-loop-card llm">LLM loop</button><button type="button" class="mh-loop-card code">代码 loop</button></div>';\n` +
     `\t\t\t\t\t\td.querySelector('.llm').addEventListener('click',function(){var h=document.querySelector('.goalbar-hint');if(h)h.click();});\n` +
     `\t\t\t\t\t\td.querySelector('.code').addEventListener('click',function(e){e.stopPropagation();openModal();});\n` +
-    `\t\t\t\t\t\td.querySelector('#mh-cluster-btn').addEventListener('click',function(e){e.stopPropagation();openClusterModal();});\n` +
+    `\t\t\t\t\t\t\n` +
     `\t\t\t\t\t\tdocument.body.appendChild(d);}\n` +
     `\t\t\t\t\tvar expanded=false;var r=row.getBoundingClientRect();\n` +
     `\t\t\t\t\tif(expanded||r.width<60){d.style.display='none';return;}\n` +
@@ -1017,7 +1032,7 @@ try {
     `\t\t\t\t\tvar bottom=Math.round(window.innerHeight-cr.top+7);\n` +
     `\t\t\t\t\tvar w=d.offsetWidth;var left=Math.round(cr.left+cr.width/2-w/2);\n` +
     `\t\t\t\t\tif(d.__b!==bottom||d.__l!==left){d.__b=bottom;d.__l=left;d.style.bottom=bottom+'px';d.style.left=left+'px';}\n` +
-    `\t\t\t\t\tvar cb=document.getElementById('mh-cluster-btn');if(cb){var onC=!!__mhCluster.connected;var tc=onC?'集群已连接':'连接集群';if(cb.textContent!==tc){cb.textContent=tc;cb.classList.toggle('ok',onC);}}\n` +
+    `\t\t\t\t\tensureClusterInline();\n` +
     `\t\t\t\t\trenderClusterStatus();\n` +
     `\t\t\t\t}catch(e){}\n` +
     `\t\t\t}\n` +
