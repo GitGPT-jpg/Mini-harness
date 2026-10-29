@@ -1319,3 +1319,23 @@ export function createLoopExtension() {
 		});
 	};
 }
+
+// ---------- 服务端停止入口（UI「停止」按钮用；与 loop_stop 工具同一语义） ----------
+
+/**
+ * 服务端停止指定 run：status=stopped、epoch+1（在途/迟到回调全部失效）、落盘。
+ * 与扩展内 loop_stop 工具同语义；saveState 会自动上报 run-state 事件，
+ * 服务层据此刷新快照。返回 ok=false 附原因（run 不存在/已终态）。
+ */
+export function stopRunExternal(runId: string, reason = "user-stop"): { ok: boolean; error?: string } {
+	const st = loadState(runId);
+	if (!st) return { ok: false, error: `run 不存在：${runId}` };
+	if (st.status !== "active") return { ok: false, error: `run 已是终态：${st.status}` };
+	st.status = "stopped";
+	st.stage = "stopped";
+	st.stopReason = reason;
+	st.epoch += 1;
+	saveState(st);
+	journal(st, "stop", { source: "server", reason, epoch: st.epoch });
+	return { ok: true };
+}

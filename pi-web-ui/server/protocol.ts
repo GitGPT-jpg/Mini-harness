@@ -296,6 +296,14 @@ export interface UiState {
 	 */
 	plan?: PlanState | null;
 	/**
+	 * 当前会话的 mini-harness Loop 状态（受控代码/LLM Loop 运行时，server/loop/）。
+	 *  - kind="pending"：启动提示词已发出、run 未创建（先有可见记录再有执行）；
+	 *  - kind="run"：扩展已上报 run（stage/round/status 等实时刷新，事件驱动）；
+	 *  - kind="request-failed"：启动请求失败（模型未调 loop_start 等，带 reason）。
+	 *  null/缺省 = 该会话没有进行中的 Loop。createdAt 起 UI 可算耗时。
+	 */
+	loop?: LoopUiState | null;
+	/**
 	 * 当前会话是否处于计划模式（只规划不实施）。会话级开关，随快照下发；
 	 * 缺省 = false。会话无内容时恒为 false（新建对话不带过来）。
 	 */
@@ -1038,6 +1046,29 @@ export type ClientMessage =
 			/** 执行者模型偏好（"provider/id"；空 = 跟随），全局记忆。 */
 			execModel?: string;
 	  }
+	// -- mini-harness Loop（受控代码/LLM Loop，server/loop/）------------------
+	/** 启动受控 Loop：服务端先落「挂起任务记录」（快照 loop.kind="pending"，先有
+	 *  记录再有执行），再把启动提示词作为用户消息发进当前会话，模型据此调
+	 *  loop_start。本回合结束仍未创建 run → 快照 loop.kind="request-failed"
+	 *  带明确原因（不静默）。validator 缺省自动找 workspace/validate.py。 */
+	| {
+			type: "loop_start_request";
+			goal: string;
+			validateCmd?: string;
+			mode?: "code" | "llm";
+			maxRounds?: number;
+			plannerModel?: string;
+			reviewerModel?: string;
+			useReviewer?: boolean;
+			worktree?: boolean;
+			taskId?: string;
+	  }
+	/** 停止当前会话的活跃 Loop（不传 runId = 快照 loop 里的当前 run）。停止
+	 *  即递增 epoch：在途/迟到回调全部失效，不得把 stopped 翻成 done。 */
+	| { type: "loop_stop"; runId?: string }
+	/** 显式续跑：按 runId 绑定（run 的 sessionId 必须匹配本会话，否则拒绝——
+	 *  不做 cwd 兜底接管）。同一 run 的在途续跑会被互斥拒绝（不重复执行）。 */
+	| { type: "loop_resume"; runId: string }
 	// -- settings (system prompt / skills / extensions / presets) ------------
 	/** Request the current settings state (also pushed automatically on attach). */
 	| { type: "get_settings" }
@@ -1894,6 +1925,26 @@ export interface PlanState {
 	steps: PlanStep[];
 	activeStepId?: string | null;
 	updatedAt?: number;
+}
+
+/** mini-harness Loop 的会话级状态（server/loop/ 运行时的对外视图）。 */
+export interface LoopUiState {
+	/** pending=启动提示词已发出、run 未创建；run=扩展已上报；request-failed=启动请求失败。 */
+	kind: "pending" | "run" | "request-failed";
+	taskId: string | null;
+	goal: string;
+	/** request-failed 的失败原因。 */
+	reason?: string;
+	runId?: string;
+	mode?: "code" | "llm";
+	stage?: string;
+	round?: number;
+	maxRounds?: number;
+	status?: "active" | "done" | "stopped";
+	stopReason?: string;
+	lastVerdict?: string | null;
+	/** run 创建时间（ISO）；UI 据此算耗时。pending 时为请求发出时间。 */
+	createdAt: string;
 }
 
 /** A background server the agent left running (listening-port diff around a
