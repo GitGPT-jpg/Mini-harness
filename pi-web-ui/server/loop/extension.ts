@@ -498,9 +498,14 @@ async function runReview(ctx: LoopCtx, st: LoopState, v: { code?: number | null;
 
 // ---------- 判定处理 ----------
 
-/** 【修复②】await 前记录代次，await 后核对：停止过的 run 不再被迟到回调推进。 */
-function stillCurrent(st: LoopState, epoch: number) {
-	return st.status === "active" && st.epoch === epoch;
+/**
+ * 【修复②】await 前记录代次，await 后核对：停止过的 run 不再被迟到回调推进。
+ * 必须重读磁盘：stop 走的是另一次 loadState（不同对象引用），内存里的 st
+ * 不会随之更新——只比内存对象会误判「仍然有效」，把 stopped 覆盖成 done。
+ */
+function stillCurrent(runId: string, epoch: number) {
+	const fresh = loadState(runId);
+	return !!fresh && fresh.status === "active" && fresh.epoch === epoch;
 }
 
 function advanceOrStop(
@@ -546,7 +551,7 @@ async function handleVerdict(
 	if (v.pass) {
 		const epoch = st.epoch;
 		const review = await runReview(ctx, st, v, pi);
-		if (!stillCurrent(st, epoch)) {
+		if (!stillCurrent(st.runId, epoch)) {
 			journal(st, "late-callback-dropped", { at: "handleVerdict/review", epoch });
 			return;
 		}
@@ -592,7 +597,7 @@ async function handleVerdict(
 						timeout: 60000,
 					});
 				}
-				if (!stillCurrent(st, epoch)) {
+				if (!stillCurrent(st.runId, epoch)) {
 					journal(st, "late-callback-dropped", { at: "handleVerdict/worktree", epoch });
 					return;
 				}
@@ -633,7 +638,7 @@ async function handleLlmVerdict(pi: ExtensionAPI, ctx: LoopCtx, st: LoopState) {
 	};
 	const epoch = st.epoch;
 	const review = await runReview(ctx, st, syntheticV, pi);
-	if (!stillCurrent(st, epoch)) {
+	if (!stillCurrent(st.runId, epoch)) {
 		journal(st, "late-callback-dropped", { at: "handleLlmVerdict/review", epoch });
 		return;
 	}
@@ -1217,7 +1222,7 @@ export function createLoopExtension() {
 						};
 					} else {
 						v = await runValidation(pi, st);
-						if (!stillCurrent(st, epoch)) {
+						if (!stillCurrent(st.runId, epoch)) {
 							journal(st, "late-callback-dropped", { at: "agent_end/runValidation", epoch });
 							return;
 						}
