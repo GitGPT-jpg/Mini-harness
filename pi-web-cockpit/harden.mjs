@@ -224,12 +224,38 @@ try {
     `      lastVerdict: st.lastVerdict,\n` +
     `      goal: String(st.goal || "").slice(0, 200),\n` +
     `      project: ws ? pathM.basename(ws) : "",\n` +
+    `      models: { main: st.mainModel?.id || null, planner: st.plannerModel?.id || null, reviewer: st.reviewerModel?.id || null },\n` +
     `      updatedAt: st.updatedAt || null,\n` +
     `    });\n` +
     `  }\n` +
     `  out.sort((a, b) => ((b.status === "active") - (a.status === "active")) || ((Date.parse(b.updatedAt || 0) || 0) - (Date.parse(a.updatedAt || 0) || 0)));\n` +
     `  return out.slice(0, 8);\n` +
     `}\n` +
+    `// 代码 loop 表单的规划/评审模型下拉：只返回 provider/id/family，不含 baseUrl/密钥。家族规则与 mini-harness-runtime familyOf 一致。\n` +
+    `function __mhFamilyOf(id) {\n` +
+    `  const s = String(id || "").toLowerCase();\n` +
+    `  const rules = [[/^(gpt|o[1-9])/, "openai"], [/claude|opus|sonnet|haiku/, "anthropic"], [/gemini/, "google"], [/glm/, "zhipu"], [/kimi|moonshot/, "moonshot"], [/deepseek/, "deepseek"], [/grok/, "xai"], [/minimax|abab/, "minimax"], [/qwen|tongyi/, "alibaba"], [/llama/, "meta"], [/mistral|mixtral/, "mistral"], [/ernie/, "baidu"], [/doubao/, "bytedance"]];\n` +
+    `  for (const [re, fam] of rules) if (re.test(s)) return fam;\n` +
+    `  return "other";\n` +
+    `}\n` +
+    `async function __mhCollectModels() {\n` +
+    `  const fsM = await import("node:fs");\n` +
+    `  const pathM = await import("node:path");\n` +
+    `  const osM = await import("node:os");\n` +
+    `  let cfg;\n` +
+    `  try { cfg = JSON.parse(fsM.readFileSync(pathM.join(osM.homedir(), ".pi", "agent", "models.json"), "utf8")); } catch { return []; }\n` +
+    `  const out = [];\n` +
+    `  for (const [provider, p] of Object.entries(cfg?.providers || {})) {\n` +
+    `    for (const m of (Array.isArray(p?.models) ? p.models : [])) {\n` +
+    `      if (m && m.id) out.push({ provider, id: String(m.id), family: __mhFamilyOf(m.id) });\n` +
+    `    }\n` +
+    `  }\n` +
+    `  return out;\n` +
+    `}\n` +
+    `app.get("/api/mini-harness/models", async (req, res) => {\n` +
+    `  if (!tokenOk(req)) { res.status(403).end("unauthorized"); return; }\n` +
+    `  try { res.json({ models: await __mhCollectModels() }); } catch (e) { res.status(500).end(String(e)); }\n` +
+    `});\n` +
     `app.get("/api/mini-harness/runs", async (req, res) => {\n` +
     `  if (!tokenOk(req)) { res.status(403).end("unauthorized"); return; }\n` +
     `  try { res.json({ runs: await __mhCollectRuns() }); } catch (e) { res.status(500).end(String(e)); }\n` +
@@ -250,7 +276,7 @@ try {
       const updated = idx2.slice(0, markIdx) + route + idx2.slice(anchorIdx);
       if (updated !== idx2) {
         fs.writeFileSync(idxFile, updated);
-        log("已更新运行状态接口（多 loop 列表）");
+        log("已更新运行状态接口（多 loop 列表 + 模型列表）");
       }
     }
   } else log("WARN: 未找到 attachment 路由锚点（接口未注入）");
@@ -510,7 +536,11 @@ try {
     `\t\t\t#mh-code-loop-modal .cl-env-note{font-size:11.5px;color:#8b93a1;background:#11141a;border:1px solid #262c35;border-radius:8px;padding:7px 10px;margin-bottom:12px;}\n` +
     `\t\t\t#mh-code-loop-modal .cl-env-note code{color:#8fd0ff;}\n` +
     `\t\t\t#mh-code-loop-modal label{display:block;font-size:12px;color:#9aa3b2;margin:10px 0 4px;}\n` +
-    `\t\t\t#mh-code-loop-modal textarea,#mh-code-loop-modal input{width:100%;box-sizing:border-box;background:#11141a;border:1px solid #2b313b;border-radius:7px;color:#e7e9ee;padding:8px 10px;font-size:13px;font-family:inherit;}\n` +
+    `\t\t\t#mh-code-loop-modal textarea,#mh-code-loop-modal input,#mh-code-loop-modal select{width:100%;box-sizing:border-box;background:#11141a;border:1px solid #2b313b;border-radius:7px;color:#e7e9ee;padding:8px 10px;font-size:13px;font-family:inherit;}\n` +
+    `\t\t\t#mh-code-loop-modal .cl-models{display:flex;gap:10px;}\n` +
+    `\t\t\t#mh-code-loop-modal .cl-models>div{flex:1;min-width:0;}\n` +
+    `\t\t\t#mh-code-loop-modal .cl-model-note{font-size:11px;color:#7f8897;margin-top:4px;line-height:1.5;}\n` +
+    `\t\t\t#mh-code-loop-modal .cl-model-note.bad{color:#f87171;}\n` +
     `\t\t\t#mh-code-loop-modal textarea{min-height:70px;resize:vertical;}\n` +
     `\t\t\t#mh-code-loop-modal .cl-row{display:flex;gap:10px;justify-content:flex-end;margin-top:18px;}\n` +
     `\t\t\t#mh-code-loop-modal button{font-size:13px;border-radius:8px;padding:8px 16px;cursor:pointer;border:1px solid transparent;}\n` +
@@ -591,6 +621,7 @@ try {
     `\t\t\t\tp.innerHTML='<div class="sc-title"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:'+(ok?'#34d399':stop?'#f87171':'#a855f7')+'"></span>'+(ok?'代码 loop 已完成':stop?'代码 loop 已停止':'代码 loop 运行中')+'</div>'+\n` +
     `\t\t\t\t\t'<div class="sc-line">项目：'+escapeHtml(st.project||'未知')+'</div>'+\n` +
     `\t\t\t\t\t'<div class="sc-line">第 '+st.round+'/'+st.maxRounds+' 轮 · '+escapeHtml(String(st.stage||''))+' · 校验 '+v+'</div>'+\n` +
+    `\t\t\t\t\t(st.models?('<div class="sc-line">执行 '+escapeHtml(st.models.main||'—')+' · 规划 '+escapeHtml(st.models.planner||'—')+' · 评审 '+escapeHtml(st.models.reviewer||'不评审')+'</div>'):'')+\n` +
     `\t\t\t\t\t(st.goal?('<div class="sc-line" style="color:#6b7280">'+escapeHtml(st.goal)+'</div>'):'');\n` +
     `\t\t\t}\n` +
     `\t\t\tfunction togglePop(runId){\n` +
@@ -661,6 +692,9 @@ try {
     `\t\t\t\t\t'</div>'+\n` +
     `\t\t\t\t\t'<label>你想完成什么？</label><textarea id="cl-goal" placeholder="例如：用 harness 跑 perf-012g gate，生成 db_gap_gate.json，gate_state 为 ESTIMATE_READY"></textarea>'+\n` +
     `\t\t\t\t\t'<label>怎么算完成？（可选，写你能检查的条件）</label><textarea id="cl-criteria" style="min-height:54px" placeholder="例如：文件存在且 gate_state=ESTIMATE_READY；或命令 python3 check.py 返回 0"></textarea>'+\n` +
+    `\t\t\t\t\t'<div class="cl-models"><div><label>规划模型</label><select id="cl-planner"><option value="">自动（跨厂商）</option></select></div>'+\n` +
+    `\t\t\t\t\t'<div><label>评审模型</label><select id="cl-reviewer"><option value="">自动（跨厂商）</option><option value="__none__">不评审（只看检查命令）</option></select></div></div>'+\n` +
+    `\t\t\t\t\t'<div class="cl-model-note" id="cl-model-note">执行模型＝对话框当前所选模型；规划、评审需与执行模型及彼此属于不同厂商。</div>'+\n` +
     `\t\t\t\t\t'<details class="cl-adv"><summary>高级选项</summary>'+\n` +
     `\t\t\t\t\t'<label>检查命令（留空=自动准备）</label><input id="cl-cmd" placeholder="留空则由系统根据目标准备，例如 python3 validate.py" />'+\n` +
     `\t\t\t\t\t'<label>产物目录（可选，逗号分隔）</label><input id="cl-roots" placeholder="/external/runs/xxx" />'+\n` +
@@ -669,7 +703,18 @@ try {
     `\t\t\t\t\t'<div class="cl-row"><button class="cl-cancel">取消</button><button class="cl-start" disabled>启动代码 loop</button></div></div>';\n` +
     `\t\t\t\tdocument.body.appendChild(o);\n` +
     `\t\t\t\tvar goal=o.querySelector('#cl-goal'),start=o.querySelector('.cl-start');\n` +
-    `\t\t\t\tfunction sync(){start.disabled=!(goal.value||'').trim();}\n` +
+    `\t\t\t\tvar selP=o.querySelector('#cl-planner'),selR=o.querySelector('#cl-reviewer'),note=o.querySelector('#cl-model-note'),noteDefault=note.textContent;\n` +
+    `\t\t\t\tfunction famOf(sel){var op=sel.options[sel.selectedIndex];return op?(op.getAttribute('data-family')||''):'';}\n` +
+    `\t\t\t\tfunction modelConflict(){var a=famOf(selP),b=famOf(selR);return !!(a&&b&&a===b);}\n` +
+    `\t\t\t\tfunction sync(){var c=modelConflict();note.textContent=c?('规划和评审都是 '+famOf(selP)+' 家的模型，请换一个不同厂商的'):noteDefault;note.classList.toggle('bad',c);start.disabled=!(goal.value||'').trim()||c;}\n` +
+    `\t\t\t\tselP.addEventListener('change',sync);selR.addEventListener('change',sync);\n` +
+    `\t\t\t\t(function(){var tok=new URLSearchParams(location.search).get('token')||'';\n` +
+    `\t\t\t\t\tfetch('/api/mini-harness/models'+(tok?('?token='+encodeURIComponent(tok)):''),{headers:tok?{'x-pi-token':tok}:{}}).then(function(r){return r.ok?r.json():null;}).then(function(j){\n` +
+    `\t\t\t\t\t\tvar list=(j&&Array.isArray(j.models))?j.models:[];\n` +
+    `\t\t\t\t\t\tlist.forEach(function(m){[selP,selR].forEach(function(sel){var op=document.createElement('option');op.value=m.provider+'/'+m.id;op.textContent=m.id+'（'+m.family+'）';op.setAttribute('data-family',m.family);sel.appendChild(op);});});\n` +
+    `\t\t\t\t\t\tif(!list.length){note.textContent='未读到模型列表，规划/评审将自动选择。';}\n` +
+    `\t\t\t\t\t}).catch(function(){note.textContent='未读到模型列表，规划/评审将自动选择。';});\n` +
+    `\t\t\t\t})();\n` +
     `\t\t\t\tgoal.addEventListener('input',sync);\n` +
     `\t\t\t\to.querySelectorAll('.cl-preset').forEach(function(b){b.addEventListener('click',function(){o.querySelector('#cl-goal').value=b.getAttribute('data-goal')||'';o.querySelector('#cl-criteria').value=b.getAttribute('data-crit')||'';sync();goal.focus();});});\n` +
     `\t\t\t\to.querySelector('.cl-cancel').addEventListener('click',function(){o.remove();});\n` +
@@ -686,6 +731,10 @@ try {
     `\t\t\t\t\tif(cmd){p+='\\nvalidateCmd='+JSON.stringify(cmd)+'（直接使用这个检查命令）';}\n` +
     `\t\t\t\t\telse{p+='\\n验收方式：如果当前工作区没有真正可用的 validate.py，请先根据目标和验收标准写一个 validate.py（必须真正检查，不能恒通过），然后用 validateCmd="python3 validate.py" 启动。';}\n` +
     `\t\t\t\t\tif(roots.length)p+='\\nartifactRoots='+JSON.stringify(roots);\n` +
+    `\t\t\t\t\tvar pv=selP.value,rv=selR.value;\n` +
+    `\t\t\t\t\tif(pv)p+='\\nplannerModel='+JSON.stringify(pv);\n` +
+    `\t\t\t\t\tif(rv==='__none__')p+='\\nuseReviewer=false';else if(rv)p+='\\nreviewerModel='+JSON.stringify(rv);\n` +
+    `\t\t\t\t\tif(pv||rv)p+='\\n若 loop_start 报模型家族冲突或无法解析模型，直接把报错原文告诉用户并停止，不要自行更换模型。';\n` +
     `\t\t\t\t\tp+='\\nmaxRounds='+rounds+'。然后 loop_plan 并直接完成工作，完成时调用 loop_done。不要向用户提问。';\n` +
     `\t\t\t\t\tstart.disabled=true;start.classList.add('loading');start.textContent='启动中…';\n` +
     `\t\t\t\t\tvar ok=sendPrompt(p);\n` +
