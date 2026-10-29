@@ -550,6 +550,21 @@ async function handleVerdict(pi, ctx, st, v) {
       advanceOrStop(pi, st, v, `reviewer 否决：\n${review.reasons.join('\n')}`, 'reviewer-block');
       return;
     }
+    if (review.verdict === 'error') {
+      // reviewer 模型不可用（404/过载/输出非法）——这是评审层故障，不是实质性否决。
+      // validator 才是硬门禁：validator 已通过即视为达成，降级为 validator-only，但要显式告警。
+      st.stage = 'done';
+      st.status = 'done';
+      saveState(st);
+      journal(st, 'reviewer-degraded', { code: v.code, reasons: review.reasons });
+      notify(
+        ctx,
+        `⚠️ mini-harness：validator 通过，但 reviewer 不可用（第 ${st.round} 轮），` +
+          `按 validator-only 判定完成。${(review.reasons || []).join('; ')}`,
+        'warning',
+      );
+      return;
+    }
     st.stage = 'done';
     st.status = 'done';
     saveState(st);
@@ -596,6 +611,61 @@ async function handleVerdict(pi, ctx, st, v) {
     return;
   }
   advanceOrStop(pi, st, v, '', 'validate-fail');
+}
+
+async function handleLlmVerdict(pi, ctx, st) {
+  // LLM loop：无代码 validator，reviewer 是唯一判定（pass=完成，block=迭代，error=停止）。
+  const syntheticV = {
+    pass: true,
+    code: null,
+    output: '（LLM loop：无代码 validator，由 reviewer 判定）',
+    noValidator: false,
+    evidence: null,
+  };
+  const review = await runReview(ctx, st, syntheticV, pi);
+  st.lastReview = review;
+  st.lastDiff = review.diff || '';
+  st.lastVerdict = review.verdict === 'pass' ? 'pass' : review.verdict === 'block' ? 'fail' : 'error';
+  st.lastCode = null;
+  saveState(st);
+  journal(st, 'llm-review', { verdict: review.verdict, reasons: review.reasons });
+  writeRoundReview(st, syntheticV, review, review.diff);
+  if (review.verdict === 'pass') {
+    st.stage = 'done';
+    st.status = 'done';
+    saveState(st);
+    journal(st, 'validate-pass', { mode: 'llm', review: review.verdict });
+    notify(ctx, '✅ mini-harness（LLM loop）：reviewer 判定达成。', 'info');
+  } else if (review.verdict === 'block') {
+    if (st.round < st.maxRounds) {
+      const failedRound = st.round;
+      st.round += 1;
+      st.stage = 'run';
+      st.validatedRound = 0;
+      saveState(st);
+      journal(st, 'llm-block', { reasons: review.reasons, failedRound, nextRound: st.round });
+      pi.sendUserMessage(
+        `【mini-harness · LLM loop 第 ${st.round} 轮】reviewer 否决：\n${review.reasons.join('\n')}\n` +
+          `请修复后再次调用 loop_done(summary)。目标：${st.goal}。不要向用户提问。`,
+        { deliverAs: 'followUp' },
+      );
+    } else {
+      st.stage = 'stopped';
+      st.status = 'stopped';
+      st.stopReason = 'max-rounds';
+      saveState(st);
+      journal(st, 'llm-max-rounds');
+      notify(ctx, `⚠️ mini-harness（LLM loop）：已达最大轮数 ${st.maxRounds}，停止。`, 'warning');
+    }
+  } else {
+    // reviewer 故障，且无 validator 可降级 → 停止（不做无判定完成）
+    st.stage = 'stopped';
+    st.status = 'stopped';
+    st.stopReason = 'reviewer-error';
+    saveState(st);
+    journal(st, 'reviewer-error', { mode: 'llm', reasons: review.reasons });
+    notify(ctx, '⚠️ mini-harness（LLM loop）：reviewer 不可用且无 validator 可降级，已停止。', 'warning');
+  }
 }
 
 // ---------- Review 报告 / 时间线 ----------
@@ -719,6 +789,9 @@ export default function miniHarnessRuntime(pi) {
       worktree: Type.Optional(
         Type.Boolean({ description: '若 workspace 是 git 仓库，则在新 git worktree 中执行（隔离并行任务，验证通过后提交到独立分支）' }),
       ),
+      mode: Type.Optional(
+        Type.String({ description: 'loop 类型：code（默认，validator 门禁）或 llm（无代码 validator，纯 reviewer 判定完成/迭代）' }),
+      ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       // 家族约束：planner / reviewer 必须与主模型、彼此都不同家族
@@ -824,6 +897,7 @@ export default function miniHarnessRuntime(pi) {
         validateCmd: params.validateCmd || null,
         maxRounds,
         auto: params.auto !== false,
+        mode: params.mode === 'llm' ? 'llm' : 'code',
         round: 1,
         stage: 'intake',
         status: 'active',
@@ -988,6 +1062,13 @@ export default function miniHarnessRuntime(pi) {
       if (!st) {
         return { content: [{ type: 'text', text: '当前会话没有活跃运行。' }], details: {} };
       }
+      if (st.mode === 'llm') {
+        await handleLlmVerdict(pi, ctx, st);
+        return {
+          content: [{ type: 'text', text: `LLM loop 判定完成（reviewer ${st.lastReview?.verdict ?? 'n/a'}）。` }],
+          details: { runId: st.runId, mode: 'llm', review: st.lastReview?.verdict },
+        };
+      }
       const v = await runValidation(pi, st);
       st.validatedRound = st.round;
       st.lastVerdict = v.pass ? 'pass' : 'fail';
@@ -1118,25 +1199,29 @@ export default function miniHarnessRuntime(pi) {
     }
     busy.add(st.runId);
     try {
-      let v;
-      if (st.validatedRound === st.round && st.lastVerdict) {
-        // 模型本轮已手动 loop_validate：复用结果，不再重复执行
-        v = {
-          pass: st.lastVerdict === 'pass',
-          code: st.lastCode,
-          output: st.lastEvidence || '',
-          noValidator: false,
-          evidence: null,
-        };
+      if (st.mode === 'llm') {
+        await handleLlmVerdict(pi, ctx, st);
       } else {
-        v = await runValidation(pi, st);
-        st.validatedRound = st.round;
-        st.lastVerdict = v.pass ? 'pass' : 'fail';
-        st.lastCode = v.code;
-        st.lastEvidence = v.output;
-        st.history.push({ round: st.round, verdict: st.lastVerdict, code: v.code, at: now(), evidence: v.evidence });
+        let v;
+        if (st.validatedRound === st.round && st.lastVerdict) {
+          // 模型本轮已手动 loop_validate：复用结果，不再重复执行
+          v = {
+            pass: st.lastVerdict === 'pass',
+            code: st.lastCode,
+            output: st.lastEvidence || '',
+            noValidator: false,
+            evidence: null,
+          };
+        } else {
+          v = await runValidation(pi, st);
+          st.validatedRound = st.round;
+          st.lastVerdict = v.pass ? 'pass' : 'fail';
+          st.lastCode = v.code;
+          st.lastEvidence = v.output;
+          st.history.push({ round: st.round, verdict: st.lastVerdict, code: v.code, at: now(), evidence: v.evidence });
+        }
+        await handleVerdict(pi, ctx, st, v);
       }
-      await handleVerdict(pi, ctx, st, v);
     } catch (e) {
       journal(st, 'runtime-error', { error: String(e?.message || e) });
     } finally {

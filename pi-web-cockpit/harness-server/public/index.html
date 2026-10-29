@@ -1,0 +1,599 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>训推引擎组 Harness</title>
+<style>
+  :root {
+    --bg: #0f0f14;
+    --panel: #18181f;
+    --panel-2: #1f1f28;
+    --line: #2a2a36;
+    --text: #e7e7ef;
+    --muted: #9a9ab0;
+    --accent: #a855f7;
+    --ok: #34d399;
+    --warn: #fbbf24;
+    --bad: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.55 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 20px; border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; background: rgba(15,15,20,.92); backdrop-filter: blur(6px); z-index: 5;
+  }
+  .brand { font-size: 16px; font-weight: 700; letter-spacing: .5px; }
+  .brand em { color: var(--accent); font-style: normal; }
+  .spacer { flex: 1; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); display: inline-block; }
+  .dot.off { background: var(--bad); }
+  button {
+    background: var(--accent); color: #fff; border: 0; border-radius: 8px;
+    padding: 8px 14px; font-size: 13px; cursor: pointer; font-weight: 600;
+  }
+  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  main { max-width: 900px; margin: 0 auto; padding: 20px; }
+  .empty { color: var(--muted); text-align: center; padding: 60px 0; }
+  .run {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px 16px; margin-bottom: 10px; cursor: pointer; transition: border-color .15s;
+  }
+  .run:hover { border-color: var(--accent); }
+  .run-top { display: flex; align-items: center; gap: 10px; }
+  .run-goal { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pill {
+    font-size: 12px; padding: 3px 9px; border-radius: 999px; white-space: nowrap;
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--muted);
+  }
+  .pill.active { color: var(--accent); border-color: var(--accent); }
+  .pill.pass { color: var(--ok); border-color: var(--ok); }
+  .pill.fail { color: var(--bad); border-color: var(--bad); }
+  .pill.warn { color: var(--warn); border-color: var(--warn); }
+  .run-meta { color: var(--muted); font-size: 12px; margin-top: 8px; display: flex; gap: 14px; flex-wrap: wrap; }
+  .overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none;
+    align-items: flex-start; justify-content: center; padding: 40px 16px; z-index: 10;
+  }
+  .overlay.open { display: flex; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    width: 100%; max-width: 560px; padding: 20px; max-height: 86vh; overflow: auto;
+  }
+  .card h2 { margin: 0 0 4px; font-size: 17px; }
+  label { display: block; margin: 14px 0 6px; color: var(--muted); font-size: 12px; }
+  input, textarea, select {
+    width: 100%; background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; padding: 9px 11px; font-size: 13px; font-family: inherit;
+  }
+  textarea { resize: vertical; min-height: 70px; }
+  .row { display: flex; gap: 12px; }
+  .row > * { flex: 1; }
+  .actions { display: flex; gap: 10px; margin-top: 20px; justify-content: flex-end; }
+  .note { color: var(--muted); font-size: 12px; }
+  .note.bad { color: var(--bad); }
+  pre {
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px; overflow: auto; font-size: 12px; white-space: pre-wrap; word-break: break-all;
+  }
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 8px 12px; margin: 10px 0; font-size: 13px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; overflow: hidden; text-overflow: ellipsis; }
+  nav#tabs { max-width: 900px; margin: 0 auto; padding: 0 20px; display: flex; gap: 8px; }
+  .tab { background: transparent; border: 1px solid var(--line); color: var(--muted); padding: 7px 18px; border-radius: 9px 9px 0 0; border-bottom: 0; font-weight: 600; }
+  .tab.active { color: var(--accent); border-color: var(--accent); }
+  .chat-tpl { display: flex; gap: 8px; margin-bottom: 12px; }
+  .chat-tpl select { flex: 1; }
+  #chatMsgs { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; min-height: 200px; }
+  .msg { max-width: 82%; padding: 9px 13px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; font-size: 13px; }
+  .msg.user { align-self: flex-end; background: var(--accent); color: #fff; }
+  .msg.assistant { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); }
+  .chat-bar { display: flex; gap: 8px; align-items: flex-end; }
+  .chat-bar textarea { flex: 1; min-height: 44px; max-height: 160px; }
+  .typing { color: var(--muted); font-size: 12px; padding: 4px 2px; }
+  .term-meta { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; }
+  .term-meta span { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .term-meta input { flex: 1; font-family: ui-monospace, monospace; }
+  #termOut { background: #0a0a0f; border: 1px solid var(--line); border-radius: 8px; padding: 12px; font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace; min-height: 320px; max-height: 60vh; overflow: auto; white-space: pre-wrap; word-break: break-all; margin-bottom: 10px; }
+  .term-cmd { color: var(--accent); }
+  .term-err { color: var(--bad); }
+  .term-bar { display: flex; gap: 8px; align-items: center; }
+  .term-prompt { color: var(--ok); font-weight: 700; font-family: ui-monospace, monospace; }
+  .term-bar input { flex: 1; font-family: ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<header>
+  <span class="brand"><em>训推引擎组</em> Harness</span>
+  <span id="conn" class="dot off" title="服务连接状态"></span>
+  <span class="spacer"></span>
+  <button id="settings" class="ghost">设置</button>
+  <button id="refresh" class="ghost">刷新</button>
+  <button id="newTask">＋ 新任务</button>
+</header>
+
+<nav id="tabs">
+  <button class="tab active" data-tab="tasks">任务</button>
+  <button class="tab" data-tab="chat">对话</button>
+  <button class="tab" data-tab="term">终端</button>
+</nav>
+
+<main>
+  <div id="viewTasks">
+    <div id="list"><div class="empty">加载中…</div></div>
+  </div>
+  <div id="viewChat" style="display:none">
+    <div class="chat-tpl">
+      <select id="tplSel"><option value="">📄 提示词模板…</option></select>
+      <button id="tplUse" class="ghost">填入</button>
+      <button id="chatNew" class="ghost">新对话</button>
+    </div>
+    <div id="chatMsgs"></div>
+    <div class="chat-bar">
+      <textarea id="chatInput" placeholder="给 pi 发消息…（Enter 发送，Shift+Enter 换行）"></textarea>
+      <button id="chatSend">发送</button>
+    </div>
+  </div>
+  <div id="viewTerm" style="display:none">
+    <div class="term-meta">
+      <span id="termCwd"></span>
+      <input id="termCwdInput" placeholder="工作目录（默认服务启动目录）" />
+    </div>
+    <div id="termOut"></div>
+    <div class="term-bar">
+      <span class="term-prompt">$</span>
+      <input id="termInput" placeholder="输入命令，Enter 执行" autocomplete="off" />
+      <button id="termRun">执行</button>
+    </div>
+  </div>
+</main>
+
+<!-- 新任务 -->
+<div id="newOverlay" class="overlay">
+  <div class="card">
+    <h2>新任务</h2>
+    <div class="note">填“做什么”和“怎么算完成”；模型与轮数可用默认。</div>
+    <label>Loop 类型</label>
+    <select id="loopMode">
+      <option value="code">代码 loop（validator 门禁 + 自动迭代）</option>
+      <option value="llm">LLM loop（无 validator，reviewer 判定 + 自动迭代）</option>
+    </select>
+    <label>目标（写清可验证的完成条件）</label>
+    <textarea id="goal" placeholder="例如：在 validate.py 中实现 xxx 的验收检查"></textarea>
+    <div id="codeFields">
+      <label>验收命令 validateCmd（可选，缺省自动找 validate.py）</label>
+      <input id="validateCmd" placeholder="python3 validate.py" />
+    </div>
+    <div class="row">
+      <div>
+        <label>规划模型 planner</label>
+        <select id="planner"><option value="">自动</option></select>
+      </div>
+      <div>
+        <label>评审模型 reviewer</label>
+        <select id="reviewer"><option value="">自动</option><option value="__none__">关闭</option></select>
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label>最大轮数</label>
+        <input id="maxRounds" type="number" value="5" min="1" max="20" />
+      </div>
+      <div>
+        <label>工作区 cwd（可选）</label>
+        <input id="cwd" placeholder="默认 = 服务启动目录" />
+      </div>
+    </div>
+    <div id="newNote" class="note"></div>
+    <div class="actions">
+      <button id="cancelNew" class="ghost">取消</button>
+      <button id="submitNew">启动</button>
+    </div>
+  </div>
+</div>
+
+<!-- 任务详情 -->
+<div id="detailOverlay" class="overlay">
+  <div class="card">
+    <h2 id="dTitle">任务详情</h2>
+    <div id="dBody"></div>
+    <div class="actions">
+      <button id="dResume" class="ghost" style="display:none">续跑</button>
+      <button id="dStop" class="ghost">停止</button>
+      <button id="dClose">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 设置：模型与服务商 -->
+<div id="settingsOverlay" class="overlay">
+  <div class="card">
+    <h2>模型与服务商</h2>
+    <div class="note">配置模型网关（baseUrl）与自己的 API Key；不填 Key 则不更新 Key。</div>
+    <div id="provList"></div>
+    <label>服务商 ID（如 oneapi）</label>
+    <input id="pId" placeholder="oneapi" />
+    <label>名称（可选）</label>
+    <input id="pName" placeholder="Baidu One API" />
+    <label>baseUrl</label>
+    <input id="pBaseUrl" placeholder="https://oneapi-xxx.baidu-int.com/v1" />
+    <label>API Key（留空则不变）</label>
+    <input id="pKey" type="password" placeholder="sk-…" />
+    <div id="cfgNote" class="note"></div>
+    <div class="actions">
+      <button id="cancelCfg" class="ghost">关闭</button>
+      <button id="saveCfg">保存</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var TOKEN = (new URLSearchParams(location.search).get('token') || localStorage.getItem('pi-harness:token') || '');
+  if (TOKEN) localStorage.setItem('pi-harness:token', TOKEN);
+
+  var conn = document.getElementById('conn');
+  var listEl = document.getElementById('list');
+  var currentRun = null;
+  var chatSessionId = null;
+
+  var TPL = [
+    { id: "inf-harness-start", icon: "🧭", title: "Harness 通用启动", desc: "infer-forge-harness 通用 AI Loop：先读规范、复用原子任务、每步 verify、留证据",
+      prompt: `使用 inference-harness skill 启动一次推理服务 AI Loop。先用 icode 拉取 baidu/hac-aiacc/infer-forge-harness 并进入仓库，按顺序先读 AGENTS.md、目标 workflow 定义、task 合约、tasks/REGISTRY.yaml、catalog/tool_catalog.yaml、SKILL.md 与 validator，再动手。明确本次 workflow 与目标模型（如 deepseek-v4.1-flash）。优先复用 REGISTRY 已有原子任务，没有合适的才新增、新增后更新 REGISTRY 并重新生成 CATALOG。每步都要有明确 verify，以 validator 判定为准（返回码/PASS 字样/manifest 都不算通过）。每步产出 run id、artifact root、节点状态、validator 结论、Journal 路径、证据路径，并与 baseline 对比。失败保留原始证据，不打补丁绕过、不静默重试。安全红线：删除实例/资源、缩减副本、杀进程、改端口拓扑/MODEL_ID/配置等高危操作一律先说明理由并等确认；只操作自己的 Pod，共享/线上实例变更必须人工确认。` },
+    { id: "inf-prefill", icon: "⚡", title: "Prefill 性能优化", desc: "sglang prefill/ttft 的 5 步 loop（base→profile→subagent→回归→循环）",
+      prompt: `本项目是推理服务的 harness，里面有定义了 prefill 性能优化的工作流 prefill-optimization。请先进入本地 harness 代码库，再帮我运行这个工作流来优化 <目标模型，如 Deepseek v4.1-Flash>。
+步骤：1) 建立 base——指定 sglang 服务镜像，通过 perf-test-graph-prefill 部署并测试典型数据长度（如 60K）下的 prefill 性能与 ttft，保存 logits 作为精度标准；2) 性能 profile——用 torch profile 或 nsys 抓相同数据 trace，从算子/引擎/显存维度挖掘可优化点；3) subagent 优化——每个可优化点起一个 subagent 拉分支优化，保证优化后 logits 与基准在容差内且问题解决，再合并回主分支；4) 回归测试——集成后跑基准数据集，对比性能与 logits、解决冲突、保证正确并输出结果；5) 回到 2→3→4 循环，默认 3 次或无新优化点为止。每个 task 都要有明确 verify。
+环境（按实际替换）：集群 kubeconfig=<kubeconfig 路径>，prefill 启动 yaml=<prefill yaml 路径>，已启动实例=<pod 名>（内含 sglang 代码与模型权重）。请开始整个工作流并做好完整记录与回顾。` },
+    { id: "inf-cache-adapt", icon: "🧩", title: "Cache 适配（AttentionStore）", desc: "新模型从零接入 AS-Cache，跑通 MLA / MLA+SWA / MLA+KDA",
+      prompt: `本项目是推理服务的 harness，里面定义了 attention-store 适配的 workflow。请从头开始完整运行这个工作流，实现 <目标模型，如 ds v4.1-flash> 的 as-cache 适配，跑通 MLA、MLA+SWA、MLA+KDA，并支持自动组合适配与自动进化。
+环境（按实际替换）：集群 kubeconfig=<kubeconfig 路径>；未适配的 P 侧 yaml=<prefill yaml 路径>，owner=<owner>；相关代码路径：sglang_root=<aiak_sglang 路径>，sdk_root=<attentionstore/sdk 路径>，agent_root=<attentionstore/agent 路径，只读参考，用于确认接口与参数>。
+请开始整个工作流并做好完整记录与回顾（每步 run id / artifact root / validator 结论 / Journal / 证据路径）。` },
+    { id: "inf-cache-loss", icon: "📉", title: "Cache 损耗优化", desc: "80k/96% 命中下把 cache 损耗降到 20% 以内（bench_ascache 两阶段压测）",
+      prompt: `帮我创建一个优化 cache 性能损耗的任务，目标：<输入长度，如 80k(81920)> 输入、<命中率，如 96%> 命中率场景下 cache 损耗达到 20% 以下。
+cache 损耗定义：开启 ASCache 场景 uncache itps 相对 disable-radix-cache 场景 uncache itps 缩减的比例（1 - ascache uncache itps / disable-radix-cache uncache itps）。损耗分计算损耗、间隙损耗（通常高优关注）、以及有 PP 时的 bubble 损耗。
+环境（按实际替换）：引擎 sglang 代码=<sglang 路径>，模型路径=<模型 tokenizer/权重路径>，可用 pod=<pod 名>，SDK=<attentionstore/sdk 路径>，启动脚本=<start.sh 路径>，无基线 ITPS=<基线值>。
+压测用自研 bench_ascache.py（两阶段：先充 cache 再实际发压，抓 nsys/profile 只抓实际发压阶段，据引擎日志 hit_rate 判断是否真命中）：
+python3 benchmark/bench_ascache.py --host 127.0.0.1 --port 8000 --total-len 81920 --target-hit-rates "0.96" --batch-size 64 --num-rounds 1 --tokenizer <模型路径> --output-file ascache_80k.json
+允许优化引擎源码、重启/杀引擎、改引擎配置与 SDK（仅限自己的测试实例；共享/线上实例一律停下确认）。trace 与 loop 证据输出目录自定。可参考引擎历史 cache 损耗留档与 harness cache 损耗优化 loop 里的提示词。` },
+    { id: "inf-hitrate", icon: "🎯", title: "Cache 命中率定位修复", desc: "线上命中率下跌定位与修复，validator 判定、留完整证据链",
+      prompt: `使用 cache-hitrate-debug skill 定位并修复线上 cache 命中率下跌问题，目标解决 9 成以上命中率下跌并支持自动迭代。复用 harness 原子任务（tasks/REGISTRY.yaml），没有合适的才新增、新增后更新 REGISTRY 并重新生成 CATALOG。用 bench_ascache.py 两阶段压测复现，用 nsys/torch profile 抓 trace，据引擎日志 hit_rate 判断是否真正命中 cache。定位与修复都要有明确 verify、以 validator 判定为准，保留完整证据链（run id / artifact root / Journal / 证据路径），失败不静默重试。环境（按实际替换）：模型=<目标模型>，集群/实例=<kubeconfig 与 pod>。` },
+    { id: "inf-cudaipc", icon: "🔗", title: "AS-SDK CudaIPC 传输改造验证", desc: "KVCache 传输 PosixSHM→CudaIPC(as-mover)，优化 Prefill 启动时间、不劣化精度/吞吐",
+      prompt: `基于 infer-forge-harness 设计并执行一个验证工作流：attention-store-sdk 的 KVCache 传输从 PosixSHM 改为独立进程 as-mover 用 CudaIPC（共享显存）。核心目标是优化 Prefill 启动时间，同时保证功能、精度与 Cache 吞吐损耗不劣化。采用最小可用版本、分步推进，每步跟我确认后再进入下一步。
+工作方式：先读 AGENTS.md、目标 workflow、task 合约、SKILL.md 与 validator 再动手；优先复用 REGISTRY 原子任务。代码改动落在 Pod 内代码库（本地写→kubectl cp 进 Pod→Pod 内编译测试），改动通过 PYTHONPATH 注入不改镜像（AS_SDK_ROOT=<sdk 路径>，SGLANG_ROOT=<sglang 路径>）。先不提交代码，留给我 review。
+环境（按实际替换）：kubeconfig=<kubeconfig>，引擎版本=<版本>，线上配置（权威只读不 apply）=<线上 yaml>，线下测试配置=<线下 yaml>，专用实例=<prefill/decode pod>。
+阶段：0 环境证明+部署注册（端口与线上一致，引擎 HTTP_PORT=8000、PD router 30000）→1 Baseline（吞吐损耗 + Prefill 启动时间，bench_ascache.py 重复≥3 次）→2 as-mover 单测（先给方案我 review）→3 Prefill 单点（先起 as-mover 再起引擎，对比 baseline）→4 完整 PD 回归（迁到 Decode，千帆网关打通完整推理，功能+OpenCompass 精度回归）→5 压测（aiakperf 经网关，QPS 1.0）。
+每步交付：run id、artifact root、节点状态、validator 结论、Journal 路径、证据路径、与 baseline 对比（损耗% / Prefill 启动时间）。以 validator 判定为准，失败保留证据不静默重试。
+安全红线：删除实例/资源、缩副本一律停下由我执行（kubectl delete 与缩副本外其他 kubectl 已授权）；只操作自己的 Pod；不擅改端口/拓扑/MODEL_ID，一切以线上 yaml 为准、要改先确认。` },
+    { id: "inf-kvcache-nextgen", icon: "🧱", title: "下一代 KV Cache 架构", desc: "harness 跑通 radix tree 拆分 / allocator 拆分 / cache 操作与 forward overlap",
+      prompt: `基于 infer-forge-harness 推进下一代 KV Cache 架构改造，里程碑：1) 与方案对齐关键路径和实现；2) Harness 平台初步跑通流程；3) 基于 Harness 跑通业务结果——完成 radix tree 拆分并验收通过、完成 allocator 拆分并验收通过、完成 cache 操作与 forward 并行 overlap 并验收通过。
+工作方式：先读 AGENTS.md / 目标 workflow / task 合约 / SKILL.md / validator 再动手，优先复用 REGISTRY 原子任务，产物与 Journal 放仓库外，每步有明确 verify、以 validator 判定为准。环境（按实际替换）：kubeconfig=<kubeconfig>，实例=<pod>，代码路径=<sglang/sdk 路径>。每步产出 run id / artifact root / validator 结论 / Journal / 证据路径并与 baseline 对比。安全红线同 harness 总纲（高危操作先确认、只动自己的 Pod）。` },
+    { id: "inf-runtime-loop", icon: "🛡️", title: "受控 Loop（validator 门禁 + 自动迭代）", desc: "用运行时启动任务：validator 不通过自动带证据进入下一轮，通过才算完成，可断点续跑",
+      prompt: `用 mini-harness 运行时启动一个受 validator 约束的任务（不要用普通对话硬跑）。
+
+调用 loop_start：
+- goal：<要达成的目标，写清可验证的完成条件>
+- validateCmd：<validator 命令，例如 python3 validate.py 或 infer-forge-harness 的 validate.py 路径>
+- harnessRoot：<可选，harness 仓库根目录>
+- maxRounds：<默认 5>
+
+然后 loop_plan 写出计划并直接修改工作区；完成每轮时调用 loop_done(summary)。
+规则：运行时会自动执行 validator；不通过会带着证据自动进入下一轮，直到通过或达到最大轮数。不要自行宣布完成，不要向用户提问，不要重复已完成的步骤。` },
+  ];
+
+  function api(path, opts) {
+    opts = opts || {};
+    var h = { 'content-type': 'application/json' };
+    if (TOKEN) h['x-pi-token'] = TOKEN;
+    return fetch(path, { headers: h, method: opts.method || 'GET', body: opts.body }).then(function (r) {
+      return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; });
+    });
+  }
+
+  function statusPill(r) {
+    var cls = '', txt = r.status;
+    if (r.status === 'active' && r.alive === false) { cls = 'warn'; txt = '已掉线（可续跑）'; }
+    else if (r.status === 'active') { cls = 'active'; txt = friendlyActive(r); }
+    else if (r.status === 'done' && r.lastVerdict === 'pass') { cls = 'pass'; txt = '交卷了 · 通过'; }
+    else if (r.status === 'stopped' && r.stopReason === 'reviewer-error') { cls = 'warn'; txt = '裁判掉线了'; }
+    else if (r.status === 'stopped' && r.stopReason === 'user-stop') { cls = 'fail'; txt = '已停止'; }
+    else if (r.status === 'stopped') { cls = 'fail'; txt = '到顶了'; }
+    else if (r.lastVerdict === 'fail') { cls = 'fail'; txt = '还没过关'; }
+    return '<span class="pill ' + cls + '">' + esc(txt) + '</span>';
+  }
+
+  function friendlyActive(r) {
+    if (r.stage === 'run') return '正在干活 · 第 ' + r.round + '/' + r.maxRounds + ' 轮';
+    if (r.stage === 'validate') return '验证中 · 第 ' + r.round + ' 轮';
+    return '规划中';
+  }
+
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]; }); }
+
+  function renderList(runs) {
+    if (!runs.length) { listEl.innerHTML = '<div class="empty">还没有任务，点右上角「新任务」开一个。</div>'; return; }
+    listEl.innerHTML = runs.map(function (r) {
+      return '<div class="run" data-id="' + esc(r.runId) + '">' +
+        '<div class="run-top"><span class="run-goal">' + esc(r.goal || r.runId) + '</span>' + statusPill(r) + '</div>' +
+        '<div class="run-meta">' +
+          '<span>' + esc(r.project || '·') + '</span>' +
+          '<span>stage=' + esc(r.stage) + '</span>' +
+          '<span>round=' + esc(r.round) + '/' + esc(r.maxRounds) + '</span>' +
+          (r.lastVerdict ? '<span>verdict=' + esc(r.lastVerdict) + (r.lastCode != null ? ' (exit ' + r.lastCode + ')' : '') + '</span>' : '') +
+          (r.lastReview ? '<span>review=' + esc(r.lastReview) + '</span>' : '') +
+          '<span>' + esc(r.runId) + '</span>' +
+        '</div></div>';
+    }).join('');
+    Array.prototype.forEach.call(listEl.querySelectorAll('.run'), function (el) {
+      el.addEventListener('click', function () { openDetail(el.getAttribute('data-id')); });
+    });
+  }
+
+  function loadRuns() {
+    api('/api/runs').then(function (r) {
+      if (!r.ok) { conn.className = 'dot off'; if (r.status === 403) listEl.innerHTML = '<div class="empty">未授权：请在地址栏加 ?token=…</div>'; return; }
+      conn.className = 'dot';
+      renderList(r.body.runs || []);
+    }).catch(function () { conn.className = 'dot off'; });
+  }
+
+  function loadModels() {
+    api('/api/models').then(function (r) {
+      if (!r.ok) return;
+      var selP = document.getElementById('planner'), selR = document.getElementById('reviewer');
+      (r.body.models || []).forEach(function (m) {
+        [selP, selR].forEach(function (sel) {
+          var op = document.createElement('option');
+          op.value = m.provider + '/' + m.id;
+          op.textContent = m.id + '（' + m.family + '）';
+          sel.appendChild(op);
+        });
+      });
+    });
+  }
+
+  // ---- 新任务 ----
+  var newOverlay = document.getElementById('newOverlay');
+  document.getElementById('newTask').addEventListener('click', function () {
+    newOverlay.classList.add('open');
+    document.getElementById('goal').focus();
+  });
+  document.getElementById('loopMode').addEventListener('change', function () {
+    document.getElementById('codeFields').style.display = this.value === 'llm' ? 'none' : '';
+  });
+  document.getElementById('cancelNew').addEventListener('click', function () { newOverlay.classList.remove('open'); });
+  document.getElementById('submitNew').addEventListener('click', function () {
+    var note = document.getElementById('newNote');
+    var btn = document.getElementById('submitNew');
+    var payload = {
+      mode: document.getElementById('loopMode').value,
+      goal: document.getElementById('goal').value,
+      validateCmd: document.getElementById('validateCmd').value || undefined,
+      plannerModel: document.getElementById('planner').value || undefined,
+      reviewerModel: document.getElementById('reviewer').value || undefined,
+      maxRounds: parseInt(document.getElementById('maxRounds').value, 10) || undefined,
+      cwd: document.getElementById('cwd').value || undefined,
+    };
+    if (!payload.goal.trim()) { note.className = 'note bad'; note.textContent = '目标不能为空'; return; }
+    btn.disabled = true; btn.textContent = '启动中…'; note.className = 'note'; note.textContent = '正在创建会话并启动（可能需要一点时间）…';
+    api('/api/runs', { method: 'POST', body: JSON.stringify(payload) }).then(function (r) {
+      btn.disabled = false; btn.textContent = '启动';
+      if (r.ok) {
+        note.textContent = '已启动（sessionId=' + r.body.sessionId + '），正在后台执行，任务会出现在列表里…';
+        newOverlay.classList.remove('open');
+        document.getElementById('goal').value = '';
+        loadRuns();
+      } else {
+        note.className = 'note bad';
+        note.textContent = r.body.error || ('启动失败（HTTP ' + r.status + '）');
+      }
+    }).catch(function (e) { btn.disabled = false; btn.textContent = '启动'; note.className = 'note bad'; note.textContent = String(e); });
+  });
+
+  // ---- 详情 ----
+  var detailOverlay = document.getElementById('detailOverlay');
+  var dBody = document.getElementById('dBody');
+  var dTitle = document.getElementById('dTitle');
+  var dStop = document.getElementById('dStop');
+  var dResume = document.getElementById('dResume');
+  document.getElementById('dClose').addEventListener('click', function () { detailOverlay.classList.remove('open'); currentRun = null; });
+
+  function openDetail(id) {
+    currentRun = id;
+    detailOverlay.classList.add('open');
+    renderDetail();
+  }
+
+  function renderDetail() {
+    if (!currentRun) return;
+    api('/api/runs/' + encodeURIComponent(currentRun)).then(function (r) {
+      if (!r.ok) { dBody.innerHTML = '<div class="note bad">' + esc(r.body.error || '加载失败') + '</div>'; return; }
+      var s = r.body.state || {};
+      dTitle.textContent = (s.goal || currentRun).slice(0, 60);
+      dStop.style.display = s.status === 'active' ? '' : 'none';
+      dResume.style.display = (r.body.alive === false && s.status === 'active') ? '' : 'none';
+      var html = '<dl class="kv">' +
+        kv('runId', s.runId) + kv('状态', s.status + (s.stopReason ? '（' + s.stopReason + '）' : '')) +
+        kv('阶段 / 轮次', s.stage + ' · ' + s.round + '/' + s.maxRounds) +
+        kv('验证', (s.lastVerdict || '—') + (s.lastCode != null ? '（exit ' + s.lastCode + '）' : '')) +
+        kv('评审', (s.lastReview ? s.lastReview.verdict : '—')) +
+        kv('主模型', (s.mainModel && s.mainModel.id) || '—') +
+        kv('工作区', s.workspace || '—') +
+        '</dl>';
+      if (s.lastEvidence) html += '<h3>验证证据（尾部）</h3><pre>' + esc(String(s.lastEvidence).slice(-4000)) + '</pre>';
+      if (s.plannerOutput) html += '<h3>规划产出</h3><pre>' + esc(String(s.plannerOutput).slice(-3000)) + '</pre>';
+      var ev = r.body.evidence || [];
+      if (ev.length) html += '<h3>证据文件</h3><pre>' + esc(ev.join('\n')) + '</pre>';
+      dBody.innerHTML = html;
+    });
+  }
+
+  function kv(k, v) { return '<dt>' + esc(k) + '</dt><dd>' + esc(v == null ? '' : v) + '</dd>'; }
+
+  dStop.addEventListener('click', function () {
+    if (!currentRun) return;
+    api('/api/runs/' + encodeURIComponent(currentRun), { method: 'POST' }).then(function (r) {
+      dStop.disabled = true;
+      renderDetail();
+      loadRuns();
+    });
+  });
+
+  dResume.addEventListener('click', function () {
+    if (!currentRun) return;
+    dResume.disabled = true;
+    api('/api/runs/' + encodeURIComponent(currentRun) + '/resume', { method: 'POST' }).then(function (r) {
+      dResume.disabled = false;
+      renderDetail();
+      loadRuns();
+    });
+  });
+
+  document.getElementById('refresh').addEventListener('click', loadRuns);
+
+  // ---- 设置 ----
+  var settingsOverlay = document.getElementById('settingsOverlay');
+  function loadConfig() {
+    api('/api/config').then(function (r) {
+      var list = document.getElementById('provList');
+      if (!r.ok) { list.innerHTML = '<div class="note bad">' + esc(r.body.error || '加载失败') + '</div>'; return; }
+      var ps = r.body.providers || [];
+      if (!ps.length) { list.innerHTML = '<div class="note">还没有服务商，先填一个。</div>'; return; }
+      list.innerHTML = ps.map(function (p) {
+        return '<div class="run" style="cursor:default;margin-bottom:6px"><div class="run-top">' +
+          '<span class="run-goal">' + esc(p.provider) + (p.name ? '（' + esc(p.name) + '）' : '') + '</span>' +
+          '<span class="pill ' + (p.hasKey ? 'pass' : 'warn') + '">' + (p.hasKey ? '已配 Key' : '无 Key') + '</span></div>' +
+          '<div class="run-meta"><span>' + esc(p.baseUrl || '') + '</span><span>' + esc(p.modelCount) + ' 模型</span></div></div>';
+      }).join('');
+    });
+  }
+  document.getElementById('settings').addEventListener('click', function () { settingsOverlay.classList.add('open'); loadConfig(); });
+  document.getElementById('cancelCfg').addEventListener('click', function () { settingsOverlay.classList.remove('open'); });
+  document.getElementById('saveCfg').addEventListener('click', function () {
+    var note = document.getElementById('cfgNote');
+    var payload = {
+      provider: document.getElementById('pId').value,
+      name: document.getElementById('pName').value || undefined,
+      baseUrl: document.getElementById('pBaseUrl').value || undefined,
+      apiKey: document.getElementById('pKey').value || undefined,
+    };
+    if (!payload.provider.trim()) { note.className = 'note bad'; note.textContent = '服务商 ID 不能为空'; return; }
+    note.className = 'note'; note.textContent = '保存中…';
+    api('/api/config/provider', { method: 'PUT', body: JSON.stringify(payload) }).then(function (r) {
+      if (r.ok) { note.textContent = '已保存 provider=' + r.body.provider; document.getElementById('pKey').value = ''; loadConfig(); loadModels(); }
+      else { note.className = 'note bad'; note.textContent = r.body.error || '保存失败'; }
+    });
+  });
+
+  // ---- 标签页 ----
+  var tabs = document.querySelectorAll('.tab');
+  var viewTasks = document.getElementById('viewTasks');
+  var viewChat = document.getElementById('viewChat');
+  var viewTerm = document.getElementById('viewTerm');
+  tabs.forEach(function (t) {
+    t.addEventListener('click', function () {
+      tabs.forEach(function (x) { x.classList.remove('active'); });
+      t.classList.add('active');
+      var tab = t.getAttribute('data-tab');
+      viewTasks.style.display = tab === 'tasks' ? '' : 'none';
+      viewChat.style.display = tab === 'chat' ? '' : 'none';
+      viewTerm.style.display = tab === 'term' ? '' : 'none';
+      if (tab === 'tasks') loadRuns();
+    });
+  });
+
+  // ---- 提示词模板 ----
+  var tplSel = document.getElementById('tplSel');
+  TPL.forEach(function (t) {
+    var op = document.createElement('option');
+    op.value = t.id;
+    op.textContent = t.icon + ' ' + t.title;
+    op.title = t.desc;
+    tplSel.appendChild(op);
+  });
+  document.getElementById('tplUse').addEventListener('click', function () {
+    var t = TPL.find(function (x) { return x.id === tplSel.value; });
+    if (t) { document.getElementById('chatInput').value = t.prompt; document.getElementById('chatInput').focus(); }
+  });
+
+  // ---- 对话 ----
+  var chatMsgs = document.getElementById('chatMsgs');
+  var chatInput = document.getElementById('chatInput');
+  function addMsg(role, text) {
+    var d = document.createElement('div');
+    d.className = 'msg ' + role;
+    d.textContent = text;
+    chatMsgs.appendChild(d);
+    chatMsgs.scrollTop = chatMsgs.scrollHeight;
+  }
+  function chatSend() {
+    var text = chatInput.value.trim();
+    if (!text) return;
+    addMsg('user', text);
+    chatInput.value = '';
+    var typing = document.createElement('div');
+    typing.className = 'typing';
+    typing.textContent = 'pi 正在思考…';
+    chatMsgs.appendChild(typing);
+    api('/api/chat', { method: 'POST', body: JSON.stringify({ message: text, sessionId: chatSessionId }) }).then(function (r) {
+      typing.remove();
+      if (r.ok) {
+        chatSessionId = r.body.sessionId;
+        if (r.body.reply) addMsg('assistant', r.body.reply);
+      } else {
+        addMsg('assistant', '⚠️ ' + (r.body.error || '对话失败'));
+      }
+    }).catch(function (e) { typing.remove(); addMsg('assistant', '⚠️ ' + String(e)); });
+  }
+  document.getElementById('chatSend').addEventListener('click', chatSend);
+  chatInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); chatSend(); }
+  });
+  document.getElementById('chatNew').addEventListener('click', function () {
+    chatSessionId = null;
+    chatMsgs.innerHTML = '';
+    chatInput.value = '';
+  });
+
+  // ---- 终端 ----
+  var termOut = document.getElementById('termOut');
+  var termInput = document.getElementById('termInput');
+  var termCwdInput = document.getElementById('termCwdInput');
+  var termCwd = document.getElementById('termCwd');
+  function termPrint(cls, text) {
+    var d = document.createElement('div');
+    if (cls) d.className = cls;
+    d.textContent = text;
+    termOut.appendChild(d);
+    termOut.scrollTop = termOut.scrollHeight;
+  }
+  function termRun() {
+    var cmd = termInput.value.trim();
+    if (!cmd) return;
+    termPrint('term-cmd', '$ ' + cmd);
+    termInput.value = '';
+    var cwd = termCwdInput.value.trim() || undefined;
+    api('/api/exec', { method: 'POST', body: JSON.stringify({ command: cmd, cwd: cwd }) }).then(function (r) {
+      if (!r.ok) { termPrint('term-err', '⚠️ ' + (r.body.error || '执行失败')); return; }
+      var b = r.body;
+      if (b.stdout) termPrint(null, b.stdout.replace(/\n$/, ''));
+      if (b.stderr) termPrint('term-err', b.stderr.replace(/\n$/, ''));
+      termPrint(null, '[exit ' + b.code + (b.killed ? ' · 超时被杀' : '') + ']');
+    }).catch(function (e) { termPrint('term-err', '⚠️ ' + String(e)); });
+  }
+  document.getElementById('termRun').addEventListener('click', termRun);
+  termInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); termRun(); } });
+  termCwdInput.addEventListener('change', function () { termCwd.textContent = termCwdInput.value || '默认目录'; });
+  termPrint(null, '非交互命令运行器：git / kubectl / 脚本 / 看日志。不支持交互式 REPL（vim、htop 等）。');
+
+  loadModels();
+  loadRuns();
+  setInterval(loadRuns, 4000);
+})();
+</script>
+</body>
+</html>

@@ -27,6 +27,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { spawn } from "node:child_process";
+import { pathToFileURL } from "node:url";
 
 const INBOX = process.env.MINI_HARNESS_INBOX || path.join(os.homedir(), ".mini-harness", "inbox");
 const DONE = path.join(INBOX, "done");
@@ -65,6 +66,47 @@ function buildPrompt(t) {
   return lines.join("\n");
 }
 
+function real(p) {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
+/**
+ * 找到本次任务对应的 run 终态（进程退出码只说明 pi 是否正常跑完，不代表任务成功）。
+ * 返回：'done-pass'（validator 通过才算成功）、'no-run'（没找到 run，或模型没调 loop_start）、
+ *       'not-pass:<status>/<verdict>'（有 run 但未通过）。
+ */
+function findRunForTask(cwd, startedAt) {
+  let ids = [];
+  try {
+    ids = fs.readdirSync(RUNTIME_ROOT);
+  } catch {
+    return 'no-run';
+  }
+  const target = real(cwd);
+  let best = null;
+  for (const id of ids) {
+    let st;
+    try {
+      st = JSON.parse(fs.readFileSync(path.join(RUNTIME_ROOT, id, 'state.json'), 'utf8'));
+    } catch {
+      continue;
+    }
+    const ws = real(st.workspace || st.baseWorkspace || '');
+    if (ws !== target) continue;
+    const created = Date.parse(st.createdAt || 0) || 0;
+    if (created < startedAt - 5000) continue; // 容忍落盘/时钟延迟
+    if (!best || created > best.created) best = { st, created };
+  }
+  if (!best) return 'no-run';
+  const s = best.st;
+  if (s.status === 'done' && s.lastVerdict === 'pass') return 'done-pass';
+  return `not-pass:${s.status || '?'}/${s.lastVerdict || '?'}`;
+}
+
 function runTask(file) {
   return new Promise((resolve) => {
     const base = path.basename(file, ".json").replace(/\.processing$/, "");
@@ -81,6 +123,7 @@ function runTask(file) {
     const out = fs.createWriteStream(logPath, { flags: "a" });
     out.write(`\n===== ${stamp()} start ${base} =====\n`);
     log(`开始任务 ${base} (cwd=${cwd})`);
+    const startedAt = Date.now();
     const child = spawn(PI, ["--print", "--no-session", buildPrompt(task)], {
       cwd,
       env: { ...process.env, MINI_HARNESS_RUNTIME_ROOT: RUNTIME_ROOT },
@@ -91,12 +134,14 @@ function runTask(file) {
     child.on("close", (code) => {
       out.write(`\n===== ${stamp()} exit ${code} =====\n`);
       out.end();
-      const ok = code === 0;
+      // 成功标准 = 运行时落盘终态 done + validator pass，而不是 pi 进程退出码。
+      const verdict = findRunForTask(cwd, startedAt);
+      const ok = verdict === "done-pass";
       const dest = path.join(ok ? DONE : FAILED, base + ".json");
       try {
         fs.renameSync(file, dest);
       } catch {}
-      log(`任务 ${base} 结束 exit=${code} -> ${ok ? "done" : "failed"}（日志 ${logPath}）`);
+      log(`任务 ${base} 结束 exit=${code} verdict=${verdict} -> ${ok ? "done" : "failed"}（日志 ${logPath}）`);
       resolve(ok);
     });
     child.on("error", (e) => {
@@ -146,6 +191,13 @@ async function scanOnce() {
   }
 }
 
-log(`watcher 启动：inbox=${INBOX} interval=${INTERVAL}ms pi=${PI} runtimeRoot=${RUNTIME_ROOT} concurrency=${CONCURRENCY}`);
-await scanOnce();
-setInterval(scanOnce, INTERVAL);
+const isMain =
+  process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+
+if (isMain) {
+  log(`watcher 启动：inbox=${INBOX} interval=${INTERVAL}ms pi=${PI} runtimeRoot=${RUNTIME_ROOT} concurrency=${CONCURRENCY}`);
+  await scanOnce();
+  setInterval(scanOnce, INTERVAL);
+}
+
+export { findRunForTask, buildPrompt };
