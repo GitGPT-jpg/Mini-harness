@@ -75,7 +75,6 @@ import {
 import { setFenceSend, syncFenceRenderers, syncMessageWidgets } from "./plugin-fence";
 import { findFileHandler, syncFileHandlers, type FileHandlerPlugin } from "./plugin-file-handlers";
 import { PiSetupModal } from "./components/PiSetupModal";
-import { isDesktopShell } from "./desktop";
 import { ModelConfigModal } from "./components/ModelConfigModal";
 import { DirectoryBrowser } from "./components/DirectoryBrowser";
 import { ModelPickerModal } from "./components/ModelPickerModal";
@@ -2869,22 +2868,17 @@ export function App() {
 					}}
 				/>
 			)}
-			{chat.ready &&
-				chat.state &&
-				chat.state.piConfigured === false &&
-				!setupDismissed &&
-				!manageModelsOpen &&
-				!isDesktopShell() && (
-					<PiSetupModal
-						piConfigured={chat.state.piConfigured}
-						piAgentInstalled={chat.state.piAgentInstalled}
-						providers={chat.providers}
-						providerOAuthFlows={chat.providerOAuthFlows}
-						providerOAuthResults={chat.providerOAuthResults}
-						installResult={chat.installResult}
-						onClose={dismissSetup}
-					/>
-				)}
+			{chat.ready && chat.state && chat.state.piConfigured === false && !setupDismissed && !manageModelsOpen && (
+				<PiSetupModal
+					piConfigured={chat.state.piConfigured}
+					piAgentInstalled={chat.state.piAgentInstalled}
+					providers={chat.providers}
+					providerOAuthFlows={chat.providerOAuthFlows}
+					providerOAuthResults={chat.providerOAuthResults}
+					installResult={chat.installResult}
+					onClose={dismissSetup}
+				/>
+			)}
 			{manageModelsOpen && (
 				<ModelConfigModal
 					providers={chat.modelsConfig}

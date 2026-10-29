@@ -12,7 +12,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { DraftAttachment } from "./composer-draft";
-import { isDesktopShell } from "./desktop";
 
 /**
  * page-picker 扩展 zip 的稳定下载地址（GitHub Release 的 latest 别名，打 tag 时 CI
@@ -33,7 +32,6 @@ export interface BrowserControlStatus {
 	available: boolean;
 	/** 桌面壳（Electron）里永远连不上扩展：面板据此换一套文案，不再引导用户装扩展。
 	 *  平时（网页版）不出现这个字段（单测里 toEqual 精确匹配，别默认 false）。 */
-	desktop?: boolean;
 	/** 「允许 AI 操作页面」总开关。 */
 	aiControl?: boolean;
 	/** 「允许执行任意 JS（eval）」开关。 */
@@ -75,16 +73,6 @@ export function pokeBrowserControl(): void {
 
 /** 问一次状态（扩展不在线时返回可读的失败，不抛）。 */
 export async function queryBrowserControl(): Promise<BrowserControlStatus> {
-	// 桌面壳里没有 Chrome 扩展运行时，page-picker 永远装不上 —— 别走下面的
-	// pageCall（宿主桥在桌面壳里是存在的，会白等 3 秒桥超时），直接给结论。
-	if (isDesktopShell()) {
-		return {
-			available: false,
-			pages: [],
-			desktop: true,
-			error: "桌面版不支持浏览器操作：窗口里没有 Chrome 扩展运行时，请改用系统浏览器打开同一个地址（网页版）",
-		};
-	}
 	const pageCall = host();
 	if (!pageCall) {
 		return {

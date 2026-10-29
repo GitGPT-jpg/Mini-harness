@@ -532,19 +532,6 @@ export const zh = {
 	updateTabTitle: "更新 pi-web-ui",
 	updateTerminalHint:
 		"点击后会在可见终端中运行 npm i -g pi-web-ui@latest；完成后重启服务生效（pi-web-ui server restart）。",
-	/* 桌面壳应用内更新（issue #180）：包内服务不受 npm 全局包影响 */
-	updateDesktopNote:
-		"桌面版不走 npm 全局安装：它的服务随应用本身发布，上面的终端命令对它无效。请用下面的应用内更新，或去下载页换包。",
-	updateDesktopCheck: "检查桌面更新",
-	updateDesktopChecking: "正在检查桌面更新…",
-	updateDesktopAvailable: "发现桌面版新版本 v{version}",
-	updateDesktopDownload: "下载更新",
-	updateDesktopDownloading: "下载中 {n}%",
-	updateDesktopDownloaded: "已下载完成，点“安装并重启”生效",
-	updateDesktopInstall: "安装并重启",
-	updateDesktopManual: "去下载页手动安装",
-	updateDesktopError: "桌面更新失败：{error}",
-	updateDesktopNoBridge: "当前桌面壳太旧，没有内置更新通道，请去下载页换包。",
 	updatesAllTitle: "全部组件更新",
 	updatesAllBadge: "{n} 个更新",
 	updatesAllUpToDate: "全部组件均为最新",
@@ -1566,10 +1553,6 @@ export const zh = {
 	browserControlCiteFailed: "输入框还没准备好，稍后再试",
 	browserControlOpenPanel: "打开面板（状态 / 授权管理）",
 	browserControlSingleTip: "点击把 {name} 引用到对话；右侧 ▾ 打开面板",
-	browserControlDesktop: "桌面版用不了浏览器操作 —— 不是你装错了",
-	browserControlDesktopLead:
-		"桌面窗口里没有 Chrome 扩展运行时，page-picker 扩展装不上。用下面的按钮在系统浏览器里打开同一个地址，再按网页版的四步装扩展即可。",
-	browserControlOpenInBrowser: "用默认浏览器打开当前地址",
 	attachPage: "网页引用：{name}（AI 已获授权操作这个页面）",
 	attachPageShort: "网页",
 	settingsTools: "工具",
@@ -2906,20 +2889,6 @@ export const en: Record<keyof typeof zh, string> = {
 	updateTabTitle: "Update pi-web-ui",
 	updateTerminalHint:
 		"Clicking runs npm i -g pi-web-ui@latest in a visible terminal; restart the service afterwards to take effect (pi-web-ui server restart).",
-	/* In-app desktop updates (issue #180): the bundled server ignores the global npm install */
-	updateDesktopNote:
-		"The desktop app doesn't use the global npm install: its server ships inside the app bundle, so the terminal command above does nothing for it. Use the in-app update below, or grab a new installer from the downloads page.",
-	updateDesktopCheck: "Check for desktop updates",
-	updateDesktopChecking: "Checking for desktop updates…",
-	updateDesktopAvailable: "New desktop release v{version} available",
-	updateDesktopDownload: "Download update",
-	updateDesktopDownloading: "Downloading {n}%",
-	updateDesktopDownloaded: "Download ready — install & restart to apply",
-	updateDesktopInstall: "Install & restart",
-	updateDesktopManual: "Manual install from downloads page",
-	updateDesktopError: "Desktop update failed: {error}",
-	updateDesktopNoBridge:
-		"This desktop shell predates the built-in updater — grab a new installer from the downloads page.",
 	updatesAllTitle: "Component updates",
 	updatesAllBadge: "{n} updates",
 	updatesAllUpToDate: "All components up to date",
@@ -3960,10 +3929,6 @@ export const en: Record<keyof typeof zh, string> = {
 	browserControlCiteFailed: "The input is not ready yet, try again in a moment",
 	browserControlOpenPanel: "Open panel (status / grants)",
 	browserControlSingleTip: "Click to mention {name} in the chat; the ▾ on the right opens the panel",
-	browserControlDesktop: "Browser control isn't available in the desktop app — nothing you did wrong",
-	browserControlDesktopLead:
-		"The desktop window has no Chrome extension runtime, so the page-picker extension can't be installed there. Open this same address in your system browser with the button below, then follow the four web steps to install the extension.",
-	browserControlOpenInBrowser: "Open this address in the default browser",
 	attachPage: "Page reference: {name} (the AI is granted access to this page)",
 	attachPageShort: "page",
 	settingsTools: "Tools",

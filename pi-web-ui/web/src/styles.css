@@ -5907,98 +5907,6 @@
 		--topbar-ctl-h: 28px;
 	}
 
-	/* ==========================================================================
-   桌面端沉浸式自定义标题栏与拖拽/避让规则
-   ========================================================================== */
-	body.is-desktop .topbar {
-		-webkit-app-region: drag;
-		user-select: none;
-	}
-
-	/* 顶栏内所有可交互组件必须设为 no-drag，否则点击与输入会被 Electron 窗口拖拽拦截 */
-	body.is-desktop .topbar button,
-	body.is-desktop .topbar input,
-	body.is-desktop .topbar select,
-	body.is-desktop .topbar textarea,
-	body.is-desktop .topbar a,
-	body.is-desktop .topbar .chip,
-	body.is-desktop .topbar .dropdown,
-	body.is-desktop .topbar .dropdown-menu,
-	body.is-desktop .topbar .panel-toggle,
-	body.is-desktop .topbar .bar-item,
-	body.is-desktop .topbar .tb-tab,
-	body.is-desktop .topbar .plugin-topbar-item,
-	body.is-desktop .topbar .topbar-flow > *:not(.tb-spacer),
-	body.is-desktop .topbar .brand,
-	body.is-desktop .topbar .project-picker-btn {
-		-webkit-app-region: no-drag;
-	}
-
-	/* macOS：避开左上角红黄绿交通灯控制区（全屏时系统自动收回交通灯，不占空间） */
-	body.is-desktop-mac:not(.is-desktop-fullscreen) .topbar {
-		padding-left: 78px;
-	}
-
-	/* ==========================================================================
-   桌面端自定义窗口控制按钮（Windows / Linux）：与顶栏图标浑然一体
-   ========================================================================== */
-	.window-controls {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		margin-left: 4px;
-		flex-shrink: 0;
-		-webkit-app-region: no-drag;
-	}
-
-	.win-ctrl-btn {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: var(--topbar-ctl-h, 28px);
-		height: var(--topbar-ctl-h, 28px);
-		padding: 0;
-		border: 1px solid transparent;
-		border-radius: 8px;
-		background: transparent;
-		color: var(--text-dim);
-		cursor: pointer;
-		transition:
-			border-color 0.15s ease,
-			background 0.15s ease,
-			color 0.15s ease,
-			transform 0.1s ease;
-		-webkit-app-region: no-drag;
-	}
-
-	.win-ctrl-btn:hover {
-		border-color: transparent;
-		background: var(--bg-elev2);
-		color: var(--text);
-	}
-
-	.win-ctrl-btn:active {
-		transform: scale(0.95);
-	}
-
-	/* 顶栏隐藏按钮文字模式下保持圆角统一（圆形） */
-	.topbar.no-labels .win-ctrl-btn {
-		border-radius: 50%;
-	}
-
-	/* 关闭按钮：平时使用同系文字色，悬停时为柔和红底微光，按压时为红底白字 */
-	.win-ctrl-btn.win-ctrl-close:hover {
-		border-color: transparent;
-		background: color-mix(in srgb, var(--red) 18%, transparent);
-		color: var(--red);
-	}
-
-	.win-ctrl-btn.win-ctrl-close:active {
-		border-color: transparent;
-		background: #ef4444;
-		color: #ffffff;
-	}
-
 	/* 顶栏的**单一扁直流**（方案 A）：所有条目都是本容器的直接子节点 —— 没有按种类包裹的
    容器（曾经的 .brand / .view-switch / .topbar-desktop 三件套已删），也没有两端贴边的
    例外；每个条目自己带外观（.chip / .tb-tab / .plugin-topbar-item / .panel-toggle）。
@@ -6896,7 +6804,7 @@
 		background: var(--accent-soft);
 	}
 
-	/* 顶栏所有控件统一裸幽灵化（chip / tab / bar-item / 插件按钮 / 抽屉开关 / 窗口控制等）：
+	/* 顶栏所有控件统一裸幽灵化（chip / tab / bar-item / 插件按钮 / 抽屉开关等）：
  * 常态无底无框，悬停或激活时背景纯色高亮、去掉边框与焦点框。 */
 	.topbar button,
 .topbar a.chip,
@@ -6907,7 +6815,7 @@
 /* 顶栏所有控件统一裸幽灵化（chip / tab / bar-item / 插件按钮 / 抽屉开关 / 窗口控制等）：
  * 无论插件、内置还是沙盒，常态与悬停均表现完全一致：统一高度、圆角、内边距与无边框透明底，
  * 默认文字与图标统一为白色（var(--text)）。既然有了悬浮背景色（var(--bg-elev2)），悬浮时图标文字颜色保持白色不变。 */
-.topbar button:not(.win-ctrl-close),
+.topbar button,
 .topbar a.chip,
 .topbar [role="button"],
 .topbar [role="tab"]:not(.active):not([aria-selected="true"]),
@@ -6915,8 +6823,7 @@
 .topbar .tb-tab:not(.active):not([aria-selected="true"]),
 .topbar .bar-item:not(.active):not([aria-selected="true"]),
 .topbar .plugin-topbar-item:not(.active):not([aria-selected="true"]),
-.topbar .panel-toggle,
-.topbar .win-ctrl-btn:not(.win-ctrl-close) {
+.topbar .panel-toggle {
 		height: var(--topbar-ctl-h, 28px);
 		padding: 0 8px;
 		border-radius: 8px;
@@ -6931,7 +6838,7 @@
 		box-shadow: none;
 	}
 
-	.topbar button:not(.win-ctrl-close):hover,
+	.topbar button:hover,
 	.topbar a.chip:hover,
 	.topbar [role="button"]:hover,
 	.topbar [role="tab"]:not(.active):not([aria-selected="true"]):hover,
@@ -6941,7 +6848,6 @@
 	.topbar .plugin-topbar-item:not(.active):not([aria-selected="true"]):hover,
 	.topbar .panel-toggle:hover,
 	.topbar .panel-toggle.has-label:hover,
-	.topbar .win-ctrl-btn:not(.win-ctrl-close):hover,
 	.topbar .dropdown.open > .chip,
 	.topbar .dropdown.open > .bar-item,
 	.topbar .dropdown.open > button,

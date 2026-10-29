@@ -71,19 +71,6 @@ describe("queryBrowserControl", () => {
 		});
 	});
 
-	it("桌面壳（Electron）→ desktop:true + 直接给结论，不碰宿主桥（桥在也没用）", async () => {
-		(window as unknown as Record<string, unknown>).piDesktop = { isDesktop: true };
-		// 即使宿主桥在（桌面壳里 __piWebUiHost 是存在的），也不该去等页面桥
-		installHost(async () => {
-			throw new Error("should not be called in desktop shell");
-		});
-		const status = await queryBrowserControl();
-		expect(status.available).toBe(false);
-		expect(status.desktop).toBe(true);
-		expect(status.pages).toEqual([]);
-		expect(status.error).toContain("桌面版");
-	});
-
 	it("返回体脏（pages 不是数组）→ 当成没有页面，不炸", async () => {
 		installHost(async () => ({ ok: true, result: { installed: true, pages: "nope" } }));
 		const status = await queryBrowserControl();

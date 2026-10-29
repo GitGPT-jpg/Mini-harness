@@ -5,7 +5,6 @@ import { LanguageProvider } from "./i18n";
 import "./styles.css";
 import "highlight.js/styles/github-dark.css";
 import { applyTheme, loadTheme } from "./theme";
-import { setupDesktopWindowDecorations } from "./desktop";
 import { initAuthToken } from "./auth-token";
 import { installScrollbarGutterVar } from "./scrollbar-gutter";
 import { appBase } from "./base-url";
@@ -88,8 +87,6 @@ initAuthToken();
 // Apply the persisted theme before first render so there's no flash of the
 // wrong palette. The full stylesheet swap happens via an injected <link>.
 applyTheme(loadTheme());
-// 桌面端初始化沉浸式标题栏窗口装饰与避让
-setupDesktopWindowDecorations();
 // 首帧前实测滚动条宽（scrollbar-gutter 预留 gutter 的宽度）→ 宽屏消息列与
 // 输入列的对齐补偿变量 --msgs-gutter，见 scrollbar-gutter.ts。
 installScrollbarGutterVar();

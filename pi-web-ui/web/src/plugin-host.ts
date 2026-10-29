@@ -47,7 +47,6 @@
 import type { AppSend } from "./app-globals";
 import { getCostCurrencySymbol, registerCostFormatter, setCostCurrencySymbol, type CostFormatter } from "./cost-format";
 import { composeToComposer, isComposerReady, type ComposerPayload } from "./composer-bridge";
-import { isDesktopShell } from "./desktop";
 import type { UiPluginCatalogEntry } from "./types";
 import { randomUuid } from "./uuid";
 
@@ -817,15 +816,6 @@ export function createPluginHostApi(deps: PluginHostDeps): PluginHostApi {
 		async pageCall(opts) {
 			const op = String(opts?.op ?? "").trim();
 			if (!op) return { ok: false, error: "pageCall 需要一个动作名（op）" };
-			// 桌面壳里没有 Chrome 扩展运行时，window.__piBridge 永远不会出现 ——
-			// 别让模型干等 3 秒桥超时，直接告诉它换路（改用网页版）。
-			if (isDesktopShell()) {
-				return {
-					ok: false,
-					error:
-						"桌面版（Electron 外壳）不支持 browser_page：窗口里没有 Chrome 扩展运行时。请让用户改用系统浏览器打开同一个 pi-web-ui 地址（网页版）再试。/ The desktop app cannot run browser_page (no Chrome extension runtime); ask the user to open the same pi-web-ui address in a regular browser instead.",
-				};
-			}
 			const bridge = await waitForPageBridge(deps.bridgeWaitMs ?? 3000);
 			if (!bridge) {
 				return {
