@@ -575,6 +575,25 @@ try {
     `\t\t<style id="pi-loop-modes-style">\n` +
     `\t\t\t.mh-code-loop-btn{align-self:center;display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 9px;margin-left:6px;font-size:12px;border-radius:6px;cursor:pointer;color:#c4b5fd;background:rgba(168,85,247,.12);border:1px solid rgba(168,85,247,.45);white-space:nowrap;}\n` +
     `\t\t\t.mh-code-loop-btn:hover{background:rgba(168,85,247,.22);color:#ddd6fe;}\n` +
+    `\t\t\t.goalbar-collapsed.mh-loop-tabs{display:flex!important;gap:8px!important;width:100%!important;align-items:stretch!important;}\n` +
+    `\t\t\t.goalbar-collapsed.mh-loop-tabs .goalbar-hint{flex:1;height:auto!important;min-height:46px;display:flex!important;flex-direction:column!important;align-items:flex-start!important;justify-content:center!important;gap:2px;padding:7px 11px!important;border-radius:10px!important;background:rgba(21,24,30,.96)!important;border:1px solid #2b313b!important;color:#c4b5fd!important;font-size:12.5px!important;font-weight:700!important;box-sizing:border-box;}\n` +
+    `\t\t\t.goalbar-collapsed.mh-loop-tabs .goalbar-hint:hover{border-color:rgba(168,85,247,.65)!important;background:rgba(168,85,247,.10)!important;}\n` +
+    `\t\t\t.goalbar-collapsed.mh-loop-tabs .goalbar-hint svg{display:none;}\n` +
+    `\t\t\t.goalbar-collapsed.mh-loop-tabs .goalbar-hint::after{content:"AI 自己判断完成，开放式任务";font-size:10.5px;font-weight:400;color:#7f8897;}\n` +
+    `\t\t\t.mh-loop-tabs{display:flex;gap:8px;box-sizing:border-box;}\n` +
+    `\t\t\t.mh-loop-tab{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;align-items:flex-start;padding:7px 11px;border-radius:10px;cursor:pointer;background:rgba(21,24,30,.94);backdrop-filter:blur(6px);border:1px solid #2b313b;color:#e7e9ee;text-align:left;transition:border-color .15s,background .15s;}\n` +
+    `\t\t\t.mh-loop-tab:hover{background:rgba(168,85,247,.10);border-color:rgba(168,85,247,.6);}\n` +
+    `\t\t\t.mh-loop-tab .t{font-size:12.5px;font-weight:700;line-height:1.3;}\n` +
+    `\t\t\t.mh-loop-tab .d{font-size:10.5px;color:#7f8897;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;}\n` +
+    `\t\t\t.mh-loop-tab.llm .t{color:#c4b5fd;}\n` +
+    `\t\t\t.mh-loop-tab.code .t{color:#7dd3fc;}\n` +
+    `\t\t\t.mh-loop-tab.task .t{color:#9aa3b2;}\n` +
+    `\t\t\t.mh-loop-tab.llm .t::before{content:"◎ ";}\n` +
+    `\t\t\t.mh-loop-tab.code .t::before{content:"⌘ ";}\n` +
+    `\t\t\t.mh-loop-tab.task .t::before{content:"▤ ";}\n` +
+    `\t\t\t.mh-quick-actions{display:flex;gap:6px;align-items:center;margin-left:6px;}\n` +
+    `\t\t\t.mh-quick-actions button{font-size:11.5px;border-radius:999px;padding:2px 10px;cursor:pointer;color:#c4b5fd;background:rgba(168,85,247,.12);border:1px solid rgba(168,85,247,.45);}\n` +
+    `\t\t\t.mh-quick-actions button:hover{background:rgba(168,85,247,.24);}\n` +
     `\t\t\t.mh-llm-hint{font-size:11px;color:#7f8897;padding:6px 2px 0;line-height:1.5;}\n` +
     `\t\t\t.goalbar-active.wizard{position:relative;overflow:hidden;}\n` +
     `\t\t\t.goalbar-active.wizard::after{content:"";position:absolute;left:-45%;bottom:0;height:2px;width:45%;border-radius:2px;background:linear-gradient(90deg,transparent,#a855f7,#c084fc,transparent);animation:mhWizSweep 1.7s linear infinite;}\n` +
@@ -628,9 +647,16 @@ try {
     `\t\t<script id="pi-loop-modes-script">\n` +
     `\t\t(function(){try{\n` +
     `\t\t\tfunction replaceText(root,from,to){try{var w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,null,false),n;while(n=w.nextNode()){if(n.nodeValue&&n.nodeValue.indexOf(from)!==-1)n.nodeValue=n.nodeValue.split(from).join(to);}}catch(e){}}\n` +
-    `\t\t\t// LLM loop（pi 目标模式 2.0）里审查者就是主对话本身，没有独立的评审模型配置；\n` +
-    `\t\t\t// 这里补一个「评审模型」胶囊：显示主对话当前模型，点击打开输入框下方的模型选择器去切换。\n` +
+    `\t\t\t// LLM loop（pi 目标模式 2.0）里审查者就是主对话本身，没有独立的评审模型配置；\n` +    `\t\t\t// 这里补一个「评审模型」胶囊：显示主对话当前模型，点击打开输入框下方的模型选择器去切换。\n` +
     `\t\t\tfunction composerModelBtn(){return document.querySelector('.composer-tools-left .dropdown.left > button.chip');}\n` +
+    `\t\t\tfunction ensureQuickActions(slot){\n` +
+    `\t\t\t\tvar opts=slot.querySelector('.goalbar-opts');if(!opts||opts.querySelector('.mh-quick-actions'))return;\n` +
+    `\t\t\t\tvar q=document.createElement('div');q.className='mh-quick-actions';\n` +
+    `\t\t\t\tq.innerHTML='<button type="button" title="启动受控代码 Loop（validator 门禁）">代码 loop</button><button type="button" title="查看 Loop 进度、工具调用，暂停/继续">任务台</button>';\n` +
+    `\t\t\t\tq.children[0].addEventListener('click',function(e){e.stopPropagation();openModal();});\n` +
+    `\t\t\t\tq.children[1].addEventListener('click',function(e){e.stopPropagation();if(window.__mhOpenTask)window.__mhOpenTask();});\n` +
+    `\t\t\t\topts.appendChild(q);\n` +
+    `\t\t\t}\n` +
     `\t\t\tfunction ensureReviewChip(slot){\n` +
     `\t\t\t\tvar opts=slot.querySelector('.goalbar-opts');if(!opts)return;\n` +
     `\t\t\t\tvar mb=composerModelBtn(),name=mb?((mb.textContent||'').trim()||'—'):'—';\n` +
@@ -670,6 +696,7 @@ try {
     `\t\t\t\t\t\t\t}\n` +
     `\t\t\t\t\t\t}\n` +
     `\t\t\t\t\t\tensureReviewChip(slot);\n` +
+    `\t\t\t\t\t\tensureQuickActions(slot);\n` +
     `\t\t\t\t\t\tif(!slot.querySelector('.goalbar')){slot.querySelectorAll('.mh-llm-hint').forEach(function(h){h.remove();});}\n` +
     `\t\t\t\t\t\tif(slot.querySelector('.goalbar')&&!slot.querySelector('.mh-llm-hint:not(.mh-llm-same)')){\n` +
     `\t\t\t\t\t\t\tvar d=document.createElement('div');d.className='mh-llm-hint';d.textContent='LLM loop：由 AI 自己判断是否完成，可能提前结束；需要严格验收请点旁边的「代码 loop」。';\n` +
@@ -829,16 +856,20 @@ try {
     `\t\t\t}\n` +
     `\t\t\tfunction ensureBtn(){\n` +
     `\t\t\t\ttry{\n` +
-    `\t\t\t\t\tvar slot=document.querySelector('.goalbar-slot');\n` +
-    `\t\t\t\t\tif(!slot)return;\n` +
-    `\t\t\t\t\tif(slot.querySelector('.mh-code-loop-btn'))return;\n` +
+    `\t\t\t\t\tvar slot=document.querySelector('.goalbar-slot');if(!slot)return;\n` +
+    `\t\t\t\t\t// 原生折叠行是悬浮在输入框上方的容器：把它变成三栏并列入口\n` +
     `\t\t\t\t\tvar row=slot.querySelector('.goalbar-collapsed')||slot;\n` +
-    `\t\t\t\t\tvar btn=document.createElement('button');btn.type='button';btn.className='mh-code-loop-btn';btn.textContent='代码 loop';btn.title='启动受控代码 Loop（自动验证，可断点续跑）';\n` +
-    `\t\t\t\t\tbtn.addEventListener('click',openModal);\n` +
-    `\t\t\t\t\trow.appendChild(btn);\n` +
-    `\t\t\t\t\tvar tb=document.createElement('button');tb.type='button';tb.className='mh-code-loop-btn mh-task-btn';tb.textContent='任务台';tb.title='查看 Loop 进度与工具调用，可暂停/继续';\n` +
-    `\t\t\t\t\ttb.addEventListener('click',function(){if(window.__mhOpenTask)window.__mhOpenTask();});\n` +
-    `\t\t\t\t\trow.appendChild(tb);\n` +
+    `\t\t\t\t\trow.classList.add('mh-loop-tabs');\n` +
+    `\t\t\t\t\tvar expanded=!!slot.querySelector('.goalbar');\n` +
+    `\t\t\t\t\trow.querySelectorAll('.mh-loop-tab').forEach(function(b){b.style.display=expanded?'none':'';});\n` +
+    `\t\t\t\t\tif(expanded||row.querySelector('.mh-loop-tab'))return;\n` +
+    `\t\t\t\t\tvar code=document.createElement('button');code.type='button';code.className='mh-loop-tab code';\n` +
+    `\t\t\t\t\tcode.innerHTML='<span class="t">代码 loop</span><span class="d">validator 门禁，不过自动重试</span>';\n` +
+    `\t\t\t\t\tcode.addEventListener('click',function(e){e.stopPropagation();openModal();});\n` +
+    `\t\t\t\t\tvar task=document.createElement('button');task.type='button';task.className='mh-loop-tab task';\n` +
+    `\t\t\t\t\ttask.innerHTML='<span class="t">任务台</span><span class="d">进度 · 工具调用 · 暂停</span>';\n` +
+    `\t\t\t\t\ttask.addEventListener('click',function(e){e.stopPropagation();if(window.__mhOpenTask)window.__mhOpenTask();});\n` +
+    `\t\t\t\t\trow.appendChild(code);row.appendChild(task);\n` +
     `\t\t\t\t}catch(e){}\n` +
     `\t\t\t}\n` +
     `\t\t\tfunction tick(){relabel();ensureBtn();}\n` +
