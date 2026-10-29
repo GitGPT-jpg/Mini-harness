@@ -198,7 +198,7 @@ try {
   const anchor = 'app.get("/api/attachment/:hash", async (req, res) => {';
   const route =
     `// ${runMarker} 返回所有活跃/近期运行的公开状态（round/stage/verdict），仅供前端状态条轮询。\n` +
-    `async function __mhCollectRuns() {\n` +
+    `async function __mhCollectRuns(req) {\n` +
     `  const fsM = await import("node:fs");\n` +
     `  const pathM = await import("node:path");\n` +
     `  const osM = await import("node:os");\n` +
@@ -213,7 +213,8 @@ try {
     `    try { st = JSON.parse(fsM.readFileSync(p, "utf8")); } catch { continue; }\n` +
     `    const t = Date.parse(st.updatedAt || 0) || 0;\n` +
     `    const active = st.status === "active";\n` +
-    `    if (!active && Date.now() - t >= 5 * 60 * 1000) continue;\n` +
+    `    const win = (req.query && req.query.history) ? 24 * 60 * 60 * 1000 : 5 * 60 * 1000;\n` +
+    `    if (!active && Date.now() - t >= win) continue;\n` +
     `    const ws = String(st.baseWorkspace || st.workspace || "");\n` +
     `    out.push({\n` +
     `      runId: st.runId || id,\n` +
@@ -305,11 +306,11 @@ try {
     `});\n` +
     `app.get("/api/mini-harness/runs", async (req, res) => {\n` +
     `  if (!tokenOk(req)) { res.status(403).end("unauthorized"); return; }\n` +
-    `  try { res.json({ runs: await __mhCollectRuns() }); } catch (e) { res.status(500).end(String(e)); }\n` +
+    `  try { res.json({ runs: await __mhCollectRuns(req) }); } catch (e) { res.status(500).end(String(e)); }\n` +
     `});\n` +
     `app.get("/api/mini-harness/runs/latest", async (req, res) => {\n` +
     `  if (!tokenOk(req)) { res.status(403).end("unauthorized"); return; }\n` +
-    `  try { res.json((await __mhCollectRuns())[0] || null); } catch (e) { res.status(500).end(String(e)); }\n` +
+    `  try { res.json((await __mhCollectRuns(req))[0] || null); } catch (e) { res.status(500).end(String(e)); }\n` +
     `});\n\n`;
   const markIdx = idx2.indexOf("// " + runMarker);
   const anchorIdx = idx2.indexOf(anchor);
@@ -652,9 +653,8 @@ try {
     `\t\t\tfunction ensureQuickActions(slot){\n` +
     `\t\t\t\tvar opts=slot.querySelector('.goalbar-opts');if(!opts||opts.querySelector('.mh-quick-actions'))return;\n` +
     `\t\t\t\tvar q=document.createElement('div');q.className='mh-quick-actions';\n` +
-    `\t\t\t\tq.innerHTML='<button type="button" title="启动受控代码 Loop（validator 门禁）">代码 loop</button><button type="button" title="查看 Loop 进度、工具调用，暂停/继续">任务台</button>';\n` +
+    `\t\t\t\tq.innerHTML='<button type="button" title="启动受控代码 Loop（validator 门禁）">代码 loop</button>';\n` +
     `\t\t\t\tq.children[0].addEventListener('click',function(e){e.stopPropagation();openModal();});\n` +
-    `\t\t\t\tq.children[1].addEventListener('click',function(e){e.stopPropagation();if(window.__mhOpenTask)window.__mhOpenTask();});\n` +
     `\t\t\t\topts.appendChild(q);\n` +
     `\t\t\t}\n` +
     `\t\t\tfunction ensureReviewChip(slot){\n` +
@@ -866,10 +866,7 @@ try {
     `\t\t\t\t\tvar code=document.createElement('button');code.type='button';code.className='mh-loop-tab code';\n` +
     `\t\t\t\t\tcode.innerHTML='<span class="t">代码 loop</span><span class="d">validator 门禁，不过自动重试</span>';\n` +
     `\t\t\t\t\tcode.addEventListener('click',function(e){e.stopPropagation();openModal();});\n` +
-    `\t\t\t\t\tvar task=document.createElement('button');task.type='button';task.className='mh-loop-tab task';\n` +
-    `\t\t\t\t\ttask.innerHTML='<span class="t">任务台</span><span class="d">进度 · 工具调用 · 暂停</span>';\n` +
-    `\t\t\t\t\ttask.addEventListener('click',function(e){e.stopPropagation();if(window.__mhOpenTask)window.__mhOpenTask();});\n` +
-    `\t\t\t\t\trow.appendChild(code);row.appendChild(task);\n` +
+    `\t\t\t\t\trow.appendChild(code);\n` +
     `\t\t\t\t}catch(e){}\n` +
     `\t\t\t}\n` +
     `\t\t\tfunction tick(){relabel();ensureBtn();}\n` +
@@ -1052,6 +1049,12 @@ try {
     `\t\t\t#mh-task .tk-btn.danger{background:transparent;border-color:#f87171;color:#f87171;}\n` +
     `\t\t\t#mh-task .tk-btn:disabled{opacity:.4;cursor:not-allowed;}\n` +
     `\t\t\t#mh-task .tk-empty{color:#7f8897;font-size:12.5px;line-height:1.7;padding:10px 0;}\n` +
+    `\t\t\t#mh-task .tk-cat{display:flex;flex-direction:column;gap:6px;}\n` +
+    `\t\t\t#mh-task .tk-cat-item{display:flex;align-items:center;gap:8px;font-size:12px;padding:7px 10px;border-radius:8px;background:#11141a;border:1px solid #262c35;color:#9aa3b2;}\n` +
+    `\t\t\t#mh-task .tk-cat-item b{color:#c4b5fd;font-size:11.5px;flex:none;}\n` +
+    `\t\t\t#mh-task .tk-cat-item span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}\n` +
+    `\t\t\t#mh-task .tk-cat-item[data-on="1"]{border-color:rgba(168,85,247,.55);color:#e7e9ee;}\n` +
+    `\t\t\t#mh-task .tk-cat-item[data-on="1"] b::after{content:" · 运行中";color:#34d399;font-weight:400;}\n` +
     `\t\t</style>\n` +
     `\t\t<script id="mh-task-script">\n` +
     `\t\t(function(){try{\n` +
@@ -1067,14 +1070,28 @@ try {
     `\t\t\tfunction open(){var p=el();p.classList.add('open');render();pollEvents();if(!evTimer)evTimer=setInterval(function(){if(p.classList.contains('open'))pollEvents();},1500);timer=setInterval(render,1500);}\n` +
     `\t\t\tfunction close(){var p=document.getElementById('mh-task');if(p)p.classList.remove('open');clearInterval(timer);timer=null;clearInterval(evTimer);evTimer=null;}\n` +
     `\t\t\twindow.__mhOpenTask=open;window.__mhTaskTick=function(){var p=document.getElementById('mh-task');if(p&&p.classList.contains('open'))render();};\n` +
+    `\t\t\t// 顶栏入口（与「后台任务」并列）：任务台不是 loop 入口，放在导航层\n` +
+    `\t\t\tfunction ensureTopBtn(){\n` +
+    `\t\t\t\ttry{var flow=document.querySelector('.topbar-flow');if(!flow)return;if(flow.querySelector('.mh-task-top'))return;\n` +
+    `\t\t\t\t\tvar b=document.createElement('button');b.type='button';b.className='bar-item chip mh-task-top';b.title='任务台：LLM loop / 代码 loop 目录';\n` +
+    `\t\t\t\t\tb.innerHTML='<span style="font-size:12px;margin-right:2px">▤</span><span>任务台</span>';\n` +
+    `\t\t\t\t\tb.addEventListener('click',open);\n` +
+    `\t\t\t\t\tvar anchor=[].slice.call(flow.querySelectorAll('button')).filter(function(x){return /后台任务/.test(x.textContent||'');})[0];\n` +
+    `\t\t\t\t\tif(anchor)flow.insertBefore(b,anchor);else flow.appendChild(b);\n` +
+    `\t\t\t\t}catch(e){}\n` +
+    `\t\t\t}\n` +
+    `\t\t\tsetTimeout(ensureTopBtn,800);if(!window.__mhTopTimer)window.__mhTopTimer=setInterval(function(){if(!document.hidden)ensureTopBtn();},3000);\n` +
     `\t\t\tfunction phaseOf(g){var ph=String(g.phase||'');var st=String(g.status||'');if(/暂停/.test(st)||ph==='paused')return 'paused';if(ph==='reviewing')return 'reviewing';if(ph==='executing')return 'executing';if(ph==='done'||/完成|通过/.test(st))return 'done';if(ph==='blocked'||ph==='exhausted')return 'blocked';if(g.wizard&&g.wizard.active)return 'surveying';return 'idle';}\n` +
     `\t\t\tfunction render(){var p=document.getElementById('mh-task');if(!p)return;var g=window.__mhGoal;var body=p.querySelector('.tk-body'),acts=p.querySelector('.tk-acts');\n` +
+    `\t\t\t\tvar cat='<div class="tk-sec"><span>Loop 目录</span></div><div class="tk-cat">'+\n` +
+    `\t\t\t\t\t'<div class="tk-cat-item"'+(g&&g.goal?' data-on="1"':'')+'><b>LLM loop</b><span>'+esc(g&&g.goal?String(g.status||g.phase||''):'当前对话没有进行中的目标')+'</span></div>'+\n` +
+    `\t\t\t\t\t'<div class="tk-cat-item"><b>代码 loop</b><span id="mh-tk-code-n">加载中…</span></div></div>';\n` +
     `\t\t\t\tvar runsHtml='<div class="tk-sec"><span>代码 loop 运行</span></div><div id="mh-tk-runs"><div class="tk-empty">无</div></div>';\n` +
-    `\t\t\t\tif(!g||(!g.goal&&!(g.wizard&&g.wizard.active))){body.innerHTML='<div class="tk-empty">当前没有进行中的 LLM loop。<br>在目标条里开始一个，或点「代码 loop」跑受控任务。</div>'+runsHtml;acts.innerHTML='';sessionId=null;fetchRuns();return;}\n` +
+    `\t\t\t\tif(!g||(!g.goal&&!(g.wizard&&g.wizard.active))){body.innerHTML=cat+runsHtml;acts.innerHTML='';sessionId=null;fetchRuns();return;}\n` +
     `\t\t\t\tvar ph=phaseOf(g);var steps=[['调研','surveying'],['执行','executing'],['审查','reviewing'],['完成','done']];var idx={idle:-1,surveying:0,executing:1,reviewing:2,done:3,blocked:3,paused:-1}[ph];if(idx==null)idx=-1;\n` +
     `\t\t\t\tvar stepHtml='';steps.forEach(function(s,i){stepHtml+='<div class="tk-step '+(idx>i?'done':(idx===i?'on':''))+'">'+s[0]+'</div>';});\n` +
     `\t\t\t\tvar rounds=(g.round||0)+'/'+((g.maxRounds>0)?g.maxRounds:'不限');\n` +
-    `\t\t\t\tbody.innerHTML='<div class="tk-goal">'+esc(g.goal||g.wizard&&g.wizard.draft||'')+'</div>'+\n` +
+    `\t\t\t\tbody.innerHTML=cat+'<div class="tk-goal">'+esc(g.goal||g.wizard&&g.wizard.draft||'')+'</div>'+\n` +
     `\t\t\t\t\t'<div class="tk-meta"><span class="tk-chip">'+esc(g.status||ph)+'</span><span class="tk-chip">轮次 '+rounds+'</span>'+(g.execModel?'<span class="tk-chip">执行 '+esc(g.execModel.split('/').pop())+'</span>':'')+(g.reviewModel?'<span class="tk-chip">评审 '+esc(g.reviewModel.split('/').pop())+'</span>':'')+'</div>'+\n` +
     `\t\t\t\t\t'<div class="tk-steps">'+stepHtml+'</div>'+\n` +
     `\t\t\t\t\t'<div class="tk-sec"><span>工具调用</span><span id="mh-tk-count"></span></div><div id="mh-tk-events"><div class="tk-empty">等待执行者动作…</div></div>'+runsHtml;\n` +
@@ -1087,8 +1104,8 @@ try {
     `\t\t\t}\n` +
     `\t\t\tvar runsBusy=false;\n` +
     `\t\t\tfunction fetchRuns(){var box=document.getElementById('mh-tk-runs');if(!box||runsBusy)return;runsBusy=true;var t=tok();\n` +
-    `\t\t\t\tfetch('/api/mini-harness/runs'+(t?('?token='+encodeURIComponent(t)):''),{headers:t?{'x-pi-token':t}:{}}).then(function(x){return x.ok?x.json():null;}).then(function(j){\n` +
-    `\t\t\t\t\tvar list=(j&&Array.isArray(j.runs))?j.runs:[];if(!list.length){box.innerHTML='<div class="tk-empty">无</div>';return;}\n` +
+    `\t\t\t\tfetch('/api/mini-harness/runs?history=1'+(t?('&token='+encodeURIComponent(t)):''),{headers:t?{'x-pi-token':t}:{}}).then(function(x){return x.ok?x.json():null;}).then(function(j){\n` +
+    `\t\t\t\t\tvar list=(j&&Array.isArray(j.runs))?j.runs:[];var n=document.getElementById('mh-tk-code-n');if(n){var act=list.filter(function(r){return r.status==='active';}).length;n.textContent=list.length?(act+' 个运行中 / 共 '+list.length+' 个'):'无运行记录';}if(!list.length){box.innerHTML='<div class="tk-empty">无</div>';return;}\n` +
     `\t\t\t\t\tvar h='';list.forEach(function(r){var v=r.lastVerdict==='pass'?'通过':(r.lastVerdict==='fail'?'未通过':'—');var done=r.status!=='active';h+='<div class="tk-ev '+(done?'ok':'run')+'"><span class="nm">'+esc(r.project||'未知')+'</span> <span class="ar">第 '+r.round+'/'+r.maxRounds+' 轮 · '+esc(r.stage||'')+'</span><div class="out">'+(done?'已结束':'运行中')+' · 校验 '+v+'</div></div>';});box.innerHTML=h;\n` +
     `\t\t\t\t}).catch(function(){}).then(function(){runsBusy=false;});\n` +
     `\t\t\t}\n` +
