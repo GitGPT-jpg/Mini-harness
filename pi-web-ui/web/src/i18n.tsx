@@ -728,7 +728,6 @@ export const zh = {
 	dshNoReviewModel: "DSH 无独立审查模型：目标由模型自判定完成/受阻，轮次上限即自动迭代次数",
 
 	/* sound settings */
-	enableSound: "启用声音",
 	preview: "试听",
 	volume: "音量",
 	/* desktop / OS (PWA) notifications */
@@ -762,16 +761,6 @@ export const zh = {
 	notifyApprovalTitle: "等待审批",
 	notifyApprovalBody: "AI 请求执行工具，等待你的批准。",
 	notifyApprovalBodyTool: "AI 想执行 {tool}，等待你的批准。",
-	"sound.question": "问卷弹出",
-	"sound.question.desc": "ask_user_question 出现时",
-	"sound.done": "回复结束",
-	"sound.done.desc": "智能体完成一轮回答时",
-	"sound.start": "回复开始",
-	"sound.start.desc": "智能体开始新一轮时",
-	"sound.error": "出错",
-	"sound.error.desc": "出现错误提示时",
-	"sound.approval": "等待审批",
-	"sound.approval.desc": "AI 请求执行工具等待批准时",
 
 	/* sound & voice settings (TTS) */
 	settingsNotifyTab: "通知",
@@ -3063,7 +3052,6 @@ export const en: Record<keyof typeof zh, string> = {
 	dshNoReviewModel:
 		"DSH has no separate reviewer model — the model self-certifies goal completion; max rounds = auto-iteration count",
 	/* sound settings */
-	enableSound: "Enable sound",
 	preview: "Preview",
 	volume: "Volume",
 	/* desktop / OS (PWA) notifications */
@@ -3098,16 +3086,6 @@ export const en: Record<keyof typeof zh, string> = {
 	notifyApprovalTitle: "Approval needed",
 	notifyApprovalBody: "The agent wants to run a tool and needs your approval.",
 	notifyApprovalBodyTool: "The agent wants to run {tool} and needs your approval.",
-	"sound.question": "Question popup",
-	"sound.question.desc": "When ask_user_question appears",
-	"sound.done": "Reply finished",
-	"sound.done.desc": "When the agent finishes a turn",
-	"sound.start": "Reply started",
-	"sound.start.desc": "When the agent starts a new turn",
-	"sound.error": "Error",
-	"sound.error.desc": "When an error notice appears",
-	"sound.approval": "Approval needed",
-	"sound.approval.desc": "When the agent requests tool approval",
 
 	/* sound & voice settings (TTS) */
 	settingsNotifyTab: "Notifications",
