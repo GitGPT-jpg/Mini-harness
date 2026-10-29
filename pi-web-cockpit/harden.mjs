@@ -613,13 +613,12 @@ try {
     `\t\t<style id="pi-loop-modes-style">\n` +
     `\t\t\t.mh-code-loop-btn{align-self:center;display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 9px;margin-left:6px;font-size:12px;border-radius:6px;cursor:pointer;color:#c4b5fd;background:rgba(168,85,247,.12);border:1px solid rgba(168,85,247,.45);white-space:nowrap;}\n` +
     `\t\t\t.mh-code-loop-btn:hover{background:rgba(168,85,247,.22);color:#ddd6fe;}\n` +
-    `\t\t\t#mh-loop-dock{position:fixed;z-index:2147483520;display:flex;gap:8px;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;}\n` +
-    `\t\t\t.mh-loop-card{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:1px;padding:5px 11px;border-radius:10px;background:#15181e;border:1px solid #2b313b;color:#e7e9ee;cursor:pointer;text-align:left;transition:border-color .15s,background .15s;}\n` +
-    `\t\t\t.mh-loop-card:hover{background:rgba(168,85,247,.10);border-color:rgba(168,85,247,.6);}\n` +
-    `\t\t\t.mh-loop-card .t{font-size:12.5px;font-weight:700;line-height:1.25;}\n` +
-    `\t\t\t.mh-loop-card .d{font-size:10.5px;color:#7f8897;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;}\n` +
-    `\t\t\t.mh-loop-card.llm .t{color:#c4b5fd;}\n` +
-    `\t\t\t.mh-loop-card.code .t{color:#7dd3fc;}\n` +
+    `\t\t\t#mh-loop-dock{position:fixed;left:50%;transform:translateX(-50%);z-index:2147483520;display:flex;gap:10px;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;}\n` +
+    `\t\t\t.mh-loop-card{height:24px;padding:0 12px;border-radius:999px;background:rgba(22,25,31,.45);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.08);color:#c9cfda;font-size:12px;line-height:22px;cursor:pointer;transition:background .15s,border-color .15s,color .15s,opacity .15s;}\n` +
+    `\t\t\t.mh-loop-card:hover{background:rgba(168,85,247,.12);border-color:rgba(168,85,247,.55);color:#e9e3ff;}\n` +
+    `\t\t\t.mh-loop-card:active{background:transparent;opacity:.75;}\n` +
+    `\t\t\t.mh-loop-card.llm{color:#c4b5fd;}\n` +
+    `\t\t\t.mh-loop-card.code{color:#7dd3fc;}\n` +
     `\t\t\t.mh-quick-actions{display:flex;gap:6px;align-items:center;margin-left:6px;}\n` +
     `\t\t\t.mh-quick-actions button{font-size:11.5px;border-radius:999px;padding:2px 10px;cursor:pointer;color:#c4b5fd;background:rgba(168,85,247,.12);border:1px solid rgba(168,85,247,.45);}\n` +
     `\t\t\t.mh-quick-actions button:hover{background:rgba(168,85,247,.24);}\n` +
@@ -892,16 +891,15 @@ try {
     `\t\t\t\t\tvar native=row.querySelector('.goalbar-hint');if(native&&native.style.opacity!=='0')native.style.opacity='0';\n` +
     `\t\t\t\t\tvar d=document.getElementById('mh-loop-dock');\n` +
     `\t\t\t\t\tif(!d){d=document.createElement('div');d.id='mh-loop-dock';\n` +
-    `\t\t\t\t\t\td.innerHTML='<button type="button" class="mh-loop-card llm"><span class="t">LLM loop</span><span class="d">AI 自己判断完成，开放式任务</span></button><button type="button" class="mh-loop-card code"><span class="t">代码 loop</span><span class="d">validator 门禁，不过自动重试</span></button>';\n` +
+    `\t\t\t\t\t\td.innerHTML='<button type="button" class="mh-loop-card llm">LLM loop</button><button type="button" class="mh-loop-card code">代码 loop</button>';\n` +
     `\t\t\t\t\t\td.querySelector('.llm').addEventListener('click',function(){var h=document.querySelector('.goalbar-hint');if(h)h.click();});\n` +
     `\t\t\t\t\t\td.querySelector('.code').addEventListener('click',function(e){e.stopPropagation();openModal();});\n` +
     `\t\t\t\t\t\tdocument.body.appendChild(d);}\n` +
     `\t\t\t\t\tvar expanded=false;var r=row.getBoundingClientRect();\n` +
     `\t\t\t\t\tif(expanded||r.width<60){d.style.display='none';return;}\n` +
     `\t\t\t\t\td.style.display='flex';\n` +
-    `\t\t\t\t\tvar ib=document.querySelector('.inputbar');var cr=ib?ib.getBoundingClientRect():r;\n` +
-    `\t\t\t\t\tvar bottom=Math.round(window.innerHeight-r.top+6),left=Math.round(cr.left),w=Math.round(cr.width);\n` +
-    `\t\t\t\t\tif(d.__b!==bottom||d.__l!==left||d.__w!==w){d.__b=bottom;d.__l=left;d.__w=w;d.style.bottom=bottom+'px';d.style.left=left+'px';d.style.width=w+'px';}\n` +
+    `\t\t\t\t\tvar bottom=Math.round(window.innerHeight-r.top+4);\n` +
+    `\t\t\t\t\tif(d.__b!==bottom){d.__b=bottom;d.style.bottom=bottom+'px';}\n` +
     `\t\t\t\t}catch(e){}\n` +
     `\t\t\t}\n` +
     `\t\t\tfunction tick(){relabel();ensureBtn();}\n` +
