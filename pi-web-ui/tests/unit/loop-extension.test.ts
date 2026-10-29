@@ -18,7 +18,8 @@ import { describe, it, expect } from "vitest";
 // ROOT 在模块加载时读环境变量 —— 必须在 import 之前指到临时目录
 const RUNS_ROOT = mkdtempSync(join(tmpdir(), "loop-ext-test-"));
 process.env.MINI_HARNESS_RUNTIME_ROOT = RUNS_ROOT;
-const { createLoopExtension } = await import("../../server/loop/extension.js");
+const ext = await import("../../server/loop/extension.js");
+const { createLoopExtension, setLoopEventReporter, markLoopRequestPending, takePendingLoopRequest } = ext;
 
 type ToolEntry = { name: string; execute: (id: string, p: any, s: any, u: any, ctx: any) => Promise<any> };
 
@@ -276,5 +277,61 @@ describe("mini-harness loop extension", () => {
 		const st = loadRun(runId);
 		expect(st.status).toBe("done"); // validator 已通过即达成
 		expect(journalEvents(runId)).toContain("reviewer-degraded");
+	});
+
+	it("run-state 事件：每次状态落盘都上报（事件驱动替代轮询）", async () => {
+		const events: any[] = [];
+		setLoopEventReporter((e) => events.push(e));
+		try {
+			const h = makeHarness(SID());
+			await h.tools.get("loop_start")!.execute("t", { goal: "g", validateCmd: "true" }, undefined, undefined, h.ctx);
+			await h.tools.get("loop_plan")!.execute("t", { plan: "p" }, undefined, undefined, h.ctx);
+			await h.tools.get("loop_done")!.execute("t", { summary: "s" }, undefined, undefined, h.ctx);
+			await h.handlers.get("agent_end")![0](undefined, h.ctx);
+			const states = events.filter((e) => e.type === "run-state").map((e) => e.st.stage);
+			expect(states.length).toBeGreaterThanOrEqual(4); // intake → run → validate → done
+			expect(states[states.length - 1]).toBe("done");
+		} finally {
+			setLoopEventReporter(null);
+		}
+	});
+
+	it("request-failed：模型没调 loop_start 的回合结束 → 明确失败事件（回归#1）", async () => {
+		const sid = SID();
+		const events: any[] = [];
+		setLoopEventReporter((e) => events.push(e));
+		try {
+			const h = makeHarness(sid);
+			markLoopRequestPending(sid, "task-42", "写 DONE");
+			// 模型整个回合都没调 loop_start，直接 agent_end
+			await h.handlers.get("agent_end")![0](undefined, h.ctx);
+			const failed = events.find((e) => e.type === "request-failed");
+			expect(failed).toBeTruthy();
+			expect(failed.taskId).toBe("task-42");
+			expect(failed.goal).toBe("写 DONE");
+			expect(failed.reason).toContain("loop_start");
+			// 挂起请求已被消费：再次 agent_end 不会重复上报
+			await h.handlers.get("agent_end")![0](undefined, h.ctx);
+			expect(events.filter((e) => e.type === "request-failed").length).toBe(1);
+		} finally {
+			setLoopEventReporter(null);
+		}
+	});
+
+	it("loop_start 成功即消费挂起请求（不误报 request-failed）", async () => {
+		const sid = SID();
+		const events: any[] = [];
+		setLoopEventReporter((e) => events.push(e));
+		try {
+			const h = makeHarness(sid);
+			markLoopRequestPending(sid, "task-43", "g");
+			await h.tools.get("loop_start")!.execute("t", { goal: "g", validateCmd: "true" }, undefined, undefined, h.ctx);
+			await h.handlers.get("agent_end")![0](undefined, h.ctx);
+			expect(events.filter((e) => e.type === "request-failed").length).toBe(0);
+			expect(events.some((e) => e.type === "run-state")).toBe(true);
+			expect(takePendingLoopRequest(sid)).toBeNull(); // 已被消费
+		} finally {
+			setLoopEventReporter(null);
+		}
 	});
 });

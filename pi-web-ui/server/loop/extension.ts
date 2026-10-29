@@ -79,6 +79,48 @@ interface LoopState {
 	history: Array<{ round: number; verdict: string; code: number | null; at: string; evidence: string | null }>;
 }
 
+// ---------- 事件上报（服务层接线用：run 状态变化 / 启动请求失败） ----------
+
+/**
+ * Loop 事件，进程内单上报器（服务层经 setLoopEventReporter 注册一次，
+ * 按 st.sessionId 路由到对应会话——扩展本身是每会话一份，上报器是全局的）。
+ *  - run-state：每次状态落盘后上报（事件驱动，替代轮询 state.json）；
+ *  - request-failed：挂起的启动请求在该回合结束时仍未变成 run（模型没调
+ *    loop_start，或调用被拒）——修复「启动后无可见记录/无明确失败态」。
+ */
+export type LoopEvent =
+	| { type: "run-state"; st: LoopState }
+	| { type: "request-failed"; sessionId: string; taskId: string; goal: string; reason: string };
+
+let eventReporter: ((e: LoopEvent) => void) | null = null;
+
+/** 服务层注册全局事件上报器（传 null 注销）。上报器异常不影响运行时。 */
+export function setLoopEventReporter(fn: ((e: LoopEvent) => void) | null) {
+	eventReporter = fn;
+}
+
+function reportEvent(e: LoopEvent) {
+	try {
+		eventReporter?.(e);
+	} catch {}
+}
+
+// 挂起的启动请求：服务层在把启动提示词发进会话**之前**登记（先有记录再有执行），
+// loop_start 成功即消费；回合结束仍是挂起 → 上报 request-failed。
+const pendingRequests = new Map<string, { taskId: string; goal: string; at: string }>();
+
+/** 服务层登记挂起启动请求（按 sessionId；重复登记覆盖旧的）。 */
+export function markLoopRequestPending(sessionId: string, taskId: string, goal: string) {
+	pendingRequests.set(sessionId, { taskId, goal, at: now() });
+}
+
+/** 消费挂起请求（loop_start 成功时用；不存在返回 null）。 */
+export function takePendingLoopRequest(sessionId: string): { taskId: string; goal: string; at: string } | null {
+	const p = pendingRequests.get(sessionId);
+	pendingRequests.delete(sessionId);
+	return p ?? null;
+}
+
 // ---------- 基础工具 ----------
 
 function now() {
@@ -113,6 +155,7 @@ function saveState(st: LoopState) {
 	st.updatedAt = now();
 	fs.mkdirSync(runDir(st.runId), { recursive: true });
 	fs.writeFileSync(statePath(st.runId), JSON.stringify(st, null, 2));
+	reportEvent({ type: "run-state", st });
 }
 
 function journal(st: LoopState, event: string, extra: Record<string, unknown> = {}) {
@@ -941,6 +984,8 @@ export function createLoopExtension() {
 					planner: st.plannerModel,
 					reviewer: st.reviewerModel,
 				});
+				// run 已创建：消费服务层登记的挂起启动请求（该回合结束不再上报 request-failed）
+				takePendingLoopRequest(st.sessionId);
 
 				// 规划：不同家族的 planner 产出可验证的验收条件（失败不阻塞运行，只记录）
 				let plannerNote = "";
@@ -1195,7 +1240,23 @@ export function createLoopExtension() {
 		pi.on("agent_end", async (_event, ctx) => {
 			const c = ctx as unknown as LoopCtx;
 			const st = findActiveRun(c);
-			if (!st || !st.auto || st.status !== "active") {
+			if (!st) {
+				// 修复「启动后无可见记录/无明确失败态」：服务层发启动提示词前会登记挂起请求；
+				// 本回合结束仍没有活跃 run（模型没调 loop_start，或调用被拒）→ 上报明确失败。
+				const sid = sessionIdOf(c);
+				const pending = sid ? takePendingLoopRequest(sid) : null;
+				if (pending) {
+					reportEvent({
+						type: "request-failed",
+						sessionId: sid,
+						taskId: pending.taskId,
+						goal: pending.goal,
+						reason: "模型未在本回合调用 loop_start（或调用被拒）",
+					});
+				}
+				return;
+			}
+			if (!st.auto || st.status !== "active") {
 				return;
 			}
 			if (!["run", "validate"].includes(st.stage)) {
