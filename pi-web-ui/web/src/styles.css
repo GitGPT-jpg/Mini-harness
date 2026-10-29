@@ -16325,7 +16325,7 @@
 	.set-btn {
 		background: none;
 		border: 1px solid var(--border, #3a3f45);
-		color: var(--fg, #ddd);
+		color: var(--text);
 		border-radius: 6px;
 		font-size: 12px;
 		padding: 4px 10px;

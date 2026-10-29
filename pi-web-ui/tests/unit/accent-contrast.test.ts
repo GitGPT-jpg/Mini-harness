@@ -152,7 +152,8 @@ describe("强调色实底的前景对比度", () => {
 
 	it("内置插件不再出现「accent 实底 + 硬编码白字」", () => {
 		const files = walk(PLUGINS_DIR).filter((f) => /\.(mjs|js|cjs|css)$/.test(f));
-		expect(files.length).toBeGreaterThan(50);
+		// 精简发行版：官方 UI 插件已删光（0 个），跳过插件面检查
+		if (files.length === 0) return;
 		const bad: string[] = [];
 		for (const f of files) {
 			if (statSync(f).size > 4_000_000) continue;
@@ -164,14 +165,6 @@ describe("强调色实底的前景对比度", () => {
 		}
 		expect(bad, `插件违规：\n${bad.join("\n")}`).toEqual([]);
 	}, 30_000);
-
-	it("壁纸主题注入的调色板自带 --accent-contrast（accent 近白时必须反色）", () => {
-		const styles = join(PLUGINS_DIR, "wallpaper-engine", "client", "styles.mjs");
-		expect(existsSync(styles)).toBe(true);
-		const src = readFileSync(styles, "utf8");
-		expect(src).toMatch(/accentContrast:\s*"#/);
-		expect(src).toMatch(/--accent-contrast:\s*\$\{pal\.accentContrast/);
-	});
 
 	it(".cwd-choose-btn.primary 具备强调色实底与反色前景，且纯白主题不误伤非实底按钮", () => {
 		const stylesCss = readFileSync(STYLES_PATH, "utf8");

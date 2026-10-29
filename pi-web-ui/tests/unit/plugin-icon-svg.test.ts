@@ -78,21 +78,3 @@ describe("iconSvg 白名单口径", () => {
 		expect(isAllowedIconTag("iframe")).toBe(false);
 	});
 });
-
-describe("vscode-editor 真实图标", () => {
-	const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-	const manifest = JSON.parse(readFileSync(join(root, "plugins", "vscode-editor", "manifest.json"), "utf8")) as {
-		iconSvg?: string;
-	};
-	const catalog = JSON.parse(readFileSync(join(root, "plugins", "catalog.json"), "utf8")) as {
-		id: string;
-		iconSvg?: string;
-	}[];
-	const entry = catalog.find((e) => e.id === "vscode-editor");
-	it("manifest 与 catalog 都有 iconSvg 且两道校验都过", () => {
-		expect(manifest.iconSvg).toBeTruthy();
-		expect(entry?.iconSvg).toBe(manifest.iconSvg);
-		expect(normalizeIconSvg(manifest.iconSvg)).toBe(manifest.iconSvg);
-		expect(sanitizeIconSvg(manifest.iconSvg)).toBeTruthy();
-	});
-});

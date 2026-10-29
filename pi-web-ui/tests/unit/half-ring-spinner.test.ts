@@ -12,7 +12,6 @@ const TOOLCALL_PATH = join(ROOT, "web", "src", "components", "ToolCallBlock.tsx"
 const LEFT_PANEL_PATH = join(ROOT, "web", "src", "components", "LeftPanel.tsx");
 const THEME_FLOW_PATH = join(ROOT, "themes", "flow.css");
 const THEME_WALLPAPER_FLOW_PATH = join(ROOT, "themes", "wallpaper-flow.css");
-const WP_ENGINE_STYLES_PATH = join(ROOT, "plugins", "wallpaper-engine", "client", "styles.mjs");
 
 describe("半圆环转动等待指示器 (HalfRingSpinner)", () => {
 	it("HalfRingSpinner 组件输出标准 180° 半圆弧 SVG 并设置默认 1em 宽高防溢出", () => {
@@ -80,9 +79,5 @@ describe("半圆环转动等待指示器 (HalfRingSpinner)", () => {
 		const wpFlowCss = readThemeCss(THEME_WALLPAPER_FLOW_PATH);
 		expect(wpFlowCss).not.toContain("conv-spin");
 		expect(wpFlowCss).toContain("animation: spin 0.85s linear infinite");
-
-		const wpEngineStyles = readFileSync(WP_ENGINE_STYLES_PATH, "utf8");
-		expect(wpEngineStyles).not.toContain("conv-spin");
-		expect(wpEngineStyles).toContain("animation: spin 0.85s linear infinite");
 	});
 });

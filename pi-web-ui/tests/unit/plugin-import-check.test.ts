@@ -169,7 +169,8 @@ describe("仓库自带插件零越界 / 零缺失", () => {
 			.filter((e) => e.isDirectory())
 			.map((e) => e.name)
 			.filter((id) => existsSync(join(pluginsDir, id, "manifest.json")));
-		expect(ids.length).toBeGreaterThan(5);
+		// 精简发行版：官方 UI 插件已删光（0 个）
+		if (ids.length === 0) return;
 		for (const id of ids) {
 			const { problems } = checkPluginImports(join(pluginsDir, id));
 			expect({ id, problems }).toEqual({ id, problems: [] });

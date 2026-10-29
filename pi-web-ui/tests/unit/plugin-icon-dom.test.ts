@@ -65,23 +65,6 @@ describe("sanitizeIconSvg（jsdom：DOM 分支）", () => {
 		const out = sanitizeIconSvg(ICON_24.replace("<path", '<path fill="javascript:alert(1)"')) ?? "";
 		expect(out).not.toContain("javascript:");
 	});
-
-	it("vscode-editor 真实图标（manifest / catalog 同串）过 sanitize 后仍带 viewBox", () => {
-		const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-		const manifest = JSON.parse(readFileSync(join(root, "plugins", "vscode-editor", "manifest.json"), "utf8")) as {
-			iconSvg?: string;
-		};
-		const catalog = JSON.parse(readFileSync(join(root, "plugins", "catalog.json"), "utf8")) as {
-			id: string;
-			iconSvg?: string;
-		}[];
-		const entry = catalog.find((e) => e.id === "vscode-editor");
-		// 这是本次回归的现场：manifest 与 catalog 必须是同一串，且 viewBox 必须活下来。
-		// 改图标时若换了 viewBox 坐标系（16 → 24），下面这条断言仍成立，界面尺寸也不会再歪。
-		expect(entry?.iconSvg).toBe(manifest.iconSvg);
-		const out = sanitizeIconSvg(manifest.iconSvg) ?? "";
-		expect(out).toMatch(/viewBox="0 0 24 24"/);
-	});
 });
 
 /**
@@ -178,10 +161,11 @@ describe("内置插件统一线条图标", () => {
 	});
 
 	it("sanitize 后不丢任何几何属性（points / ry 等）", () => {
-		const runTrace = manifests.find((m) => m.dir === "run-trace")?.manifest.iconSvg ?? "";
-		expect(runTrace).toContain("polyline");
+		// 精简发行版：官方 UI 插件已删光，用内联样本保留回归语义（白名单必须放过 points/ry）
+		const runTrace = '<svg viewBox="0 0 24 24"><polyline points="1 2 3 4" stroke="currentColor" fill="none"/></svg>';
 		expect(sanitizeIconSvg(runTrace) ?? "").toContain("points=");
-		const dbClient = manifests.find((m) => m.dir === "db-client")?.manifest.iconSvg ?? "";
+		const dbClient =
+			'<svg viewBox="0 0 24 24"><ellipse cx="6" cy="6" rx="2" ry="2" stroke="currentColor" fill="none"/></svg>';
 		expect(sanitizeIconSvg(dbClient) ?? "").toContain('ry="');
 	});
 });
