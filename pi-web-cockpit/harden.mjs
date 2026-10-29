@@ -204,6 +204,7 @@ try {
     `  const osM = await import("node:os");\n` +
     `  const dir = pathM.join(osM.homedir(), ".mini-harness", "runs");\n` +
     `  const out = [];\n` +
+    `  const hist = !!(req.query && req.query.history);\n` +
     `  let ids = [];\n` +
     `  try { ids = fsM.readdirSync(dir); } catch { return out; }\n` +
     `  for (const id of ids) {\n` +
@@ -213,8 +214,7 @@ try {
     `    try { st = JSON.parse(fsM.readFileSync(p, "utf8")); } catch { continue; }\n` +
     `    const t = Date.parse(st.updatedAt || 0) || 0;\n` +
     `    const active = st.status === "active";\n` +
-    `    const win = (req.query && req.query.history) ? 24 * 60 * 60 * 1000 : 5 * 60 * 1000;\n` +
-    `    if (!active && Date.now() - t >= win) continue;\n` +
+    `    if (!hist && !active && Date.now() - t >= 5 * 60 * 1000) continue;\n` +
     `    const ws = String(st.baseWorkspace || st.workspace || "");\n` +
     `    out.push({\n` +
     `      runId: st.runId || id,\n` +
@@ -230,7 +230,7 @@ try {
     `    });\n` +
     `  }\n` +
     `  out.sort((a, b) => ((b.status === "active") - (a.status === "active")) || ((Date.parse(b.updatedAt || 0) || 0) - (Date.parse(a.updatedAt || 0) || 0)));\n` +
-    `  return out.slice(0, 8);\n` +
+    `  return out.slice(0, hist ? 500 : 8);\n` +
     `}\n` +
     `// 代码 loop 表单的规划/评审模型下拉：只返回 provider/id/family，不含 baseUrl/密钥。家族规则与 mini-harness-runtime familyOf 一致。\n` +
     `function __mhFamilyOf(id) {\n` +
@@ -302,6 +302,43 @@ try {
     `      }\n` +
     `    }\n` +
     `    res.json({ found: true, events: events.slice(-40) });\n` +
+    `  } catch (e) { res.status(500).end(String(e)); }\n` +
+    `});\n` +
+    `// 目标历史（永久）：LLM loop 目录\n` +
+    `app.get("/api/mini-harness/goals", async (req, res) => {\n` +
+    `  if (!tokenOk(req)) { res.status(403).end("unauthorized"); return; }\n` +
+    `  try {\n` +
+    `    const fsG = await import("node:fs"); const pathG = await import("node:path"); const osG = await import("node:os");\n` +
+    `    const f = pathG.join(osG.homedir(), ".pi-web", "goal-history.jsonl");\n` +
+    `    let lines = [];\n` +
+    `    try { lines = fsG.readFileSync(f, "utf8").trim().split("\\n").filter(Boolean); } catch {}\n` +
+    `    const goals = [];\n` +
+    `    for (const l of lines) { try { goals.push(JSON.parse(l)); } catch {} }\n` +
+    `    goals.reverse();\n` +
+    `    res.json({ goals: goals.slice(0, 300) });\n` +
+    `  } catch (e) { res.status(500).end(String(e)); }\n` +
+    `});\n` +
+    `app.post("/api/mini-harness/goals/delete", async (req, res) => {\n` +
+    `  if (!tokenOk(req)) { res.status(403).end("unauthorized"); return; }\n` +
+    `  try {\n` +
+    `    const id = String((req.body && req.body.id) || (req.query && req.query.id) || "");\n` +
+    `    if (!id) { res.status(400).json({ error: "id required" }); return; }\n` +
+    `    const fsG = await import("node:fs"); const pathG = await import("node:path"); const osG = await import("node:os");\n` +
+    `    const f = pathG.join(osG.homedir(), ".pi-web", "goal-history.jsonl");\n` +
+    `    let lines = []; try { lines = fsG.readFileSync(f, "utf8").trim().split("\\n").filter(Boolean); } catch {}\n` +
+    `    const kept = lines.filter((l) => { try { return JSON.parse(l).id !== id; } catch { return true; } });\n` +
+    `    fsG.writeFileSync(f, kept.join("\\n") + (kept.length ? "\\n" : ""));\n` +
+    `    res.json({ ok: true, removed: lines.length - kept.length });\n` +
+    `  } catch (e) { res.status(500).end(String(e)); }\n` +
+    `});\n` +
+    `app.post("/api/mini-harness/runs/delete", async (req, res) => {\n` +
+    `  if (!tokenOk(req)) { res.status(403).end("unauthorized"); return; }\n` +
+    `  try {\n` +
+    `    const id = String((req.body && req.body.runId) || (req.query && req.query.runId) || "");\n` +
+    `    if (!/^[0-9]{8,}-[a-z0-9]{4,}$/i.test(id)) { res.status(400).json({ error: "bad runId" }); return; }\n` +
+    `    const fsR = await import("node:fs"); const pathR = await import("node:path"); const osR = await import("node:os");\n` +
+    `    fsR.rmSync(pathR.join(osR.homedir(), ".mini-harness", "runs", id), { recursive: true, force: true });\n` +
+    `    res.json({ ok: true });\n` +
     `  } catch (e) { res.status(500).end(String(e)); }\n` +
     `});\n` +
     `app.get("/api/mini-harness/runs", async (req, res) => {\n` +
@@ -576,22 +613,13 @@ try {
     `\t\t<style id="pi-loop-modes-style">\n` +
     `\t\t\t.mh-code-loop-btn{align-self:center;display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 9px;margin-left:6px;font-size:12px;border-radius:6px;cursor:pointer;color:#c4b5fd;background:rgba(168,85,247,.12);border:1px solid rgba(168,85,247,.45);white-space:nowrap;}\n` +
     `\t\t\t.mh-code-loop-btn:hover{background:rgba(168,85,247,.22);color:#ddd6fe;}\n` +
-    `\t\t\t.goalbar-collapsed.mh-loop-tabs{display:flex!important;gap:8px!important;width:100%!important;align-items:stretch!important;}\n` +
-    `\t\t\t.goalbar-collapsed.mh-loop-tabs .goalbar-hint{flex:1;height:auto!important;min-height:46px;display:flex!important;flex-direction:column!important;align-items:flex-start!important;justify-content:center!important;gap:2px;padding:7px 11px!important;border-radius:10px!important;background:rgba(21,24,30,.96)!important;border:1px solid #2b313b!important;color:#c4b5fd!important;font-size:12.5px!important;font-weight:700!important;box-sizing:border-box;}\n` +
-    `\t\t\t.goalbar-collapsed.mh-loop-tabs .goalbar-hint:hover{border-color:rgba(168,85,247,.65)!important;background:rgba(168,85,247,.10)!important;}\n` +
-    `\t\t\t.goalbar-collapsed.mh-loop-tabs .goalbar-hint svg{display:none;}\n` +
-    `\t\t\t.goalbar-collapsed.mh-loop-tabs .goalbar-hint::after{content:"AI 自己判断完成，开放式任务";font-size:10.5px;font-weight:400;color:#7f8897;}\n` +
-    `\t\t\t.mh-loop-tabs{display:flex;gap:8px;box-sizing:border-box;}\n` +
-    `\t\t\t.mh-loop-tab{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;align-items:flex-start;padding:7px 11px;border-radius:10px;cursor:pointer;background:rgba(21,24,30,.94);backdrop-filter:blur(6px);border:1px solid #2b313b;color:#e7e9ee;text-align:left;transition:border-color .15s,background .15s;}\n` +
-    `\t\t\t.mh-loop-tab:hover{background:rgba(168,85,247,.10);border-color:rgba(168,85,247,.6);}\n` +
-    `\t\t\t.mh-loop-tab .t{font-size:12.5px;font-weight:700;line-height:1.3;}\n` +
-    `\t\t\t.mh-loop-tab .d{font-size:10.5px;color:#7f8897;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;}\n` +
-    `\t\t\t.mh-loop-tab.llm .t{color:#c4b5fd;}\n` +
-    `\t\t\t.mh-loop-tab.code .t{color:#7dd3fc;}\n` +
-    `\t\t\t.mh-loop-tab.task .t{color:#9aa3b2;}\n` +
-    `\t\t\t.mh-loop-tab.llm .t::before{content:"◎ ";}\n` +
-    `\t\t\t.mh-loop-tab.code .t::before{content:"⌘ ";}\n` +
-    `\t\t\t.mh-loop-tab.task .t::before{content:"▤ ";}\n` +
+    `\t\t\t#mh-loop-dock{position:fixed;z-index:2147483520;display:flex;gap:8px;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;}\n` +
+    `\t\t\t.mh-loop-card{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:1px;padding:5px 11px;border-radius:10px;background:#15181e;border:1px solid #2b313b;color:#e7e9ee;cursor:pointer;text-align:left;transition:border-color .15s,background .15s;}\n` +
+    `\t\t\t.mh-loop-card:hover{background:rgba(168,85,247,.10);border-color:rgba(168,85,247,.6);}\n` +
+    `\t\t\t.mh-loop-card .t{font-size:12.5px;font-weight:700;line-height:1.25;}\n` +
+    `\t\t\t.mh-loop-card .d{font-size:10.5px;color:#7f8897;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;}\n` +
+    `\t\t\t.mh-loop-card.llm .t{color:#c4b5fd;}\n` +
+    `\t\t\t.mh-loop-card.code .t{color:#7dd3fc;}\n` +
     `\t\t\t.mh-quick-actions{display:flex;gap:6px;align-items:center;margin-left:6px;}\n` +
     `\t\t\t.mh-quick-actions button{font-size:11.5px;border-radius:999px;padding:2px 10px;cursor:pointer;color:#c4b5fd;background:rgba(168,85,247,.12);border:1px solid rgba(168,85,247,.45);}\n` +
     `\t\t\t.mh-quick-actions button:hover{background:rgba(168,85,247,.24);}\n` +
@@ -854,25 +882,32 @@ try {
     `\t\t\t\t});\n` +
     `\t\t\t\tsetTimeout(function(){goal.focus();},80);\n` +
     `\t\t\t}\n` +
+    `\t\t\t// 自绘 Dock：固定在原生入口条位置上方，避免被 React 重渲染冲掉导致闪烁\n` +
     `\t\t\tfunction ensureBtn(){\n` +
     `\t\t\t\ttry{\n` +
-    `\t\t\t\t\tvar slot=document.querySelector('.goalbar-slot');if(!slot)return;\n` +
-    `\t\t\t\t\t// 原生折叠行是悬浮在输入框上方的容器：把它变成三栏并列入口\n` +
-    `\t\t\t\t\tvar row=slot.querySelector('.goalbar-collapsed')||slot;\n` +
-    `\t\t\t\t\trow.classList.add('mh-loop-tabs');\n` +
-    `\t\t\t\t\tvar expanded=!!slot.querySelector('.goalbar');\n` +
-    `\t\t\t\t\trow.querySelectorAll('.mh-loop-tab').forEach(function(b){b.style.display=expanded?'none':'';});\n` +
-    `\t\t\t\t\tif(expanded||row.querySelector('.mh-loop-tab'))return;\n` +
-    `\t\t\t\t\tvar code=document.createElement('button');code.type='button';code.className='mh-loop-tab code';\n` +
-    `\t\t\t\t\tcode.innerHTML='<span class="t">代码 loop</span><span class="d">validator 门禁，不过自动重试</span>';\n` +
-    `\t\t\t\t\tcode.addEventListener('click',function(e){e.stopPropagation();openModal();});\n` +
-    `\t\t\t\t\trow.appendChild(code);\n` +
+    `\t\t\t\t\tvar gi0=document.querySelector('.goalbar-input');var isOpen=!!(gi0&&gi0.getBoundingClientRect().width>10);\n` +
+    `\t\t\t\t\tvar d0=document.getElementById('mh-loop-dock');\n` +
+    `\t\t\t\t\tif(isOpen){if(d0)d0.style.display='none';return;}\n` +
+    `\t\t\t\t\tvar row=document.querySelector('.goalbar-collapsed');if(!row){if(d0)d0.style.display='none';return;}\n` +
+    `\t\t\t\t\tvar native=row.querySelector('.goalbar-hint');if(native&&native.style.opacity!=='0')native.style.opacity='0';\n` +
+    `\t\t\t\t\tvar d=document.getElementById('mh-loop-dock');\n` +
+    `\t\t\t\t\tif(!d){d=document.createElement('div');d.id='mh-loop-dock';\n` +
+    `\t\t\t\t\t\td.innerHTML='<button type="button" class="mh-loop-card llm"><span class="t">LLM loop</span><span class="d">AI 自己判断完成，开放式任务</span></button><button type="button" class="mh-loop-card code"><span class="t">代码 loop</span><span class="d">validator 门禁，不过自动重试</span></button>';\n` +
+    `\t\t\t\t\t\td.querySelector('.llm').addEventListener('click',function(){var h=document.querySelector('.goalbar-hint');if(h)h.click();});\n` +
+    `\t\t\t\t\t\td.querySelector('.code').addEventListener('click',function(e){e.stopPropagation();openModal();});\n` +
+    `\t\t\t\t\t\tdocument.body.appendChild(d);}\n` +
+    `\t\t\t\t\tvar expanded=false;var r=row.getBoundingClientRect();\n` +
+    `\t\t\t\t\tif(expanded||r.width<60){d.style.display='none';return;}\n` +
+    `\t\t\t\t\td.style.display='flex';\n` +
+    `\t\t\t\t\tvar ib=document.querySelector('.inputbar');var cr=ib?ib.getBoundingClientRect():r;\n` +
+    `\t\t\t\t\tvar bottom=Math.round(window.innerHeight-r.top+6),left=Math.round(cr.left),w=Math.round(cr.width);\n` +
+    `\t\t\t\t\tif(d.__b!==bottom||d.__l!==left||d.__w!==w){d.__b=bottom;d.__l=left;d.__w=w;d.style.bottom=bottom+'px';d.style.left=left+'px';d.style.width=w+'px';}\n` +
     `\t\t\t\t}catch(e){}\n` +
     `\t\t\t}\n` +
     `\t\t\tfunction tick(){relabel();ensureBtn();}\n` +
     `\t\t\tif(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){setTimeout(tick,700);setTimeout(showStatusCard,900);});else setTimeout(tick,700);\n` +
     `\t\t\tsetTimeout(showStatusCard,900);\n` +
-    `\t\t\tif(!window.__mhTickTimer){window.__mhTickTimer=setInterval(function(){if(document.hidden)return;tick();},3000);}\n` +
+    `\t\t\tif(!window.__mhTickTimer){window.__mhTickTimer=setInterval(function(){if(document.hidden)return;ensureBtn();},400);window.__mhRelabelTimer=setInterval(function(){if(document.hidden)return;relabel();},3000);}\n` +
     `\t\t\tif(!window.__mhClickTick){window.__mhClickTick=true;document.addEventListener('click',function(){if(document.querySelector('.goalbar-opts'))setTimeout(relabel,300);},true);}\n` +
     `\t\t}catch(e){}})();\n` +
     `\t\t</script>\n\t`;
@@ -998,6 +1033,83 @@ try {
   if (gs2 !== before2) { fs.writeFileSync(gsFile2, gs2); log("任务台后端：pause/resume + 执行者 sessionId 已注入"); }
   else log(gs2.includes("HARDENED:goal-pause") ? "任务台后端：已是最新（跳过）" : "WARN: 任务台后端锚点未命中");
 
+  // 4b) 目标历史：LLM loop 永久目录（落 ~/.pi-web/goal-history.jsonl，只有用户删除才消失）
+  const impAnchor = 'import { mkdirSync, rmSync } from "node:fs";';
+  if (!gs2.includes("appendFileSync") && gs2.includes(impAnchor)) {
+    gs2 = gs2.replace(impAnchor, 'import { mkdirSync, rmSync, appendFileSync, readFileSync } from "node:fs";');
+  }
+  const recFn = [
+    "function __mhRecordGoal(conv, g, kind) {",
+    "    try {",
+    "        const dir = join(process.env.HOME || \".\", \".pi-web\");",
+    "        mkdirSync(dir, { recursive: true });",
+    "        let __id = String(Date.now()) + \"-\" + Math.random().toString(36).slice(2, 8);",
+    "        if (kind && kind.indexOf(\"finished\") === 0) {",
+    "            try {",
+    "                const cur = readFileSync(join(dir, \"goal-history.jsonl\"), \"utf8\").trim().split(\"\\n\");",
+    "                for (let i = cur.length - 1; i >= 0; i--) {",
+    "                    const r = JSON.parse(cur[i]);",
+    "                    if (r.convId === conv.id && r.goal === ((g && g.goal) || \"\") && r.kind === \"created\") { __id = r.id; break; }",
+    "                }",
+    "            } catch { }",
+    "        }",
+    "        const rec = {",
+    "            id: __id,",
+    "            at: new Date().toISOString(),",
+    "            convId: (conv && conv.id) || null,",
+    "            convTitle: (conv && conv.title) || \"\",",
+    "            goal: (g && g.goal) || \"\",",
+    "            kind, phase: (g && g.phase) || \"\", round: (g && g.round) || 0,",
+    "            verdict: (g && g.verdict) || \"\", status: (g && g.status) || \"\"",
+    "        };",
+    "        appendFileSync(join(dir, \"goal-history.jsonl\"), JSON.stringify(rec) + \"\\n\", \"utf8\");",
+    "    } catch { }",
+    "}",
+    "",
+  ].join("\n");
+  if (!gs2.includes("__mhRecordGoal") && gs2.includes("export class GoalService {")) {
+    gs2 = gs2.replace("export class GoalService {", recFn + "export class GoalService {");
+    gs2 = gs2.replace('        type: "notice",\n            level: "info",\n            text: `🎯 已设目标', '        type: "notice",\n            level: "info",\n            text: `🎯 已设目标');
+    // 记录「目标创建」
+    const setAnchor = "            textEn: `🎯 Goal set: ${text.slice(0, 80)}${text.length > 80 ? \"…\" : \"\"}`,\n        });";
+    if (gs2.includes(setAnchor)) {
+      gs2 = gs2.replace(setAnchor, setAnchor + "\n        __mhRecordGoal(conv, conv.goal, \"created\");");
+    }
+    // 记录「目标结束」（pass/blocked/exhausted）
+    const finAnchor = "    async finishDelegated(conv, goalGeneration, kind, round, feedback, goalText) {";
+    if (gs2.includes(finAnchor)) {
+      gs2 = gs2.replace(finAnchor, finAnchor + "\n        __mhRecordGoal(conv, conv.goal, \"finished:\" + kind);");
+    }
+  }
+  // 记录器升级：finished 复用 created 的 id（同一目标在目录里只占一条）
+  const oldIdLine = '            id: String(Date.now()) + "-" + Math.random().toString(36).slice(2, 8),';
+  const newIdBlock = [
+    '        let __id = String(Date.now()) + "-" + Math.random().toString(36).slice(2, 8);',
+    '        if (kind && kind.indexOf("finished") === 0) {',
+    '            try {',
+    '                const cur = readFileSync(join(dir, "goal-history.jsonl"), "utf8").trim().split("\\n");',
+    '                for (let i = cur.length - 1; i >= 0; i--) {',
+    '                    const r0 = JSON.parse(cur[i]);',
+    '                    if (r0.convId === conv.id && r0.goal === ((g && g.goal) || "") && r0.kind === "created") { __id = r0.id; break; }',
+    '                }',
+    '            } catch { }',
+    '        }',
+    '        const rec = {',
+    '            id: __id,',
+  ].join("\n");
+  if (gs2.includes(oldIdLine)) {
+    gs2 = gs2.replace(oldIdLine, newIdBlock);
+  }
+  gs2 = gs2.replace("        const rec = {\n        let __id", "        let __id");
+  // 目标创建记录（独立幂等，避免与记录器函数的守卫互相影响）
+  const createdAnchor = "            textEn: `🎯 Goal set: ${text.slice(0, 80)}${text.length > 80 ? \"…\" : \"\"}`,\n        });";
+  if (!gs2.includes('__mhRecordGoal(conv, conv.goal, "created")') && gs2.includes(createdAnchor)) {
+    gs2 = gs2.replace(createdAnchor, createdAnchor + "\n        __mhRecordGoal(conv, conv.goal, \"created\");");
+  }
+  if (gs2 !== before2) {
+    fs.writeFileSync(gsFile2, gs2);
+    log("任务台后端：目标历史记录器已注入");
+  }
   // 5) ClientSession 代理
   const asFile = path.join(DIST, "agent-service.js");
   let as = fs.readFileSync(asFile, "utf8");
@@ -1055,6 +1167,8 @@ try {
     `\t\t\t#mh-task .tk-cat-item span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}\n` +
     `\t\t\t#mh-task .tk-cat-item[data-on="1"]{border-color:rgba(168,85,247,.55);color:#e7e9ee;}\n` +
     `\t\t\t#mh-task .tk-cat-item[data-on="1"] b::after{content:" · 运行中";color:#34d399;font-weight:400;}\n` +
+    `\t\t\t#mh-task .tk-del{float:right;background:transparent;border:1px solid #3a414d;border-radius:6px;color:#8b93a1;font-size:10.5px;padding:0 6px;cursor:pointer;margin-left:6px;}\n` +
+    `\t\t\t#mh-task .tk-del:hover{border-color:#f87171;color:#f87171;}\n` +
     `\t\t</style>\n` +
     `\t\t<script id="mh-task-script">\n` +
     `\t\t(function(){try{\n` +
@@ -1087,27 +1201,38 @@ try {
     `\t\t\t\t\t'<div class="tk-cat-item"'+(g&&g.goal?' data-on="1"':'')+'><b>LLM loop</b><span>'+esc(g&&g.goal?String(g.status||g.phase||''):'当前对话没有进行中的目标')+'</span></div>'+\n` +
     `\t\t\t\t\t'<div class="tk-cat-item"><b>代码 loop</b><span id="mh-tk-code-n">加载中…</span></div></div>';\n` +
     `\t\t\t\tvar runsHtml='<div class="tk-sec"><span>代码 loop 运行</span></div><div id="mh-tk-runs"><div class="tk-empty">无</div></div>';\n` +
-    `\t\t\t\tif(!g||(!g.goal&&!(g.wizard&&g.wizard.active))){body.innerHTML=cat+runsHtml;acts.innerHTML='';sessionId=null;fetchRuns();return;}\n` +
+    `\t\t\t\tvar goalsHtml='<div class="tk-sec"><span>LLM loop 历史</span></div><div id="mh-tk-goals"><div class="tk-empty">加载中…</div></div>';\n` +
+    `\t\t\t\tif(!g||(!g.goal&&!(g.wizard&&g.wizard.active))){body.innerHTML=cat+goalsHtml+runsHtml;acts.innerHTML='';sessionId=null;fetchRuns();fetchGoals();return;}\n` +
     `\t\t\t\tvar ph=phaseOf(g);var steps=[['调研','surveying'],['执行','executing'],['审查','reviewing'],['完成','done']];var idx={idle:-1,surveying:0,executing:1,reviewing:2,done:3,blocked:3,paused:-1}[ph];if(idx==null)idx=-1;\n` +
     `\t\t\t\tvar stepHtml='';steps.forEach(function(s,i){stepHtml+='<div class="tk-step '+(idx>i?'done':(idx===i?'on':''))+'">'+s[0]+'</div>';});\n` +
     `\t\t\t\tvar rounds=(g.round||0)+'/'+((g.maxRounds>0)?g.maxRounds:'不限');\n` +
     `\t\t\t\tbody.innerHTML=cat+'<div class="tk-goal">'+esc(g.goal||g.wizard&&g.wizard.draft||'')+'</div>'+\n` +
     `\t\t\t\t\t'<div class="tk-meta"><span class="tk-chip">'+esc(g.status||ph)+'</span><span class="tk-chip">轮次 '+rounds+'</span>'+(g.execModel?'<span class="tk-chip">执行 '+esc(g.execModel.split('/').pop())+'</span>':'')+(g.reviewModel?'<span class="tk-chip">评审 '+esc(g.reviewModel.split('/').pop())+'</span>':'')+'</div>'+\n` +
     `\t\t\t\t\t'<div class="tk-steps">'+stepHtml+'</div>'+\n` +
-    `\t\t\t\t\t'<div class="tk-sec"><span>工具调用</span><span id="mh-tk-count"></span></div><div id="mh-tk-events"><div class="tk-empty">等待执行者动作…</div></div>'+runsHtml;\n` +
+    `\t\t\t\t\t'<div class="tk-sec"><span>工具调用</span><span id="mh-tk-count"></span></div><div id="mh-tk-events"><div class="tk-empty">等待执行者动作…</div></div>'+goalsHtml+runsHtml;\n` +
     `\t\t\t\tvar paused=ph==='paused'||/暂停/.test(String(g.status||''));\n` +
     `\t\t\t\tacts.innerHTML='<button class="tk-btn pri" data-act="pause">'+(paused?'继续':'暂停')+'</button><button class="tk-btn danger" data-act="stop">停止 Loop</button>';\n` +
     `\t\t\t\tacts.querySelector('[data-act=pause]').addEventListener('click',function(){send({type:paused?'resume_goal':'pause_goal'});});\n` +
     `\t\t\t\tacts.querySelector('[data-act=stop]').addEventListener('click',function(){if(confirm('停止这个 Loop？目标会被清除，产物保留。'))send({type:'clear_goal'});});\n` +
     `\t\t\t\tvar r=(g.roles&&g.roles.executor)||null;if(r&&r.sessionId){sessionId=r.sessionId;}else if(!r||!r.spawned){sessionId=null;}\n` +
-    `\t\t\t\tfetchRuns();\n` +
+    `\t\t\t\tfetchRuns();fetchGoals();\n` +
     `\t\t\t}\n` +
     `\t\t\tvar runsBusy=false;\n` +
     `\t\t\tfunction fetchRuns(){var box=document.getElementById('mh-tk-runs');if(!box||runsBusy)return;runsBusy=true;var t=tok();\n` +
     `\t\t\t\tfetch('/api/mini-harness/runs?history=1'+(t?('&token='+encodeURIComponent(t)):''),{headers:t?{'x-pi-token':t}:{}}).then(function(x){return x.ok?x.json():null;}).then(function(j){\n` +
     `\t\t\t\t\tvar list=(j&&Array.isArray(j.runs))?j.runs:[];var n=document.getElementById('mh-tk-code-n');if(n){var act=list.filter(function(r){return r.status==='active';}).length;n.textContent=list.length?(act+' 个运行中 / 共 '+list.length+' 个'):'无运行记录';}if(!list.length){box.innerHTML='<div class="tk-empty">无</div>';return;}\n` +
-    `\t\t\t\t\tvar h='';list.forEach(function(r){var v=r.lastVerdict==='pass'?'通过':(r.lastVerdict==='fail'?'未通过':'—');var done=r.status!=='active';h+='<div class="tk-ev '+(done?'ok':'run')+'"><span class="nm">'+esc(r.project||'未知')+'</span> <span class="ar">第 '+r.round+'/'+r.maxRounds+' 轮 · '+esc(r.stage||'')+'</span><div class="out">'+(done?'已结束':'运行中')+' · 校验 '+v+'</div></div>';});box.innerHTML=h;\n` +
+    `\t\t\t\t\tvar h='';list.forEach(function(r){var v=r.lastVerdict==='pass'?'通过':(r.lastVerdict==='fail'?'未通过':'—');var done=r.status!=='active';h+='<div class="tk-ev '+(done?'ok':'run')+'"><button class="tk-del" data-rid="'+esc(r.runId)+'">删除</button><span class="nm">'+esc(r.project||'未知')+'</span> <span class="ar">第 '+r.round+'/'+r.maxRounds+' 轮 · '+esc(r.stage||'')+'</span><div class="out">'+(done?'已结束':'运行中')+' · 校验 '+v+'</div></div>';});box.innerHTML=h;box.querySelectorAll('.tk-del').forEach(function(b){b.addEventListener('click',function(e){e.stopPropagation();if(confirm('删除这次代码 loop 运行记录？'))del('/api/mini-harness/runs/delete',{runId:b.getAttribute('data-rid')});});});\n` +
     `\t\t\t\t}).catch(function(){}).then(function(){runsBusy=false;});\n` +
+    `\t\t\t}\n` +
+    `\t\t\tfunction del(url,body){var t=tok();var h={'Content-Type':'application/json'};if(t)h['x-pi-token']=t;\n` +
+    `\t\t\t\tfetch(url,{method:'POST',headers:h,body:JSON.stringify(body)}).then(function(){fetchRuns();fetchGoals();}).catch(function(){});}\n` +
+    `\t\t\tvar goalsBusy=false;\n` +
+    `\t\t\tfunction fetchGoals(){var box=document.getElementById('mh-tk-goals');if(!box||goalsBusy)return;goalsBusy=true;var t=tok();\n` +
+    `\t\t\t\tfetch('/api/mini-harness/goals'+(t?('?token='+encodeURIComponent(t)):''),{headers:t?{'x-pi-token':t}:{}}).then(function(x){return x.ok?x.json():null;}).then(function(j){\n` +
+    `\t\t\t\t\tvar list=(j&&Array.isArray(j.goals))?j.goals:[];var seen0={};list=list.filter(function(g){if(!g||seen0[g.id])return false;seen0[g.id]=1;return true;});if(!list.length){box.innerHTML='<div class="tk-empty">还没有 LLM loop 记录（新建目标后会自动记一条）</div>';return;}\n` +
+    `\t\t\t\t\tvar h='';list.forEach(function(g){var when=String(g.at||'').replace('T',' ').slice(5,16);var st=/finished/.test(g.kind||'')?(g.verdict||'已结束'):'进行中';h+='<div class="tk-ev '+(/finished/.test(g.kind||'')?'ok':'run')+'"><button class="tk-del" data-gid="'+esc(g.id)+'">删除</button><span class="nm">'+esc(String(g.goal||'').slice(0,70))+'</span><div class="out">'+esc(st)+' · '+esc(when)+' · 第 '+(g.round||0)+' 轮</div></div>';});\n` +
+    `\t\t\t\t\tbox.innerHTML=h;box.querySelectorAll('.tk-del').forEach(function(b){b.addEventListener('click',function(e){e.stopPropagation();if(confirm('删除这条 LLM loop 记录？'))del('/api/mini-harness/goals/delete',{id:b.getAttribute('data-gid')});});});\n` +
+    `\t\t\t\t}).catch(function(){}).then(function(){goalsBusy=false;});\n` +
     `\t\t\t}\n` +
     `\t\t\tfunction pollEvents(){var p=document.getElementById('mh-task');if(!p||!p.classList.contains('open'))return;var g=window.__mhGoal;var r=g&&g.roles&&g.roles.executor;var sid=(r&&r.sessionId)||sessionId;if(!sid)return;var t=tok();\n` +
     `\t\t\t\tfetch('/api/mini-harness/task?session='+encodeURIComponent(sid)+(t?('&token='+encodeURIComponent(t)):''),{headers:t?{'x-pi-token':t}:{}}).then(function(x){return x.ok?x.json():null;}).then(function(j){\n` +
