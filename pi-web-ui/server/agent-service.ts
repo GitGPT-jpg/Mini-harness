@@ -54,6 +54,7 @@ import {
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { BG_CLEANUP_FALLBACK_MIN, BgServerTracker } from "./bg-servers.js";
+import { createLoopExtension } from "./loop/extension.js";
 import {
 	checkAll as checkAllUpdates,
 	collectTargets,
@@ -2968,18 +2969,30 @@ export class ClientSession {
 					// 匹配 —— isExtensionDisabled / isExtensionEnabled 同时比对 npm:<pkg> 候选键。
 					extensionsOverride: (res) => {
 						// 内部基础设施扩展（codemode、tool-search、persona 等）不参与白名单/禁用过滤。
+						// 注意 SDK 在 extensionsOverride 之后才补 sourceInfo，包扩展此处只能靠路径
+						// 匹配 —— isExtensionDisabled / isExtensionEnabled 同时比对 npm:<pkg> 候选键。
 						const keepOwn = (e: { path: string; hidden?: boolean }) => isInternalExtension(e);
+						// mini-harness Loop：产品自带源码版扩展（server/loop/extension.ts，经下方
+						// extensionFactories 注入）。~/.pi/agent 里可能还注册着 npm 补丁时代的
+						// vendor 包路径（…/pi-web-cockpit/vendor/mini-harness-runtime）——它可能指向
+						// 别的目录树的副本，且与内置版注册同名工具（后注册者覆盖工具表，实测旧副本
+						// 会赢）。这里显式剔除，保证只加载源码内置版。
+						const isLegacyLoopVendor = (e: { path: string }) => e.path.includes("mini-harness-runtime");
 						if (apply && apply.enabledExtensions.length > 0) {
 							const set = new Set(apply.enabledExtensions);
 							return {
 								...res,
-								extensions: res.extensions.filter((e) => keepOwn(e) || isExtensionEnabled(e, [...set])),
+								extensions: res.extensions.filter(
+									(e) => !isLegacyLoopVendor(e) && (keepOwn(e) || isExtensionEnabled(e, [...set])),
+								),
 							};
 						}
 						return {
 							...res,
 							extensions: res.extensions.filter(
-								(e) => keepOwn(e) || !isExtensionDisabled(e, this.settingsSvc.current.disabledExtensions),
+								(e) =>
+									!isLegacyLoopVendor(e) &&
+									(keepOwn(e) || !isExtensionDisabled(e, this.settingsSvc.current.disabledExtensions)),
 							),
 						};
 					},
@@ -2999,6 +3012,13 @@ export class ClientSession {
 							hidden: true,
 							replaceable: true,
 							factory: createToolSearchExtension(),
+						},
+						// mini-harness Loop：受控代码/LLM Loop 运行时（源码级正式接入，替代
+						// ~/.pi/agent 注册的 vendor 包路径——那会加载到别的目录树的副本）。
+						{
+							name: "mini-harness-loop",
+							hidden: true,
+							factory: createLoopExtension(),
 						},
 						{
 							name: "pi-webui-persona",
