@@ -1305,12 +1305,6 @@ export class AgentService {
 		if (cs) {
 			cs.detachSink(send);
 			if (cs.sinkCount() === 0) {
-				if (clientId.startsWith("canvas:") || clientId.startsWith("canvas-")) {
-					// Canvas 辅助连接一旦关闭，立即从客户端池回收并释放资源，绝不残留
-					this.clients.delete(clientId);
-					void cs.dispose().catch(() => {});
-					return;
-				}
 				// 最后一个 sink 断开 = 该客户端不再在线 → 它的行从「另一处」变成「另一处
 				// （离线）」。立刻让其他客户端重推一次补上离线标记；宽限期
 				// （OFFLINE_ROW_TTL_MS）到期后再推一次，行随之消失（issue #291 的

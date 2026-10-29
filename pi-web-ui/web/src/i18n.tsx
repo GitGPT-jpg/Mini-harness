@@ -1153,7 +1153,6 @@ export const zh = {
 
 	/* source control panel */
 	scmTab: "Git",
-	canvasTab: "画布协同",
 	scmTitle: "源代码管理",
 	scmRefreshTip: "重新查询 Git 状态与差异",
 	scmCurrentBranch: "当前分支",
@@ -2277,8 +2276,6 @@ export const zh = {
 	sandboxActionDestroyConfirm: "确定彻底销毁沙盒「{name}」并删除其所有隔离文件吗？此操作不可撤销。",
 	toolsWorktreeDesc: "管理 Git 工作树，支持多 PR/分支并行开发且保持界面工作区同步",
 	toolsWorktreeOffHint: "关闭后 AI 无法使用 worktree 工具，需在终端中手动操作",
-	canvasToolEnabledDesc: "读写画布流水线：查看工程、增删节点连线、整图替换",
-	canvasToolOffHint: "关闭后 AI 无法创建或修改画布，需手动拖拽编辑",
 	worktreeBadgeLinked: "工作树",
 	worktreeBadgeDirtyCount: "{count} 处含修改",
 	worktreeBannerActiveTitle: "当前处于 Git 工作树：{branch}",
@@ -3477,7 +3474,6 @@ export const en: Record<keyof typeof zh, string> = {
 
 	/* source control panel */
 	scmTab: "Git",
-	canvasTab: "Canvas",
 	scmTitle: "Source Control",
 	scmRefreshTip: "Re-query git status & diff",
 	scmCurrentBranch: "Current branch",
@@ -4664,8 +4660,6 @@ export const en: Record<keyof typeof zh, string> = {
 	sandboxActionDestroyConfirm: 'Permanently destroy sandbox "{name}" and delete all its files? This cannot be undone.',
 	toolsWorktreeDesc: "Manage Git worktrees for isolated PR/branch work while keeping the UI workspace synchronized",
 	toolsWorktreeOffHint: "When disabled, AI cannot use the worktree tool and must use manual terminal commands",
-	canvasToolEnabledDesc: "Read and edit canvas pipelines: list graphs, add nodes/edges, replace the DAG",
-	canvasToolOffHint: "When disabled, AI cannot create or edit canvases; edit by hand",
 	worktreeBadgeLinked: "Worktree",
 	worktreeBadgeDirtyCount: "{count} with edits",
 	worktreeBannerActiveTitle: "Active Git Worktree: {branch}",

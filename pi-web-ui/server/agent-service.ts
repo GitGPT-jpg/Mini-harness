@@ -279,7 +279,6 @@ import { makeLspTool } from "./lsp-tool.js";
 import { makeMcpManageTool, type McpManageToolHost } from "./mcp-agent-tool.js";
 import { makeSandboxTool } from "./sandbox-tool.js";
 import { makeWorktreeTool } from "./worktree-tool.js";
-import { makeCanvasTool } from "./canvas/canvas-agent-tool.js";
 import { getWorktreeContext, removeWorktree, normalizeWirePath } from "./worktree-service.js";
 import type { WorktreeInfo } from "./protocol.js";
 import { sameSessionFile, type SchedulerStore } from "./scheduler-tasks.js";
@@ -3464,12 +3463,6 @@ export class ClientSession {
 						},
 						() => this.getLang(),
 					),
-					// 画布流水线编辑工具（canvas：增删改查/重排/运行/调试；新节点 cwd 跟随当前项目）。
-					makeCanvasTool({
-						dataDir: this.stateStore.dataDir,
-						lang: () => this.getLang(),
-						getCwd: () => (ownerId ? this.convs.get(ownerId)?.cwd : undefined) ?? effectiveCwd,
-					}),
 				].map((t) =>
 					// 目标审查闸门在最外层（理由最贴合此刻）；插件工具也在这个数组里，
 					// 创建时注册的同样被闸门覆盖（后续动态补入的走 syncPluginTools，与
@@ -8476,10 +8469,6 @@ export class ClientSession {
 		sessionFile?: string;
 		activity: number;
 	}[] {
-		// 画布专用客户端（CanvasStudio）绝不参与聊天会话列表感知，杜绝向 elsewhere 暴露任何条目
-		if (this.clientId?.startsWith("canvas:") || this.clientId?.startsWith("canvas-")) {
-			return [];
-		}
 		const out: {
 			title: string;
 			cwd: string;

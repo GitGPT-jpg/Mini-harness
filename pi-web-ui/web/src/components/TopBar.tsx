@@ -319,7 +319,6 @@ export function TopBar({
 		"host:chat",
 		"host:terminal",
 		"host:git",
-		"host:canvas",
 		"host:plugins",
 		"host:search",
 		"host:browser",
@@ -1052,19 +1051,6 @@ export function TopBar({
 			>
 				<FiGitBranch />
 				<span>{t("scmTab")}</span>
-			</button>
-		) : null,
-		"host:canvas": tabOn("canvas") ? (
-			<button
-				type="button"
-				role="tab"
-				aria-selected={view === "canvas"}
-				className={`tb-tab${view === "canvas" ? " active" : ""}`}
-				data-tip={t("canvasTab")}
-				onClick={() => onViewChange("canvas")}
-			>
-				<LuWorkflow />
-				<span>{t("canvasTab")}</span>
 			</button>
 		) : null,
 		// 插件面板入口（Chrome 扩展图标那个位置）：列出全部已装插件，每行带「钉到顶栏」

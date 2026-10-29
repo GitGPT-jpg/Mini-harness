@@ -36,7 +36,7 @@ import { BROWSER_PAGE_TOOL_NAME } from "../../../server/tool-manager.js";
 import { EnginePicker } from "./EnginePicker";
 import { appUrl } from "../base-url";
 
-export type ViewName = "chat" | "terminal" | "git" | "canvas" | `plugin:${string}`;
+export type ViewName = "chat" | "terminal" | "git" | `plugin:${string}`;
 
 /** Loop 耗时：1m05s / 1h03m（active 时随秒级 tick 刷新）。 */
 export function formatLoopElapsed(ms: number): string {
@@ -919,13 +919,6 @@ export function BarItem({
 			isActive = view === "git";
 			isTab = true;
 			onClick = () => onViewChange?.("git");
-			break;
-		case "host:canvas":
-			iconNode = <LuWorkflow className="bar-item-icon" />;
-			labelText = named(t("canvasTab"));
-			isActive = view === "canvas";
-			isTab = true;
-			onClick = () => onViewChange?.("canvas");
 			break;
 		case "host:new-chat":
 			iconNode = <FiPlus className="bar-item-icon" />;

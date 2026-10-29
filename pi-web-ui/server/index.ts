@@ -102,9 +102,6 @@ import {
 	setGlobalRemoteSshService,
 } from "./remote-ssh-service.js";
 import { handlePluginMessage } from "./dispatch-plugin-handlers.js";
-import { CanvasOrchestrator } from "./canvas/canvas-orchestrator.js";
-import { setCanvasBroadcaster, setCanvasRuntime } from "./canvas/canvas-agent-tool.js";
-import { handleCanvasMessage } from "./canvas/canvas-dispatch.js";
 import type {
 	BgServer,
 	ClientMessage,
@@ -2036,36 +2033,6 @@ async function confirmPluginInstallHelper(items: Array<{ id: string; source: str
 const remoteSshService = new RemoteSshService(DATA_DIR);
 setGlobalRemoteSshService(remoteSshService);
 
-// 多引擎多模型多目录画布协作调度器 (Canvas Studio)
-const canvasOrchestrator = new CanvasOrchestrator(CWD, DATA_DIR, (eng) => ensureEngine(eng));
-setCanvasRuntime(canvasOrchestrator);
-// AI 工具改图广播：与 orchestrator 同一个 WS 广播，开着的画布实时刷新（免刷新）。
-const broadcastCanvas: Parameters<CanvasOrchestrator["setBroadcaster"]>[0] = (msg) => {
-	const payload = JSON.stringify(msg);
-	for (const client of wss.clients) {
-		if (client.readyState !== WebSocket.OPEN) continue;
-		if (client.bufferedAmount > BROADCAST_BACKPRESSURE_MAX_BYTES) continue;
-		try {
-			client.send(payload);
-		} catch {
-			/* 客户端断开连接忽略 */
-		}
-	}
-};
-setCanvasBroadcaster((msg) => broadcastCanvas(msg as never));
-canvasOrchestrator.setBroadcaster((msg) => {
-	const payload = JSON.stringify(msg);
-	for (const client of wss.clients) {
-		if (client.readyState !== WebSocket.OPEN) continue;
-		if (client.bufferedAmount > BROADCAST_BACKPRESSURE_MAX_BYTES) continue;
-		try {
-			client.send(payload);
-		} catch {
-			/* 客户端断开连接忽略 */
-		}
-	}
-});
-
 // 内置定时任务（issue #184）：全局 <dataDir>/scheduler-tasks.json，TTL 与
 // client-state 同级；Agent 工具建的任务优先唤醒发起对话（issue #193：
 // wakeConversation steer 投递，不切用户当前对话），原对话不在先回落同项目
@@ -2921,7 +2888,6 @@ wss.on("connection", (ws) => {
 			if (handleScheduleMessage(msg, scheduler, send)) return;
 			if (handleRemoteSshMessage(msg, remoteSshService, send)) return;
 			if (handleSettingsMessage(msg, cs)) return;
-			if (handleCanvasMessage(msg, DATA_DIR, canvasOrchestrator, send, { runBase: cs.cwd })) return;
 			if (handleInteractiveResponseMessage(msg, cs, service, clientId, send)) return;
 			if (
 				handlePluginMessage(msg, {

@@ -18,8 +18,6 @@
 
 import type { UiAgentPreset, DshPermissionOption } from "./protocol.js";
 
-/** 画布流水线编辑工具（定义见 canvas/canvas-agent-tool.ts，单 action：list/get/add_node/update_node/delete_node/add_edge/delete_edge/apply_dag）。 */
-export const CANVAS_TOOL_NAME = "canvas";
 /** 持久终端工具（定义见 terminals.ts，工具名在此唯一登记）。 */
 export const TERMINAL_TOOL_NAMES = [
 	"terminal_create",
@@ -311,14 +309,6 @@ export const AGENT_TOOL_CATALOG: AgentToolEntry[] = [
 		dshVisible: false,
 		descKey: "toolsWorktreeDesc",
 		offHintKey: "toolsWorktreeOffHint",
-	},
-	{
-		name: CANVAS_TOOL_NAME,
-		group: "other",
-		defaultOn: true,
-		dshVisible: false,
-		descKey: "canvasToolEnabledDesc",
-		offHintKey: "canvasToolOffHint",
 	},
 ];
 

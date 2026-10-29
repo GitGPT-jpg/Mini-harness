@@ -45,7 +45,5 @@ export function checkPluginCwd(cwd: string): { ok: boolean; abs?: string; error?
 
 /** 插件/调度/Canvas伪客户端：sink 常驻或后台辅助专用通道，不参与聊天会话认领与感知。 */
 export function isPseudoClientId(id: string): boolean {
-	return (
-		id.startsWith("plugin:") || id.startsWith("scheduler:") || id.startsWith("canvas:") || id.startsWith("canvas-")
-	);
+	return id.startsWith("plugin:") || id.startsWith("scheduler:");
 }

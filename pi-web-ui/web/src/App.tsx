@@ -30,7 +30,6 @@ import { presetText } from "./components/DshPresetBar";
 // 终端视图懒加载：xterm.js 体积大且只在切到终端时才需要，拆出主包
 const TerminalPanel = lazy(() => import("./components/TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
 import { ScmPanel } from "./components/SCMPanel";
-import { CanvasStudio } from "./components/canvas/CanvasStudio";
 import { PluginView } from "./components/PluginView";
 import { PluginViewFallback } from "./components/PluginViewFallback";
 import {
@@ -283,7 +282,7 @@ function PanelRail({ side, onClick }: { side: PanelSide; onClick: () => void }) 
 }
 
 /** 顶栏视图：内置三个 + 每个已装插件一个 `plugin:<id>`。 */
-type ViewName = "chat" | "terminal" | "git" | "canvas" | `plugin:${string}`;
+type ViewName = "chat" | "terminal" | "git" | `plugin:${string}`;
 
 /**
  * 插件项目会话的目录授权（issue #146）：插件经 host.openSession 打开一个新目录的会话前，
@@ -2644,18 +2643,6 @@ export function App() {
 							onSwitchToTerminal={() => setView("terminal")}
 							uiScmToolbar={uiScmToolbar}
 							onUiAction={onUiAction}
-						/>
-					</div>
-					<div className={`view-pane ${view === "canvas" ? "" : "hidden"}`}>
-						<CanvasStudio
-							send={send}
-							active={view === "canvas"}
-							models={chat.models}
-							defaultModel={chat.defaultModel}
-							projects={chat.projects}
-							workspaceRoots={chat.state?.workspaceRoots ?? []}
-							pathCompletions={chat.pathCompletions}
-							currentCwd={chat.state?.cwd || "."}
 						/>
 					</div>
 					{pluginViews.map((entry) => {

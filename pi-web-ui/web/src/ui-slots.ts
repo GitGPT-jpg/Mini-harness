@@ -406,17 +406,6 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		group: "views",
 		align: "end",
 	},
-	{
-		id: "host:canvas",
-		slot: "topbar.primary",
-		labelKey: "canvasTab",
-		icon: "share",
-		kind: "view",
-		view: "canvas",
-		order: 22.5,
-		group: "views",
-		align: "end",
-	},
 	// 插件面板（Chrome 扩展图标那个位置）：一个 🧩 入口列出全部已装插件，每行带「钉到顶栏」
 	// 开关。插件视图 tab 默认不钉（合成条目 hidden，见 withPluginViewItems），钉住的才回到
 	// 这里当 tab（order 23，紧跟本条目之前）。图标用 emoji 而不是词表名：词表名会被布局页
