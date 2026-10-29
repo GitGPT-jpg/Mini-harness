@@ -577,6 +577,29 @@ try {
     `\t\t<script id="pi-loop-modes-script">\n` +
     `\t\t(function(){try{\n` +
     `\t\t\tfunction replaceText(root,from,to){try{var w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,null,false),n;while(n=w.nextNode()){if(n.nodeValue&&n.nodeValue.indexOf(from)!==-1)n.nodeValue=n.nodeValue.split(from).join(to);}}catch(e){}}\n` +
+    `\t\t\t// LLM loop（pi 目标模式 2.0）里审查者就是主对话本身，没有独立的评审模型配置；\n` +
+    `\t\t\t// 这里补一个「评审模型」胶囊：显示主对话当前模型，点击打开输入框下方的模型选择器去切换。\n` +
+    `\t\t\tfunction composerModelBtn(){return document.querySelector('.composer-tools-left .dropdown.left > button.chip');}\n` +
+    `\t\t\tfunction ensureReviewChip(slot){\n` +
+    `\t\t\t\tvar opts=slot.querySelector('.goalbar-opts');if(!opts)return;\n` +
+    `\t\t\t\tvar mb=composerModelBtn(),name=mb?((mb.textContent||'').trim()||'—'):'—';\n` +
+    `\t\t\t\tvar chip=opts.querySelector('.mh-review-chip');\n` +
+    `\t\t\t\tif(!chip){\n` +
+    `\t\t\t\t\tvar wrap=document.createElement('div');wrap.className='dropdown right dd-up mh-review-wrap';\n` +
+    `\t\t\t\t\tchip=document.createElement('button');chip.type='button';chip.className='chip mh-review-chip';\n` +
+    `\t\t\t\t\tchip.title='评审模型＝主对话当前模型（LLM loop 由主对话审查每轮结果）。点击打开输入框下方的模型选择器切换；切换后本对话后续聊天也用这个模型。';\n` +
+    `\t\t\t\t\tchip.innerHTML='<span class="goalbar-opt"><span class="goalbar-opt-label">评审模型:</span><b class="mh-review-name"></b></span>';\n` +
+    `\t\t\t\t\tchip.addEventListener('click',function(e){e.stopPropagation();var b=composerModelBtn();if(b)b.click();});\n` +
+    `\t\t\t\t\twrap.appendChild(chip);\n` +
+    `\t\t\t\t\tvar first=opts.querySelector('.dropdown');opts.insertBefore(wrap,first?first.nextSibling:opts.firstChild);\n` +
+    `\t\t\t\t}\n` +
+    `\t\t\t\tvar nb=chip.querySelector('.mh-review-name');if(nb&&nb.textContent!==name)nb.textContent=name;\n` +
+    `\t\t\t\tvar exec='';opts.querySelectorAll('.goalbar-opt').forEach(function(o){var l=o.querySelector('.goalbar-opt-label');if(l&&/执行模型/.test(l.textContent||'')){var bb=o.querySelector('b');exec=bb?(bb.textContent||'').trim():'';}});\n` +
+    `\t\t\t\tvar same=!exec||exec==='使用主模型'||exec===name;\n` +
+    `\t\t\t\tvar warn=slot.querySelector('.mh-llm-same');\n` +
+    `\t\t\t\tif(same&&!warn){warn=document.createElement('div');warn.className='mh-llm-hint mh-llm-same';warn.style.color='#fbbf24';warn.textContent='执行模型与评审模型相同（自己审自己），建议给「执行模型」选另一家的模型。';slot.appendChild(warn);}\n` +
+    `\t\t\t\telse if(!same&&warn){warn.remove();}\n` +
+    `\t\t\t}\n` +
     `\t\t\tfunction relabel(){\n` +
     `\t\t\t\ttry{\n` +
     `\t\t\t\t\tdocument.querySelectorAll('.goalbar-hint span').forEach(function(s){if((s.textContent||'').trim()==='目标')s.textContent='LLM loop';});\n` +
@@ -586,9 +609,10 @@ try {
     `\t\t\t\t\tvar slot=document.querySelector('.goalbar-slot');\n` +
     `\t\t\t\t\tif(slot){\n` +
     `\t\t\t\t\t\tslot.querySelectorAll('button').forEach(function(b){var t=(b.textContent||'').trim();if(t==='提炼')b.textContent='帮我细化';else if(t==='发送')b.textContent='开始';});\n` +
-    `\t\t\t\t\t\treplaceText(slot,'调研模型','规划模型');replaceText(slot,'最大轮数','最多尝试');\n` +
-    `\t\t\t\t\t\tif(!slot.querySelector('.goalbar')){var oldHint=slot.querySelector('.mh-llm-hint');if(oldHint)oldHint.remove();}\n` +
-    `\t\t\t\t\t\tif(slot.querySelector('.goalbar')&&!slot.querySelector('.mh-llm-hint')){\n` +
+    `\t\t\t\t\t\treplaceText(slot,'调研模型','细化模型');replaceText(slot,'规划模型','细化模型');replaceText(slot,'最大轮数','最多尝试');\n` +
+    `\t\t\t\t\t\tensureReviewChip(slot);\n` +
+    `\t\t\t\t\t\tif(!slot.querySelector('.goalbar')){slot.querySelectorAll('.mh-llm-hint').forEach(function(h){h.remove();});}\n` +
+    `\t\t\t\t\t\tif(slot.querySelector('.goalbar')&&!slot.querySelector('.mh-llm-hint:not(.mh-llm-same)')){\n` +
     `\t\t\t\t\t\t\tvar d=document.createElement('div');d.className='mh-llm-hint';d.textContent='LLM loop：由 AI 自己判断是否完成，可能提前结束；需要严格验收请点旁边的「代码 loop」。';\n` +
     `\t\t\t\t\t\t\tslot.appendChild(d);\n` +
     `\t\t\t\t\t\t}\n` +
@@ -759,6 +783,7 @@ try {
     `\t\t\tif(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){setTimeout(tick,700);setTimeout(showStatusCard,900);});else setTimeout(tick,700);\n` +
     `\t\t\tsetTimeout(showStatusCard,900);\n` +
     `\t\t\tif(!window.__mhTickTimer){window.__mhTickTimer=setInterval(function(){if(document.hidden)return;tick();},3000);}\n` +
+    `\t\t\tif(!window.__mhClickTick){window.__mhClickTick=true;document.addEventListener('click',function(){if(document.querySelector('.goalbar-opts'))setTimeout(relabel,300);},true);}\n` +
     `\t\t}catch(e){}})();\n` +
     `\t\t</script>\n\t`;
   if (!html.includes(loopMarker)) {
