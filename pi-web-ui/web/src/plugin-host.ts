@@ -74,7 +74,6 @@ const PLUGIN_HOST_GLOBAL = "__piWebUiHost";
  *  11 = 新增 `models.list()`（已配置的模型目录，issue #188）与
  *      `startChat/openSession` 的 `model` 选项（canonical `provider/model`：
  *      newChat 时先建新对话再切到该模型，不动旧对话的模型；非法 id 直接拒绝）。
- *  12 = 新增 `ttsProviders`（通用语音合成提供者注册表：供插件对接系统朗读与播报）。
  *  13 = 新增 `openFileContextMenu`（右键菜单 contextmenu.file 槽位通道：让插件文件树接入宿主统一右键菜单）。 */
 export const PLUGIN_HOST_API_VERSION = 14;
 
@@ -300,32 +299,6 @@ interface PluginHostComposerProviderInfo {
 	label: string;
 }
 
-/** 一个通用语音合成提供者（插件可注册它来接管系统朗读与播报）。 */
-export interface PluginHostTtsProvider {
-	id: string;
-	label: string;
-	labelEn?: string;
-	/** 播放指定文本。返回一个停止函数（若播放被主动取消或打断时调用）。 */
-	play: (params: {
-		text: string;
-		rate: number;
-		voiceURI?: string;
-		onStart?: () => void;
-		onEnd?: () => void;
-		onError?: (err: Error) => void;
-	}) => () => void;
-	/** 可选：列出该引擎支持的可用音色 */
-	getVoices?: () =>
-		Promise<{ voiceURI: string; name: string; lang?: string }[]> | { voiceURI: string; name: string; lang?: string }[];
-}
-
-/** ttsProviders.list() 返回的轻量信息。 */
-export interface PluginHostTtsProviderInfo {
-	id: string;
-	label: string;
-	labelEn?: string;
-}
-
 /** 主题/语言/视图变化的订阅回调。 */
 type PluginHostThemeHandler = (name: string) => void;
 type PluginHostLocaleHandler = (locale: string) => void;
@@ -415,11 +388,6 @@ interface PluginHostApi {
 	composerProviders: {
 		register(provider: PluginHostComposerProvider): () => void;
 		list(): PluginHostComposerProviderInfo[];
-	};
-	/** 通用语音合成提供者（宿主 API v12）：插件可注册它来接管系统语音播报与朗读。 */
-	ttsProviders: {
-		register(provider: PluginHostTtsProvider): () => void;
-		list(): PluginHostTtsProviderInfo[];
 	};
 	/** 主题 / 语言 / 视图变化订阅（宿主 API v8）：App 侧经 emitPluginHostTheme /
 	 *  emitPluginHostLocale / emitPluginHostView 触发，这里只做订阅与分发。 */
@@ -959,10 +927,6 @@ export function createPluginHostApi(deps: PluginHostDeps): PluginHostApi {
 			register: (provider) => registerPluginComposerProvider(provider),
 			list: () => listPluginComposerProviders(),
 		},
-		ttsProviders: {
-			register: (provider) => registerPluginTtsProvider(provider),
-			list: () => listPluginTtsProviders(),
-		},
 		onTheme: (handler) => subscribePluginHostTheme(handler),
 		onLocale: (handler) => subscribePluginHostLocale(handler),
 		onViewChange: (handler) => subscribePluginHostView(handler),
@@ -1257,58 +1221,6 @@ export function getPluginComposerProvider(id: string): PluginHostComposerProvide
 /** 取一个提供者的完整定义（含 search 函数；GlobalSearchModal 调 search 用）。 */
 export function getPluginSearchProvider(id: string): PluginHostSearchProvider | undefined {
 	return searchProviderRegistry.get(String(id ?? ""));
-}
-
-/* ---- 语音合成提供者（纯内存注册表，与 searchProviders 同口径） ---- */
-
-const ttsProviderRegistry = new Map<string, PluginHostTtsProvider>();
-const ttsProviderListeners = new Set<() => void>();
-
-/** 注册一个语音合成提供者（同 id 后注册的覆盖前面的）。返回取消函数。 */
-export function registerPluginTtsProvider(provider: PluginHostTtsProvider): () => void {
-	const id = String(provider?.id ?? "").trim();
-	if (!id || typeof provider?.play !== "function") return () => {};
-	const stored: PluginHostTtsProvider = {
-		id,
-		label: String(provider.label ?? id),
-		labelEn: provider.labelEn ? String(provider.labelEn) : undefined,
-		play: provider.play,
-		getVoices: provider.getVoices,
-	};
-	ttsProviderRegistry.set(id, stored);
-	for (const cb of ttsProviderListeners) {
-		try {
-			cb();
-		} catch {}
-	}
-	return () => {
-		if (ttsProviderRegistry.get(id) === stored) {
-			ttsProviderRegistry.delete(id);
-			for (const cb of ttsProviderListeners) {
-				try {
-					cb();
-				} catch {}
-			}
-		}
-	};
-}
-
-/** 列出已注册的语音合成提供者。 */
-export function listPluginTtsProviders(): PluginHostTtsProviderInfo[] {
-	return [...ttsProviderRegistry.values()].map((p) => ({ id: p.id, label: p.label, labelEn: p.labelEn }));
-}
-
-/** 取一个语音合成提供者的完整定义。 */
-export function getPluginTtsProvider(id: string): PluginHostTtsProvider | undefined {
-	return ttsProviderRegistry.get(String(id ?? ""));
-}
-
-/** 订阅 TTS 提供者列表变化。 */
-export function onTtsProvidersChange(cb: () => void): () => void {
-	ttsProviderListeners.add(cb);
-	return () => {
-		ttsProviderListeners.delete(cb);
-	};
 }
 
 /* ---- 主题 / 语言 / 视图订阅（简单集合 + 触发器） ---- */

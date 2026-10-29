@@ -119,17 +119,6 @@ import type { Notice } from "./use-chat";
 import { fileToProcessedImage, isRasterImage, type ProcessedImage } from "./image-paste";
 import { randomUuid } from "./uuid";
 import { recordModelUsage } from "./model-usage";
-import { loadSoundSettings, playSound, saveSoundSettings, type SoundSettings } from "./sounds";
-import {
-	assistantPlainText,
-	loadTtsSettings,
-	saveTtsSettings,
-	speak,
-	startStreamSpeech,
-	stripMarkdownForSpeech,
-	type StreamSpeechQueue,
-	type TtsSettings,
-} from "./tts";
 import { messagePlainText } from "./copy-text";
 import { shouldSuppressNotify, currentPresence } from "./notify";
 import { useWideChat, useHideModelRow } from "./chat-width-settings";
@@ -1253,10 +1242,6 @@ export function App() {
 		return () => window.removeEventListener("keydown", onKey);
 	}, [toggleZenMode]);
 
-	// -- sound notifications --------------------------------------------------
-	const [sound, setSound] = useState<SoundSettings>(loadSoundSettings);
-	// -- local TTS announcements (Settings → Sound & Voice) -------------------
-	const [tts, setTts] = useState<TtsSettings>(loadTtsSettings);
 	// -- theme (whole stylesheet swap) ---------------------------------------
 	const { themes, theme, switchTheme, reloadThemes } = useTheme();
 	// -- chat wallpaper (message-list background image, issue #100) -------------
@@ -1340,14 +1325,6 @@ export function App() {
 	// Previous terminal list — drives the uninstall-finished watcher below.
 	const prevTerminalsRef = useRef(chat.terminals);
 
-	useEffect(() => {
-		saveSoundSettings(sound);
-	}, [sound]);
-
-	useEffect(() => {
-		saveTtsSettings(tts);
-	}, [tts]);
-
 	// Maintenance watcher: when a `pi remove …` / `pi-web-ui install|uninstall …`
 	// command tab transitions running → exited, re-discover extensions/skills
 	// (extensions_reload) or re-scan the UI-plugin dir (plugins_reload).
@@ -1389,100 +1366,19 @@ export function App() {
 		prevStreamingMapRef.current = cues.nextMap;
 		prevActiveIdRef.current = activeId;
 
-		if (cues.startCue) {
-			playSound("start", sound);
-		}
-
 		if (cues.finishedConvs.length > 0) {
-			playSound("done", sound);
-
 			const activeFinished = cues.finishedConvs.find((c) => c.isActive);
 			if (activeFinished) {
 				// 前台活动对话完成
 				void notify(t("notifyDoneTitle"), t("notifyDoneBody"));
-				if (tts.enabled) {
-					if (tts.readReplies) {
-						// 若开启了流式伴读（边打字边开口），内容在生成过程中已经实时朗读，结尾不再重复念；
-						// 未开启流式伴读时，生成完毕后主动念出全文
-						if (!tts.streamReplies) {
-							const body = assistantPlainText(latestMessagesRef.current);
-							if (body) speak(body, tts);
-							else if (tts.announce && !shouldSuppressNotify(currentPresence())) speak(t("ttsAnnounceDone"), tts);
-						}
-					} else if (tts.announce && !shouldSuppressNotify(currentPresence())) {
-						speak(t("ttsAnnounceDone"), tts);
-					}
-				}
 			}
-			// 后台对话完成（可能与其他会话同批）：逐条弹通知带标题；TTS 只播报一次，
-			// 且前台完成时让位给正文朗读，不叠加固定句。
+			// 后台对话完成（可能与其他会话同批）：逐条弹通知带标题。
 			for (const bg of cues.finishedConvs.filter((c) => !c.isActive)) {
 				const body = bg.title ? `${bg.title}：${t("notifyDoneBody")}` : t("notifyDoneBody");
 				void notify(t("notifyDoneTitle"), body);
 			}
-			if (!activeFinished && tts.enabled && tts.announce && !shouldSuppressNotify(currentPresence())) {
-				speak(t("ttsAnnounceDone"), tts);
-			}
 		}
-	}, [chat.state?.conversationId, chat.state?.isStreaming, chat.conversations, sound, tts, t]);
-
-	// ── 流式边打字边开口说话管道（Token-to-Speech Streaming Pipeline） ──
-	const streamSpeechQueueRef = useRef<StreamSpeechQueue | null>(null);
-	const streamSpokenOffsetRef = useRef(0);
-
-	useEffect(() => {
-		const isStreaming = chat.state?.isStreaming ?? false;
-		const conversationId = chat.state?.conversationId;
-		const canStreamTts = tts.enabled && tts.readReplies && tts.streamReplies;
-
-		if (!canStreamTts || !isStreaming) {
-			// 流式结束：若队列还在，冲刷残余尾句并标记完成
-			if (streamSpeechQueueRef.current) {
-				const msgs = latestMessagesRef.current;
-				const lastMsg = Array.isArray(msgs) && msgs.length > 0 ? msgs[msgs.length - 1] : null;
-				if (lastMsg && lastMsg.role === "assistant") {
-					const fullRaw = messagePlainText(lastMsg.content);
-					if (fullRaw.length > streamSpokenOffsetRef.current) {
-						const tail = fullRaw.slice(streamSpokenOffsetRef.current);
-						const clean = stripMarkdownForSpeech(tail, 0);
-						if (clean) streamSpeechQueueRef.current.push(clean);
-					}
-				}
-				streamSpeechQueueRef.current.finish();
-				streamSpeechQueueRef.current = null;
-				streamSpokenOffsetRef.current = 0;
-			}
-			return;
-		}
-
-		// 正在流式生成时：追踪最新 assistant 消息
-		const msgs = chat.state?.messages;
-		const lastMsg = Array.isArray(msgs) && msgs.length > 0 ? msgs[msgs.length - 1] : null;
-		if (!lastMsg || lastMsg.role !== "assistant") return;
-
-		const fullRaw = messagePlainText(lastMsg.content);
-		if (fullRaw.length <= streamSpokenOffsetRef.current) return;
-
-		// 启动流式播放队列
-		if (!streamSpeechQueueRef.current) {
-			streamSpeechQueueRef.current = startStreamSpeech(tts, conversationId);
-			streamSpokenOffsetRef.current = 0;
-		}
-
-		// 在尚未消费的区间寻找标点断句
-		const unconsumed = fullRaw.slice(streamSpokenOffsetRef.current);
-		const match = unconsumed.match(/(?:[。！？!?；;\n]|(?<=.{25,})[，,])/);
-		if (match && typeof match.index === "number") {
-			const boundary = match.index + match[0].length;
-			const sentenceRaw = unconsumed.slice(0, boundary);
-			streamSpokenOffsetRef.current += boundary;
-
-			const cleanSentence = stripMarkdownForSpeech(sentenceRaw, 0);
-			if (cleanSentence) {
-				streamSpeechQueueRef.current.push(cleanSentence);
-			}
-		}
-	}, [chat.state?.messages, chat.state?.isStreaming, chat.state?.conversationId, tts]);
+	}, [chat.state?.conversationId, chat.state?.isStreaming, chat.conversations, t]);
 
 	// Questionnaire cue — each new dialog id + each new DSH question id.
 	// dialog = 扩展 select/confirm/input；question = ask_user_question 问卷。
@@ -1495,11 +1391,9 @@ export function App() {
 				const oldest = notifiedDialogIds.current.values().next().value;
 				if (oldest !== undefined) notifiedDialogIds.current.delete(oldest);
 			}
-			playSound("question", sound);
 			void notify(t("notifyQuestionTitle"), t("notifyQuestionBody"));
-			if (tts.enabled && tts.announce && !shouldSuppressNotify(currentPresence())) speak(t("ttsAnnounceQuestion"), tts);
 		}
-	}, [chat.dialog, sound, tts, t]);
+	}, [chat.dialog, t]);
 
 	useEffect(() => {
 		const qid = chat.question?.id ?? null;
@@ -1535,11 +1429,9 @@ export function App() {
 		}
 
 		if (shouldCue) {
-			playSound("question", sound);
 			void notify(t("notifyQuestionTitle"), t("notifyQuestionBody"));
-			if (tts.enabled && tts.announce && !shouldSuppressNotify(currentPresence())) speak(t("ttsAnnounceQuestion"), tts);
 		}
-	}, [chat.question, chat.remoteQuestion, chat.conversations, sound, tts, t]);
+	}, [chat.question, chat.remoteQuestion, chat.conversations, t]);
 
 	// Tool-approval cue (issue #288)：高危操作等待用户批准 —— 此前是唯一静默的
 	// 拦截事件（done/question/error 都有提示音 + 桌面通知，唯独审批没有），AI 会
@@ -1554,23 +1446,19 @@ export function App() {
 				const oldest = notifiedApprovalIds.current.values().next().value;
 				if (oldest !== undefined) notifiedApprovalIds.current.delete(oldest);
 			}
-			playSound("approval", sound);
 			const tool = typeof approval?.toolName === "string" ? approval.toolName : "";
 			void notify(t("notifyApprovalTitle"), tool ? t("notifyApprovalBodyTool", { tool }) : t("notifyApprovalBody"));
-			if (tts.enabled && tts.announce && !shouldSuppressNotify(currentPresence())) speak(t("ttsAnnounceApproval"), tts);
 		}
-	}, [chat.approval, sound, tts, t]);
+	}, [chat.approval, t]);
 
 	// Error cue — new error notices only.
 	useEffect(() => {
 		const err = [...chat.notices].reverse().find((n) => n.level === "error");
 		if (err && err.id !== lastErrorNotice.current) {
 			lastErrorNotice.current = err.id;
-			playSound("error", sound);
 			void notify(t("notifyErrorTitle"), t("notifyErrorBody"));
-			if (tts.enabled && tts.announce && !shouldSuppressNotify(currentPresence())) speak(t("ttsAnnounceError"), tts);
 		}
-	}, [chat.notices, sound, tts, t]);
+	}, [chat.notices, t]);
 	// live-preview 工具的自动开页：工具结果末尾的确定性链接行即标记（渲染出来本身
 	// 也是可点兜底）。消息 id 去重（重连重放不二次开）；多标签页只让当前聚焦的开，
 	// 没焦点/弹窗被拦时推一条带地址的 notice（聊天里的链接照样可点）。
@@ -2201,7 +2089,6 @@ export function App() {
 						onUiAction={onUiAction}
 						uiContextTopbar={uiSlots["contextmenu.topbar"]}
 						onThemeToggle={() => switchTheme(theme === "light" ? null : "light")}
-						onSoundToggle={() => setSound({ ...sound, enabled: !sound.enabled })}
 						zenMode={zenMode}
 						onToggleZenMode={toggleZenMode}
 					/>
@@ -2818,7 +2705,6 @@ export function App() {
 						onUiAction={onUiAction}
 						uiContextTopbar={uiSlots["contextmenu.topbar"]}
 						onThemeToggle={() => switchTheme(theme === "light" ? null : "light")}
-						onSoundToggle={() => setSound({ ...sound, enabled: !sound.enabled })}
 						zenMode={zenMode}
 						onToggleZenMode={toggleZenMode}
 					/>
@@ -2910,10 +2796,6 @@ export function App() {
 						setSettingsOpen(false);
 						setManageModelsOpen(true);
 					}}
-					sound={sound}
-					onSoundChange={setSound}
-					tts={tts}
-					onTtsChange={setTts}
 				/>
 			)}
 			{bgTasksOpen && (

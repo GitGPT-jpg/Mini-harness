@@ -76,10 +76,7 @@ import type {
 	UiToolPromptOverride,
 } from "../types";
 import { SchedulerPanel } from "./SchedulerPanel";
-import { SoundSettingsPanel, TtsSettingsPanel } from "./SoundSettings";
 import { NotifyToggle } from "./NotifyToggle";
-import { playSound, type SoundSettings } from "../sounds";
-import { speak, type TtsSettings } from "../tts";
 import {
 	clearPromptHistory,
 	loadPromptHistory,
@@ -261,12 +258,6 @@ interface SettingsModalProps {
 	onOpenIconEdit?: () => void;
 	/** 打开模型与服务商管理面板（弹窗） */
 	onOpenManageModels?: () => void;
-	/** Sound cue + TTS settings — state lives in App (localStorage-backed),
-	 *  shared with the TopBar sound dropdown via props. */
-	sound: SoundSettings;
-	onSoundChange: (settings: SoundSettings) => void;
-	tts: TtsSettings;
-	onTtsChange: (settings: TtsSettings) => void;
 }
 
 /** A row with an enable/disable switch (skill / extension). */
@@ -690,10 +681,6 @@ export function SettingsModal({
 	onClose,
 	onOpenIconEdit,
 	onOpenManageModels,
-	sound,
-	onSoundChange,
-	tts,
-	onTtsChange,
 }: SettingsModalProps) {
 	const t = useT();
 	const { locale } = useI18n();
@@ -1386,7 +1373,7 @@ export function SettingsModal({
 		// 对话展示（全引擎通用）
 		{ id: "display", icon: <FiMessageSquare />, label: t("settingsMessageDisplay") },
 		// 声音与语音（全引擎通用）
-		{ id: "sound", icon: <FiVolume2 />, label: t("settingsSoundVoice") },
+		{ id: "sound", icon: <FiVolume2 />, label: t("settingsNotifyTab") },
 		// 快捷短语（全引擎通用）
 		{ id: "quick", icon: <FiSend />, label: t("quickPhrases"), count: settings.quickPhrases.length },
 		// 技能（仅 Pi 引擎支持 .pi/skills）
@@ -4113,24 +4100,14 @@ export function SettingsModal({
 							</div>
 						)}
 
-						{/* ---- 声音与语音（提示音事件开关 + 本地 TTS 播报，issue #288） ---- */}
+						{/* ---- 通知（系统桌面通知；提示音与本地 TTS 已随精简发行版移除） ---- */}
 						{tab === "sound" && (
 							<div className="set-section">
 								<div className="set-section-title">
 									<FiVolume2 className="set-section-icon" />
-									{t("settingsSoundVoice")}
+									{t("settingsNotifyTab")}
 								</div>
-								<SoundSettingsPanel
-									settings={sound}
-									onChange={onSoundChange}
-									onPreview={(kind) => playSound(kind, sound)}
-								/>
 								<NotifyToggle />
-								<TtsSettingsPanel
-									settings={tts}
-									onChange={onTtsChange}
-									onPreview={() => speak(t("ttsPreviewLine"), { ...tts, enabled: true })}
-								/>
 							</div>
 						)}
 

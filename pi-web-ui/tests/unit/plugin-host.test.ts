@@ -489,19 +489,3 @@ describe("createPluginHostApi.models + startChat/openSession 的 model（issue #
 		expect(seen).toEqual(["openai/gpt-4o-mini"]);
 	});
 });
-
-describe("createPluginHostApi.ttsProviders（宿主 API v12）", () => {
-	it("ttsProviders.register / list / 取消注册正常工作", () => {
-		const { api } = harness();
-		const unreg = api.ttsProviders.register({
-			id: "mock-engine",
-			label: "Mock Engine",
-			play: () => () => {},
-		});
-		expect(api.ttsProviders.list()).toEqual(
-			expect.arrayContaining([{ id: "mock-engine", label: "Mock Engine", labelEn: undefined }]),
-		);
-		unreg();
-		expect(api.ttsProviders.list().find((p) => p.id === "mock-engine")).toBeUndefined();
-	});
-});

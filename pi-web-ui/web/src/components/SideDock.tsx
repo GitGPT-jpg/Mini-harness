@@ -20,7 +20,6 @@ interface SideDockProps {
 	uiContextTopbar?: UiSlotEntry[];
 	onOpenProjectPicker?: () => void;
 	onThemeToggle?: () => void;
-	onSoundToggle?: () => void;
 	zenMode?: boolean;
 	onToggleZenMode?: () => void;
 	dropdownProps?: BarItemProps["dropdownProps"];
@@ -54,7 +53,6 @@ export function SideDock({
 	uiContextTopbar,
 	onOpenProjectPicker,
 	onThemeToggle: _onThemeToggle,
-	onSoundToggle: _onSoundToggle,
 	zenMode,
 	onToggleZenMode,
 	dropdownProps,

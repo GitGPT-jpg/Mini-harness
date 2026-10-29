@@ -50,16 +50,6 @@ import { contextMenuItems, openContextMenu } from "../context-menu-state";
 import { messageMarkdown, messagePlainText } from "../copy-text";
 import { formatSize } from "../format-bytes";
 import { copyTextToClipboard, useCopyFeedback } from "../use-copy-feedback";
-import {
-	isSpeaking,
-	isTtsAvailable,
-	loadTtsSettings,
-	onSpeakingChange,
-	speak,
-	speakingSourceId,
-	stopSpeaking,
-	stripMarkdownForSpeech,
-} from "../tts";
 import { openExportImage, toggleExportImageSelect, useExportImage } from "../export-image-state";
 import { hasMessageWidget } from "../plugin-fence";
 import { openRollbackDialog } from "../rollback-state";
@@ -554,29 +544,6 @@ export const Message = memo(function Message({
 	 *  回落角色名 —— 菜单的定位信息（读屏 aria-label、宿主排障）不该是空的。 */
 	const ctxLabel = truncateText(messagePlainText(message.content), 40) || roleLabel(message.role, t);
 
-	// ---- 本地 TTS：消息工具条「朗读」按钮（host:msg-speak，复制三件套旁边） ----
-	// speaking 状态是浏览器级单例（tts.ts），这里只订阅；sourceId = 消息 id，
-	// 让「停止」只落在正在读的这一条上 —— 读着 A 时点 B 是改读 B，不是停止。
-	const [_ttsSpeaking, setTtsSpeaking] = useState(isSpeaking());
-	useEffect(() => onSpeakingChange(setTtsSpeaking), []);
-	const canSpeak =
-		message.role === "assistant" &&
-		messagePlainText(message.content).trim().length > 0 &&
-		!streaming &&
-		isTtsAvailable();
-	const speakActive = canSpeak && speakingSourceId() === message.id;
-	const toggleSpeak = () => {
-		if (speakActive) {
-			stopSpeaking();
-			return;
-		}
-		// 手动朗读是明确意图，不受设置里 enabled 门控；放宽至 5000 字符，避免在代码块前被 600 字硬截断。
-		speak(
-			stripMarkdownForSpeech(messagePlainText(message.content), 5000),
-			{ ...loadTtsSettings(), enabled: true },
-			message.id,
-		);
-	};
 	// 下拉复制菜单展开状态（点击外部或 Esc 关闭）
 	const [copyDropdownOpen, setCopyDropdownOpen] = useState(false);
 	const copyGroupRef = useRef<HTMLDivElement>(null);
@@ -598,21 +565,6 @@ export const Message = memo(function Message({
 			document.removeEventListener("keydown", onKey);
 		};
 	}, [copyDropdownOpen]);
-
-	const speakNode = (key: string): ReactNode =>
-		canSpeak ? (
-			<button
-				key={key}
-				type="button"
-				className={`msg-action${speakActive ? " msg-action-speaking" : ""}`}
-				title={speakActive ? t("stopSpeakingMsg") : t("speakMsg")}
-				aria-label={speakActive ? t("stopSpeakingMsg") : t("speakMsg")}
-				onClick={toggleSpeak}
-			>
-				{speakActive ? <FiSquare /> : <FiVolume2 />}{" "}
-				<span className="msg-action-label">{speakActive ? t("stopSpeakingMsg") : t("speakMsg")}</span>
-			</button>
-		) : null;
 
 	/** 右键菜单兜底条目：直接取 BUILTIN_UI_ITEMS 的 contextmenu.message 内置清单
 	 *  （单源，勿在此手抄）——slot 数据未接线时也能弹出与正常路径一致的菜单。 */
@@ -665,9 +617,6 @@ export const Message = memo(function Message({
 				case "host:msg-ctx-fork":
 				case "host:msg-ctx-rollback":
 					return !readOnly && !streaming && !editing ? entry : { ...entry, hidden: true };
-				case "host:msg-ctx-speak":
-					if (!canSpeak) return { ...entry, hidden: true };
-					return speakActive ? { ...entry, label: t("stopSpeakingMsg"), icon: "square" } : entry;
 				default:
 					return entry;
 			}
@@ -715,9 +664,6 @@ export const Message = memo(function Message({
 						return undefined;
 					case "host:msg-ctx-rollback":
 						openRollbackDialog({ messageId: message.id });
-						return undefined;
-					case "host:msg-ctx-speak":
-						toggleSpeak();
 						return undefined;
 					default:
 						onUiAction?.(entry);
@@ -800,8 +746,7 @@ export const Message = memo(function Message({
 	const renderActionsChildren = (): ReactNode[] | null => {
 		if (!uiMessageActions) {
 			const fallbackCopy = renderCopyDropdown("fb-copy");
-			const speakFallback = speakNode("fb-speak");
-			if (!canEdit && !fallbackCopy && !speakFallback) return null;
+			if (!canEdit && !fallbackCopy) return null;
 			const children: ReactNode[] = [];
 			if (canEdit) {
 				children.push(
@@ -828,7 +773,6 @@ export const Message = memo(function Message({
 				);
 			}
 			if (fallbackCopy) children.push(fallbackCopy);
-			if (speakFallback) children.push(speakFallback);
 			return children;
 		}
 		const nodes: ReactNode[] = [];
@@ -849,11 +793,6 @@ export const Message = memo(function Message({
 					const node = renderCopyDropdown("copy-dropdown", uiMessageActions);
 					if (node) nodes.push(node);
 				}
-				return;
-			}
-			if (entry.id === "host:msg-speak") {
-				const node = speakNode(key);
-				if (node) nodes.push(node);
 				return;
 			}
 			if (entry.id === "host:msg-reask") {
@@ -1001,7 +940,7 @@ export const Message = memo(function Message({
 	//     （chead-copy：复制思考 / 复制参数）—— 不再挂整排消息级按钮，于是同一条
 	//     回复里两张 bash 卡长得一模一样，窄屏上右端按钮数也永远一致。
 	//   · 没有正文的消息（纯工具调用 / 纯思考 / 附件卡 / 插件消息）不渲染底部行：
-	//     `canCopyWhole`（整条复制三件套要正文）与 `canSpeak` 本来就为假，那一行
+	//     `canCopyWhole`（整条复制三件套要正文）本来为假，那一行
 	//     只剩「派生分支 / 回滚」这类对卡片无意义的按钮，而复制已在卡头。
 	const showMessageActions = !editing && (message.role === "user" || canCopyWhole);
 
