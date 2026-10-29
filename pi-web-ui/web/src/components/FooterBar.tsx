@@ -28,6 +28,7 @@ const FALLBACK_BOTTOMBAR: { id: string; align: "start" | "end" }[] = [
 	{ id: "host:msg-count", align: "start" },
 	{ id: "host:plugin-status", align: "start" },
 	{ id: "host:status-delegate", align: "start" },
+	{ id: "host:loop", align: "start" },
 	{ id: "host:working", align: "start" },
 	{ id: "host:host-metrics", align: "end" },
 	{ id: "host:cwd", align: "end" },

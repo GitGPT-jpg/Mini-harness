@@ -15,6 +15,7 @@ import { RightPanel } from "./components/RightPanel";
 import { MessageList } from "./components/MessageList";
 import { ChatInput } from "./components/ChatInput";
 import { GoalBar } from "./components/GoalBar";
+import { LoopBar } from "./components/LoopBar";
 import { SandboxModal } from "./components/SandboxModal";
 import { WorktreeBanner } from "./components/WorktreeBanner";
 import { FiRefreshCw, FiFeather } from "react-icons/fi";
@@ -2430,7 +2431,7 @@ export function App() {
 							)}
 
 							{/* 目标条宿主槽：只包 GoalBar。折叠态时槽高 0（药丸脱离文档流），
-							    展开态就是原来那一条（.goalbar 自带 margin）。 */}
+						    展开态就是原来那一条（.goalbar 自带 margin）。 */}
 							{chat.settings?.goalModeEnabled !== false && (
 								<div className="goalbar-slot">
 									<GoalBar
@@ -2443,6 +2444,11 @@ export function App() {
 									/>
 								</div>
 							)}
+							{/* Loop 紧凑入口：与目标条同一带子（复用 .goalbar-slot/.goalbar 视觉语言），
+						    闲置是居中小药丸，运行中是「阶段·轮次·耗时+停止」状态条。 */}
+							<div className="goalbar-slot">
+								<LoopBar loop={chat.state?.loop ?? null} />
+							</div>
 							{/* 扩展问卷：非模态内联面板，插在输入框上方，对话内容保持可见 */}
 							{/* 通用右键菜单（contextmenu.* 槽位）：各处的 onContextMenu 打开它。 */}
 							<ContextMenu onAction={(entry, target, value) => onUiAction(entry, value, target)} />

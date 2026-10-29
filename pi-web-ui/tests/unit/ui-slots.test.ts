@@ -182,6 +182,7 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			"host:msg-count",
 			"host:plugin-status",
 			"host:working",
+			"host:loop",
 			"host:status-delegate",
 			"host:host-metrics",
 			"host:cwd",

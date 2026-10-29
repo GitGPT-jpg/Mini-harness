@@ -24,7 +24,7 @@ import { LuFlaskConical, LuMessageSquareDashed, LuWorkflow } from "react-icons/l
 import { REQUIRED_TOPBAR_ITEM_IDS, restoreUiItem, type UiSlotEntry, type UiSlotId } from "../ui-slots";
 import type { ChatState } from "../use-chat";
 import { useFormattedCost } from "../cost-format";
-import { isZhLocale, useT, useI18n } from "../i18n";
+import { isZhLocale, useT, useI18n, type Translate } from "../i18n";
 import { useAppGlobals, appSend } from "../app-globals";
 import { PluginIcon } from "../plugin-icon";
 import { focusComposer } from "../composer-bridge";
@@ -37,6 +37,34 @@ import { EnginePicker } from "./EnginePicker";
 import { appUrl } from "../base-url";
 
 export type ViewName = "chat" | "terminal" | "git" | "canvas" | `plugin:${string}`;
+
+/** Loop 耗时：1m05s / 1h03m（active 时随秒级 tick 刷新）。 */
+export function formatLoopElapsed(ms: number): string {
+	const s = Math.max(0, Math.floor(ms / 1000));
+	if (s < 60) return `${s}s`;
+	const m = Math.floor(s / 60);
+	if (m < 60) return `${m}m${String(s % 60).padStart(2, "0")}s`;
+	return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m`;
+}
+
+/** Loop 阶段名（intake/plan/run/validate/review/done → 本地化短词）。 */
+export function loopStageText(t: Translate, stage?: string): string {
+	switch (stage) {
+		case "intake":
+			return t("loopStageIntake");
+		case "plan":
+			return t("loopStagePlan");
+		case "run":
+			return t("loopStageRun");
+		case "validate":
+		case "review":
+			return t("loopStageValidate");
+		case "done":
+			return t("loopStageDone");
+		default:
+			return stage ?? "";
+	}
+}
 
 export interface BarItemTheme {
 	id: string;
@@ -137,6 +165,16 @@ export function BarItem({
 	const [langOpen, setLangOpen] = useState(false);
 	const [themeOpen, setThemeOpen] = useState(false);
 	const [updateOpen, setUpdateOpen] = useState(false);
+	// Loop 条目的耗时随秒级 tick 刷新（仅 pending/active 时起 interval，其余时候静止）。
+	const [loopNow, setLoopNow] = useState(() => Date.now());
+	const loopActive =
+		chat.state?.loop?.kind === "pending" || (chat.state?.loop?.kind === "run" && chat.state.loop.status === "active");
+	useEffect(() => {
+		if (!loopActive) return;
+		setLoopNow(Date.now());
+		const id = setInterval(() => setLoopNow(Date.now()), 1000);
+		return () => clearInterval(id);
+	}, [loopActive]);
 
 	const layout = chat.settings?.uiLayout;
 	const state = chat.state;
@@ -565,6 +603,44 @@ export function BarItem({
 				<span className="status-rate bar-item-rate" title={t("rateTip")}>
 					{rate > 0 ? `${Math.round(rate)}${t("tps")}` : "…"}
 				</span>
+			</span>
+		);
+	}
+
+	// 6b. 特殊条目：Loop 运行状态（阶段 · 轮次 · 耗时；无 loop 时整条不画）
+	if (id === "host:loop") {
+		const loop = state?.loop;
+		if (!loop) return null;
+		const loopElapsed = formatLoopElapsed(loopNow - new Date(loop.createdAt).getTime());
+		const loopRound =
+			loop.round !== undefined ? (loop.maxRounds ? `${loop.round}/${loop.maxRounds}` : `${loop.round}`) : "";
+		let loopClass = "ok";
+		let loopText: string;
+		if (loop.kind === "pending") {
+			loopText = t("loopStatusStarting");
+			loopClass = "busy";
+		} else if (loop.kind === "request-failed") {
+			loopText = t("loopStatusFailed");
+			loopClass = "error";
+		} else if (loop.status === "active") {
+			loopText = `${loopStageText(t, loop.stage)}${loopRound ? ` · ${loopRound}` : ""} · ${loopElapsed}`;
+		} else if (loop.status === "done") {
+			loopText = `${t("loopStatusDone")}${loopRound ? ` · ${loopRound}` : ""} · ${loopElapsed}`;
+		} else {
+			loopText = `${t("loopStatusStopped")}${loopRound ? ` · ${loopRound}` : ""} · ${loopElapsed}`;
+			loopClass = "mid";
+		}
+		const loopTitle = `${loopText}${loop.goal ? `\n${loop.goal}` : ""}${loop.reason ? `\n${loop.reason}` : ""}${loop.stopReason ? `\n${loop.stopReason}` : ""}`;
+		return (
+			<span
+				className={`bar-item status-item status-loop bar-item-loop ${loopClass}`}
+				title={loopTitle}
+				data-tip={loopTitle}
+				onContextMenu={handleContextMenu}
+				data-bar-item={id}
+			>
+				<span className={`status-dot ${loopClass}`} />
+				<span className="bar-item-text">{withName(loopText)}</span>
 			</span>
 		);
 	}

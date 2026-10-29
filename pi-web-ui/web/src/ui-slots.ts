@@ -605,6 +605,16 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		order: 15,
 		group: "status",
 	},
+	// Loop 运行状态：有 loop 时才画（渲染层看 state.loop），阶段 · 轮次 · 耗时。
+	{
+		id: "host:loop",
+		slot: "bottombar",
+		labelKey: "loopBadge",
+		icon: "repeat",
+		kind: "badge",
+		order: 16,
+		group: "status",
+	},
 	// 审查者模式标识：开启时才画（渲染层看 state.delegateMode），点开执行对话。
 	{
 		id: "host:status-delegate",

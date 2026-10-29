@@ -13304,6 +13304,12 @@
 		position: relative;
 	}
 
+	/* Loop 折叠药丸的定位上下文：同上一条，但保持独立规则
+	   （单测按选择器逐条取 CSS body，分组选择器会破坏匹配）。 */
+	.goalbar-slot:has(.loopbar-collapsed) {
+		position: relative;
+	}
+
 	/* 目标条折叠态：只有一枚小药丸，**不是一条面板**。
    刻意不带 `.goalbar` 类（那套边框/底色/圆角/内边距在收起时全是多余），而且
    **脱离文档流**：position:absolute + bottom:100%（浮在输入区上沿），与「回到底部」
@@ -13350,6 +13356,36 @@
 	.main:has(.plan-board) .goalbar-collapsed {
 		position: static;
 		margin: 0 var(--chat-inset) 6px;
+		pointer-events: auto;
+	}
+
+	/* Loop 折叠态药丸：与 .goalbar-collapsed 同一路数（absolute + bottom:100% 浮起），
+   但**钉在右端**——居中位置让给目标药丸，两枚药丸各占一端不叠。
+   刻意不用 .goalbar-collapsed 类：那会触发一串 :has(.goalbar-collapsed) 副作用
+   （scroll-bottom 抬升、居中通栏 left:0/right:0），这里只要一枚小胶囊。 */
+	.loopbar-collapsed {
+		position: absolute;
+		right: var(--chat-inset);
+		bottom: 100%;
+		display: flex;
+		align-items: center;
+		margin-bottom: 4px;
+		min-width: 0;
+		max-width: 40%;
+		overflow: hidden;
+		pointer-events: none;
+	}
+
+	.loopbar-collapsed > * {
+		pointer-events: auto;
+	}
+
+	/* 问卷/计划看板在场时与目标药丸一起退回文档流（浮起会压面板上边框）。 */
+	.main:has(.dialog-inline) .loopbar-collapsed,
+	.main:has(.plan-board) .loopbar-collapsed {
+		position: static;
+		margin: 0 var(--chat-inset) 4px;
+		justify-content: flex-end;
 		pointer-events: auto;
 	}
 
