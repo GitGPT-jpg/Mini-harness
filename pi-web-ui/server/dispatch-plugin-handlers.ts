@@ -18,7 +18,6 @@ import type { ClientMessage, ServerMessage } from "./protocol.js";
 import type { DispatchSession } from "./index.js";
 import type { PluginManager } from "./plugins.js";
 import { buildPluginJobArgs, inspectInstallSpec, type PluginInstaller } from "./plugin-installer.js";
-import { syncPluginCatalog } from "./plugin-catalog-sync.js";
 import type { ServerLang } from "./i18n.js";
 
 export interface PluginDispatchContext {
@@ -83,24 +82,6 @@ export function handlePluginMessage(msg: ClientMessage, ctx: PluginDispatchConte
 		case "plugins_reload":
 			void pluginMgr.reload(() => cs?.getLang() ?? "en").then(() => pluginMgr.pushToAll());
 			return true;
-		case "plugin_catalog_add": {
-			const r = pluginMgr.addCatalogEntry(msg.entry ?? {}, () => cs?.getLang() ?? "en");
-			if (r.error) {
-				cs?.emitNotice?.("error", `添加到插件列表失败：${r.error}`, `Failed to add to plugin list: ${r.error}`);
-			} else {
-				cs?.emitNotice?.("info", "已添加到插件列表", "Added to the plugin list");
-			}
-			return true;
-		}
-		case "plugin_catalog_remove": {
-			const r = pluginMgr.removeCatalogEntry(msg.id, () => cs?.getLang() ?? "en");
-			if (r.error) {
-				cs?.emitNotice?.("error", `从插件列表移除失败：${r.error}`, `Failed to remove from plugin list: ${r.error}`);
-			} else {
-				cs?.emitNotice?.("info", "已从插件列表移除", "Removed from the plugin list");
-			}
-			return true;
-		}
 		case "plugin_job": {
 			const jobLang = () => cs?.getLang() ?? "en";
 			const jobId = String(msg.jobId ?? "");
@@ -213,28 +194,6 @@ export function handlePluginMessage(msg: ClientMessage, ctx: PluginDispatchConte
 			send({ type: "plugin_api_catalog_result", requestId, catalog: pluginMgr.getApiCatalog() });
 			return true;
 		}
-		case "plugin_install_inspect": {
-			const requestId = String(msg.requestId ?? "");
-			const source = String(msg.source ?? "");
-			void inspectInstallSpec(source, {
-				pluginsDir: pluginMgr.pluginsDir,
-				...(typeof msg.explicitId === "string" && msg.explicitId.trim() ? { explicitId: msg.explicitId.trim() } : {}),
-				force: msg.force === true,
-			}).then((r) => {
-				send({
-					type: "plugin_install_inspect_result",
-					requestId,
-					source,
-					kind: r.spec.kind,
-					suggestedId: r.suggestedId,
-					installed: r.installed,
-					...(r.problem ? { problem: r.problem } : {}),
-					...(r.detail ? { detail: r.detail } : {}),
-					...(r.manifest ? { manifest: r.manifest } : {}),
-				});
-			});
-			return true;
-		}
 		case "plugin_path_response": {
 			const id = String(msg.id ?? "");
 			const pending = pendingPathRequests.get(id);
@@ -322,41 +281,6 @@ export function handlePluginMessage(msg: ClientMessage, ctx: PluginDispatchConte
 			);
 			cs?.emitNotice?.("info", `已撤销 ${removed} 条能力授权`, `Revoked ${removed} permission grant(s)`);
 			pushPluginPermissions();
-			return true;
-		}
-		case "plugin_catalog_sync": {
-			const syncLang = () => cs?.getLang() ?? "en";
-			const requestId = String(msg.requestId ?? "");
-			void syncPluginCatalog(
-				String(msg.source ?? ""),
-				{ install: msg.install === true, replace: msg.replace === true },
-				{
-					customCatalogPath: pluginMgr.customCatalogPath,
-					communityCatalogPath: pluginMgr.communityCatalogPath,
-					pluginsDir: join(dataDir, "plugins"),
-					installer: pluginInstaller,
-					afterWrite: () => (msg.install === true ? reloadPluginsAndPush(syncLang) : pluginMgr.pushCatalog()),
-					lang: syncLang,
-					workspaceRoot: cs?.cwd ?? cwd,
-					confirmInstall: (items) => confirmPluginInstallHelper(items),
-				},
-			).then((r) => {
-				if (r.installRefused) {
-					cs?.emitNotice?.(
-						"warning",
-						"目录已同步，但安装未获用户确认（拒绝或超时），未安装任何插件",
-						"Catalog synced, but installation was not confirmed (denied or timed out) — nothing was installed",
-					);
-				}
-				send({
-					type: "plugin_catalog_sync_result",
-					requestId,
-					ok: r.ok,
-					...(r.error ? { error: r.error } : {}),
-					entries: pluginMgr.catalog(),
-					...(r.installed ? { installed: r.installed } : {}),
-				});
-			});
 			return true;
 		}
 		default:

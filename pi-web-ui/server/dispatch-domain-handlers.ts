@@ -215,9 +215,6 @@ export function handlePresetAndDshMessage(msg: ClientMessage, cs: DispatchSessio
 		case "dsh_patch_delete":
 			void cs.deleteDshPatch?.(msg.name);
 			return true;
-		case "dsh_market_fetch":
-			void cs.fetchDshMarket?.(msg.force);
-			return true;
 		case "save_preset":
 			void cs.savePreset(msg.name);
 			return true;
@@ -709,15 +706,6 @@ export function handleSettingsMessage(msg: ClientMessage, cs: DispatchSession): 
 			return true;
 		case "uninstall_skill":
 			void cs.uninstallSkill?.(msg.name, msg.scope);
-			return true;
-		case "fetch_mcp_market":
-			void cs.fetchMcpMarket?.(msg.source, msg.query, msg.page, msg.refresh);
-			return true;
-		case "fetch_skill_market":
-			void cs.fetchSkillMarket?.(msg.repo, msg.refresh);
-			return true;
-		case "fetch_skill_content":
-			void cs.fetchSkillContent?.(msg.repo, msg.skillId);
 			return true;
 		default:
 			return false;

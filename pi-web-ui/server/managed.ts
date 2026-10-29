@@ -35,11 +35,9 @@ export const MANAGED_MESSAGES = [
 	/** Updates an agent engine package via background process. */
 	"update_engine",
 	/** Plugin market: fetches and installs a plugin from the network. */
-	"plugin_catalog_add",
 	/** Plugin install/update/uninstall run as a background job (issue #152). */
 	"plugin_job",
 	/** Catalog sync can install/update entries too (issue #148). */
-	"plugin_catalog_sync",
 ] as const;
 
 /**

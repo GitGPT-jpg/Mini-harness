@@ -79,7 +79,6 @@ import {
 } from "../subagent-handoff.js";
 import type { DriverFactory } from "./universal-service.js";
 import { pick, type ServerLang } from "../i18n.js";
-import { fetchRemoteSkillMarket, fetchRemoteSkillContent, fetchRemoteMcpMarket } from "../market-service.js";
 import {
 	exportPresetVia,
 	importPresetVia,
@@ -2595,54 +2594,6 @@ export class UniversalSession implements DispatchSession {
 			const msg = err instanceof Error ? err.message : String(err);
 			this.emitNotice("error", `卸载技能失败：${msg}`, `Failed to uninstall skill: ${msg}`);
 		}
-	}
-
-	async fetchMcpMarket(source?: string, query?: string, page?: number, refresh?: boolean): Promise<void> {
-		const res = await fetchRemoteMcpMarket({
-			source,
-			query,
-			page,
-			refresh,
-			dataDir: this.dataDir,
-		});
-		this.send({
-			type: "mcp_market_result",
-			ok: res.ok,
-			servers: res.servers,
-			source: res.source,
-			total: res.total,
-			error: res.error,
-		});
-	}
-
-	async fetchSkillMarket(repo?: string, refresh?: boolean): Promise<void> {
-		const res = await fetchRemoteSkillMarket({
-			repo,
-			refresh,
-			dataDir: this.dataDir,
-		});
-		this.send({
-			type: "skill_market_result",
-			ok: res.ok,
-			skills: res.skills,
-			repo: res.repo,
-			error: res.error,
-		});
-	}
-
-	async fetchSkillContent(repo: string, skillId: string): Promise<void> {
-		const res = await fetchRemoteSkillContent({
-			repo,
-			skillId,
-			dataDir: this.dataDir,
-		});
-		this.send({
-			type: "skill_content_result",
-			ok: res.ok,
-			skillId: res.skillId,
-			content: res.content,
-			error: res.error,
-		});
 	}
 
 	// ---------------------------------------------------------------------------

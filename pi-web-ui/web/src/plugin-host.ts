@@ -14,7 +14,6 @@
  *     openSession({ cwd? | folders? | roots?, prompt?, newChat? }) → Promise<{ok, sessionId?, error?}>
  *     sessions: { list(), open(id) }                    // 会话列表 / 打开（宿主 API v2）
  *     compose({ text?, attachments? }) → boolean        // 放进输入框草稿，等用户自己发
- *     reloadCatalog(source, { install?, replace? }) → Promise<{ok, error?, entries?, installed?}>
  *     onUiAction(name, handler) → () => void            // 接管 UI 条目的动作（host.ui 框架）
  *     pageCall({ op, args?, target?, timeoutMs? }) → Promise<{ok, result?, error?}>
  *   }
@@ -25,7 +24,6 @@
  * folders/roots 可给多个：第一个当 cwd，其余当**额外工作区根**（宿主侧多根：AI 仍只在
  * cwd 里干活，文件树与插件受支持路径可跨这些根），每个目录都要过授权确认这一关。
  *
- * reloadCatalog 是受支持的插件市场目录同步（issue #148）：不再依赖私有的浏览器事件
  * 与可见终端，服务端校验/原子写/可选安装后回执。
  *
  * pageCall 是「AI 操作页面」的通道：服务端把模型的动作（`page_request`）推过来，这里转给
@@ -54,7 +52,7 @@ const PLUGIN_HOST_GLOBAL = "__piWebUiHost";
 /** 宿主 API 版本：插件可用它判断宿主能力（> 本值表示宿主更新）。
  *  2 = 新增 `compose()`（注入输入框草稿）。
  *  3 = 新增 `pageCall()`（把模型的动作转给浏览器扩展，见 plugin-host 注释）。
- *  4 = 新增 `reloadCatalog()`（市场目录同步，issue #148）、`openSession()`
+ *  4 = 新增 `openSession()`
  *      （带目录授权的新会话，issue #146）与 `onTopbarAction()`（顶栏动作接管）。
  *  5 = 顶栏动作升级为通用 UI 动作 `onUiAction()`（slot 框架：顶栏/底栏/输入框/
  *      消息/右键菜单/设置页都能接管），`onTopbarAction` 保留为别名。
@@ -173,18 +171,6 @@ interface PluginHostSessionsApi {
 
 /** `{ok:true, sessionId}` 或 `{ok:false, error}`（错误原文回给插件，可用于提示用户）。 */
 type PluginHostOpenSessionResult = { ok: true; sessionId?: string } | { ok: false; error: string };
-
-/** 目录同步选项（host.reloadCatalog 的第二个参数）。 */
-interface PluginHostReloadCatalogOptions {
-	/** 顺手把条目安装/更新一遍（已装 = 更新，未装 = 安装）。 */
-	install?: boolean;
-	/** 整体替换用户自定义列表（默认合并/按 id upsert）。 */
-	replace?: boolean;
-}
-
-type PluginHostReloadCatalogResult =
-	| { ok: true; entries?: UiPluginCatalogEntry[]; installed?: { id: string; ok: boolean; error?: string }[] }
-	| { ok: false; error: string };
 
 /** 顶栏条目的点击处理器（插件注册；itemId = manifest 里声明的条目 id）。
  *  kind="select" 的切换回传第二个参数 value（选中的 options value）；其余 kind 只传 itemId。 */
@@ -335,7 +321,6 @@ interface PluginHostApi {
 	/** 获取最近项目路径列表（与左侧边栏「最近项目」一致）。 */
 	listProjects(): string[];
 	/** 同步插件市场目录（受支持路径，service 端原子写 + 可选安装 + 重载）。 */
-	reloadCatalog(source: string, options?: PluginHostReloadCatalogOptions): Promise<PluginHostReloadCatalogResult>;
 	/** 接管 UI 条目的动作（manifest "ui" 里那条目声明的 `action`，或 host.ui.register
 	 *  运行时注册的）：用户点击该条目时宿主回调到这里。返回取消注册函数。
 	 *  建议 action 名带插件前缀（`<pluginId>:<name>`）避免撞名。 */
@@ -748,32 +733,6 @@ export function createPluginHostApi(deps: PluginHostDeps): PluginHostApi {
 				if (!switched) return { ok: false, error: `切换会话超时：${info.title}` };
 				return { ok: true, sessionId: deps.getConversationId() ?? undefined };
 			},
-		},
-		async reloadCatalog(source, options) {
-			const src = String(source ?? "").trim();
-			if (!src) return { ok: false, error: "reloadCatalog 需要一个目录来源（http(s) URL 或本地文件路径）" };
-			if (!deps.isReady()) return { ok: false, error: "尚未连接到服务器（还没有快照）" };
-			const requestId = randomUuid();
-			return new Promise<PluginHostReloadCatalogResult>((resolve) => {
-				const timer = setTimeout(
-					() => {
-						pendingCatalogSync.delete(requestId);
-						resolve({ ok: false, error: "目录同步超时（服务端未在等待窗口内回执）" });
-					},
-					Math.max(1000, Number(deps.catalogTimeoutMs ?? 180_000)),
-				);
-				pendingCatalogSync.set(requestId, (result) => {
-					clearTimeout(timer);
-					resolve(result);
-				});
-				deps.send({
-					type: "plugin_catalog_sync",
-					requestId,
-					source: src,
-					...(options?.install ? { install: true } : {}),
-					...(options?.replace ? { replace: true } : {}),
-				});
-			});
 		},
 		onUiAction(name, handler) {
 			return registerPluginTopbarAction(pluginScope, String(name ?? "").trim(), handler);
@@ -1312,30 +1271,3 @@ export function emitPluginHostView(view: string): void {
 }
 
 /* -------------------------------------------------------------------------- */
-/* 目录同步回执（use-chat 收到 plugin_catalog_sync_result 时转交这里）          */
-/* -------------------------------------------------------------------------- */
-
-type CatalogSyncResolver = (result: PluginHostReloadCatalogResult) => void;
-const pendingCatalogSync = new Map<string, CatalogSyncResolver>();
-
-/** use-chat 调用：把服务端的同步回执交给等待中的 reloadCatalog()（无等待者则丢弃）。 */
-export function resolveCatalogSyncResult(msg: {
-	requestId: string;
-	ok: boolean;
-	error?: string;
-	entries?: UiPluginCatalogEntry[];
-	installed?: { id: string; ok: boolean; error?: string }[];
-}): void {
-	const resolve = pendingCatalogSync.get(msg.requestId);
-	if (!resolve) return;
-	pendingCatalogSync.delete(msg.requestId);
-	if (!msg.ok) {
-		resolve({ ok: false, error: msg.error ?? "目录同步失败" });
-		return;
-	}
-	resolve({
-		ok: true,
-		...(msg.entries ? { entries: msg.entries } : {}),
-		...(msg.installed ? { installed: msg.installed } : {}),
-	});
-}

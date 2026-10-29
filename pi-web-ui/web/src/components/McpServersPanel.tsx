@@ -23,19 +23,10 @@ import { CopyButton } from "./copy-button";
 import { HintTip } from "./HintTip";
 import { isZhLocale, useI18n, useT } from "../i18n";
 import type { McpScope, RemoteMcpServer, UiMcpServer, UiMcpToolInfo, UiSettingsState } from "../types";
-import { PUBLIC_MCP_SERVERS } from "../mcp-catalog";
 
 export interface McpServersPanelProps {
 	settings: UiSettingsState;
-	chat: {
-		mcpMarketResult?: {
-			ok: boolean;
-			servers: RemoteMcpServer[];
-			total?: number;
-			source: string;
-			error?: string;
-		} | null;
-	};
+	chat: {};
 }
 
 interface McpDraft {
@@ -120,12 +111,7 @@ const MCP_PRESETS: McpPresetTemplate[] = [
 export function McpServersPanel({ settings, chat }: McpServersPanelProps) {
 	const t = useT();
 	const { locale } = useI18n();
-	const [viewMode, setViewMode] = useState<"configured" | "market">("configured");
 	const [scopeFilter, setScopeFilter] = useState<"all" | McpScope>("all");
-	const [marketSource, setMarketSource] = useState<string>("smithery");
-	const [customSourceUrl, setCustomSourceUrl] = useState<string>("");
-	const [marketSearch, setMarketSearch] = useState<string>("");
-	const [marketLoading, setMarketLoading] = useState<boolean>(false);
 	const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({});
 	const [reloading, setReloading] = useState(false);
 	const [draft, setDraft] = useState<McpDraft | null>(null);
@@ -140,63 +126,6 @@ export function McpServersPanel({ settings, chat }: McpServersPanelProps) {
 		if (scopeFilter === "all") return servers;
 		return servers.filter((s) => s.scope === scopeFilter);
 	}, [servers, scopeFilter]);
-
-	const configuredServerIds = useMemo(() => {
-		return new Set(servers.map((s) => s.name.toLowerCase()));
-	}, [servers]);
-
-	const fetchMarket = (refresh = false) => {
-		const source = marketSource === "custom" ? customSourceUrl.trim() : marketSource;
-		if (!source) return;
-		setMarketLoading(true);
-		appSend({
-			type: "fetch_mcp_market",
-			source,
-			query: marketSearch.trim() || undefined,
-			refresh,
-		});
-	};
-
-	useEffect(() => {
-		if (viewMode !== "market") return;
-		const source = marketSource === "custom" ? customSourceUrl.trim() : marketSource;
-		if (!source) return;
-		setMarketLoading(true);
-		const timer = setTimeout(() => {
-			appSend({
-				type: "fetch_mcp_market",
-				source,
-				query: marketSearch.trim() || undefined,
-			});
-		}, 350);
-		return () => clearTimeout(timer);
-	}, [viewMode, marketSource, marketSearch, customSourceUrl]);
-
-	useEffect(() => {
-		if (chat.mcpMarketResult) {
-			setMarketLoading(false);
-		}
-	}, [chat.mcpMarketResult]);
-
-	const remoteServers: RemoteMcpServer[] = useMemo(() => {
-		if (chat.mcpMarketResult?.ok && chat.mcpMarketResult.servers?.length > 0) {
-			return chat.mcpMarketResult.servers;
-		}
-		// 回退至内置预备列表
-		return PUBLIC_MCP_SERVERS.map((s) => ({
-			id: s.id,
-			name: s.name,
-			displayName: isZhLocale(locale) ? s.nameZh : s.name,
-			description: isZhLocale(locale) ? s.descriptionZh : s.description,
-			homepage: s.homepage,
-			package: s.package,
-			command: s.command,
-			args: s.args,
-			transport: s.transport,
-			source: "builtin",
-			verified: s.official,
-		}));
-	}, [chat.mcpMarketResult, locale]);
 
 	const globalCount = useMemo(() => servers.filter((s) => s.scope === "global").length, [servers]);
 	const projectCount = useMemo(() => servers.filter((s) => s.scope === "project").length, [servers]);
@@ -404,32 +333,10 @@ export function McpServersPanel({ settings, chat }: McpServersPanelProps) {
 				</div>
 			</div>
 
-			{/* 子页签切换：已配置 vs MCP 市场 */}
-			<div className="mcp-tab-bar">
-				<button
-					type="button"
-					className={`mcp-tab-btn${viewMode === "configured" ? " active" : ""}`}
-					onClick={() => setViewMode("configured")}
-				>
-					<FiServer />
-					<span>{t("mcpTabConfigured")}</span>
-					<span className="set-count">{servers.length}</span>
-				</button>
-				<button
-					type="button"
-					className={`mcp-tab-btn${viewMode === "market" ? " active" : ""}`}
-					onClick={() => setViewMode("market")}
-				>
-					<FiShoppingBag />
-					<span>{t("mcpTabMarket")}</span>
-					<span className="set-count">{PUBLIC_MCP_SERVERS.length}</span>
-				</button>
-			</div>
-
 			{/* ========================================================= */}
 			{/* 1. 已配置服务器视图                                        */}
 			{/* ========================================================= */}
-			{viewMode === "configured" && (
+			{true && (
 				<>
 					{/* 路径与作用域概览 */}
 					<div className="mcp-meta-card">
@@ -489,24 +396,6 @@ export function McpServersPanel({ settings, chat }: McpServersPanelProps) {
 							</div>
 							<div className="mcp-empty-title">{t("mcpEmptyTitle")}</div>
 							<div className="mcp-empty-desc">{t("mcpEmptyDesc")}</div>
-							<div className="mcp-empty-quick-presets">
-								<button type="button" className="mcp-goto-market-btn" onClick={() => setViewMode("market")}>
-									<FiShoppingBag />
-									{t("mcpBrowseMarket")}
-								</button>
-								<span className="mcp-quick-label">{t("mcpQuickAdd")}:</span>
-								{MCP_PRESETS.filter((p) => p.id !== "custom").map((p) => (
-									<button
-										key={p.id}
-										type="button"
-										className="mcp-quick-btn"
-										onClick={() => openNewServerModal("global", p.id)}
-									>
-										<FiPlus />
-										{t(p.label as Parameters<typeof t>[0])}
-									</button>
-								))}
-							</div>
 						</div>
 					) : (
 						<div className="mcp-servers-list">
@@ -638,164 +527,6 @@ export function McpServersPanel({ settings, chat }: McpServersPanelProps) {
 						</div>
 					)}
 				</>
-			)}
-
-			{/* ========================================================= */}
-			{/* 2. MCP 市场视图（支持远程 Smithery / GitHub / 自定义 API 源） */}
-			{/* ========================================================= */}
-			{viewMode === "market" && (
-				<div className="mcp-market-view">
-					<div className="mcp-market-toolbar">
-						{/* 源选择器与自定义输入 */}
-						<div className="mcp-market-source-row">
-							<div className="mcp-source-select-wrap">
-								<label className="mcp-source-label">{t("mcpSourceSelectLabel")}:</label>
-								<select
-									className="set-select mcp-source-select"
-									value={marketSource}
-									onChange={(e) => setMarketSource(e.target.value)}
-								>
-									<option value="smithery">{t("mcpSourceSmithery")}</option>
-									<option value="github">{t("mcpSourceGithub")}</option>
-									<option value="custom">{t("mcpSourceCustom")}</option>
-								</select>
-							</div>
-							<button
-								type="button"
-								className={`set-save-btn mcp-sync-btn${marketLoading ? " spinning" : ""}`}
-								title={t("mcpReload")}
-								onClick={() => fetchMarket(true)}
-							>
-								<FiRefreshCw />
-								<span>{t("mcpReload")}</span>
-							</button>
-						</div>
-
-						{marketSource === "custom" && (
-							<div className="mcp-custom-source-row">
-								<input
-									type="text"
-									className="set-input mcp-custom-input"
-									placeholder={t("mcpSourceCustomPlaceholder")}
-									value={customSourceUrl}
-									onChange={(e) => setCustomSourceUrl(e.target.value)}
-									onKeyDown={(e) => {
-										if (e.key === "Enter") fetchMarket(true);
-									}}
-								/>
-							</div>
-						)}
-
-						<div className="mcp-search-wrap">
-							<FiSearch className="mcp-search-icon" />
-							<input
-								type="text"
-								className="set-input mcp-search-input"
-								placeholder={t("mcpMarketSearchPlaceholder")}
-								value={marketSearch}
-								onChange={(e) => setMarketSearch(e.target.value)}
-							/>
-							{marketSearch && (
-								<button type="button" className="mcp-search-clear" onClick={() => setMarketSearch("")}>
-									<FiX />
-								</button>
-							)}
-						</div>
-					</div>
-
-					{/* 错误提示 */}
-					{chat.mcpMarketResult?.error && (
-						<div className="mcp-error-box">
-							<FiAlertTriangle className="mcp-error-icon" />
-							<div className="mcp-error-text">{chat.mcpMarketResult.error}</div>
-							<button type="button" className="mcp-mini-btn" onClick={() => fetchMarket(true)}>
-								{t("mcpMarketRetry")}
-							</button>
-						</div>
-					)}
-
-					{/* 加载指示器 */}
-					{marketLoading && (
-						<div className="mcp-market-loading">
-							<FiRefreshCw className="spinning" />
-							<span>{t("mcpMarketLoading")}</span>
-						</div>
-					)}
-
-					{/* 市场服务器卡片网格 */}
-					<div className="mcp-market-grid">
-						{remoteServers.map((srv) => {
-							const isConfigured = configuredServerIds.has(srv.id.toLowerCase());
-							return (
-								<div key={`${srv.source}-${srv.id}`} className="mcp-market-card">
-									<div className="mcp-market-card-head">
-										<div className="mcp-market-title-wrap">
-											{srv.iconUrl ? (
-												<img src={srv.iconUrl} alt="" className="mcp-market-icon-img" />
-											) : (
-												<FiServer className="mcp-market-icon-fallback" />
-											)}
-											<span className="mcp-market-name">{srv.displayName || srv.name}</span>
-											{srv.displayName && srv.displayName !== srv.name && (
-												<span className="mcp-market-subname">({srv.name})</span>
-											)}
-											{srv.verified && <span className="mcp-badge-official">{t("mcpBadgeOfficial")}</span>}
-										</div>
-										{srv.homepage && (
-											<a
-												href={srv.homepage}
-												target="_blank"
-												rel="noreferrer"
-												className="mcp-market-link"
-												title={srv.homepage}
-											>
-												<FiExternalLink />
-											</a>
-										)}
-									</div>
-
-									<p className="mcp-market-desc">{srv.description}</p>
-
-									<div className="mcp-market-pkg">
-										<code className="mcp-market-pkg-code">{srv.package || srv.id}</code>
-										{typeof srv.downloads === "number" && srv.downloads > 0 && (
-											<span className="mcp-downloads-tag">{srv.downloads.toLocaleString()} downloads</span>
-										)}
-									</div>
-
-									<div className="mcp-market-card-actions">
-										{isConfigured && (
-											<span className="mcp-market-configured-badge">
-												<FiCheck />
-												{t("mcpConfigured")}
-											</span>
-										)}
-										<div className="mcp-market-add-btns">
-											<button
-												type="button"
-												className="mcp-btn-add global"
-												title={t("mcpAddGlobalHint")}
-												onClick={() => openFromRemoteMarket(srv, "global")}
-											>
-												<FiPlus />
-												{t("mcpAddGlobal")}
-											</button>
-											<button
-												type="button"
-												className="mcp-btn-add project"
-												title={t("mcpAddProjectHint")}
-												onClick={() => openFromRemoteMarket(srv, "project")}
-											>
-												<FiPlus />
-												{t("mcpAddProject")}
-											</button>
-										</div>
-									</div>
-								</div>
-							);
-						})}
-					</div>
-				</div>
 			)}
 
 			{/* ========================================================= */}

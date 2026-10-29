@@ -47,11 +47,9 @@ describe("managed instances", () => {
 				"check_updates_all",
 				"install_pi_agent",
 				"update_engine",
-				"plugin_catalog_add",
 				// 插件安装/更新/卸载的后台作业（issue #152）与目录同步（#148，可带安装）
 				// 都是网络安装入口：托管实例一并拒绝。
 				"plugin_job",
-				"plugin_catalog_sync",
 			].sort(),
 		);
 	});

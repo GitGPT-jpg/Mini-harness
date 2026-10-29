@@ -50,7 +50,6 @@ import { PluginPage } from "./PluginPage";
 import { PluginSettingsForm } from "./PluginSettingsForm";
 import { ToolPromptEditor } from "./ToolPromptEditor";
 import { McpServersPanel } from "./McpServersPanel";
-import { PUBLIC_SKILLS, type PublicSkill } from "../skill-catalog";
 import { SUPPORTED_ENGINES } from "./EnginePicker";
 import type {
 	CommandDef,
@@ -105,7 +104,6 @@ import {
 } from "../ui-slots";
 import { ICON_EDIT_ALIGNS, sideAlignLabel } from "../ui-layout-edit";
 import type {
-	CatalogSyncState,
 	PluginInstallInspectState,
 	PluginJobState,
 	PresetCatalogState,
@@ -169,16 +167,12 @@ interface SettingsModalProps {
 	chat: {
 		settings: UiSettingsState | null;
 		plugins: UiPluginInfo[];
-		/** Installable-plugin list (marketplace) — one-click install candidates. */
-		pluginCatalog: UiPluginCatalogEntry[];
 		/** 插件更新状态表，key = pluginId。 */
 		pluginUpdates?: Record<string, UiPluginUpdateInfo> | null;
 		/** 是否正在检查插件更新。 */
 		checkingPluginUpdates?: boolean;
 		/** 插件后台作业（安装/更新/卸载）的实时状态，key = jobId（issue #152）。 */
 		pluginJobs: Record<string, PluginJobState>;
-		/** 最近一次目录同步的回执（issue #165「从目录同步」框展示用）。 */
-		catalogSync: CatalogSyncState | null;
 		/** 预设分享（server/preset-share.ts）的四条回执状态。 */
 		presetExport: PresetExportState | null;
 		presetImport: PresetImportState | null;
@@ -202,13 +196,6 @@ interface SettingsModalProps {
 		}[];
 		/** DSH engine: <dataDir>/dsh-patches user patch files. */
 		dshPatches: { patchDir: string; files: DshPatchFileInfo[] } | null;
-		/** DSH engine: awesome-dsh-plugin 社区插件市场清单。 */
-		dshMarket: {
-			count: number;
-			updated?: string;
-			categories: Record<string, { en: string; zh: string }>;
-			plugins: DshMarketPlugin[];
-		} | null;
 		/** DSH engine: Agent 预设名录（null/空 = legacy，隐藏预设区）。 */
 		dshPresets: { presets: UiAgentPreset[]; defaultPreset: string } | null;
 		/** DSH engine: 权限预设选项表 + 新会话默认（null = 未就绪/legacy，隐藏权限区）。 */
@@ -261,32 +248,6 @@ interface SettingsModalProps {
 }
 
 /** A row with an enable/disable switch (skill / extension). */
-/** 最近同步过的目录 URL（issue #165：一键重同步）。localStorage 存本浏览器的最近 8 个，
- *  与服务端无关——换浏览器/清缓存只丢掉快捷入口，不影响已同步的列表。 */
-const CATALOG_SYNC_RECENT_KEY = "pi-web-ui:catalog-sync-urls";
-const CATALOG_SYNC_RECENT_MAX = 8;
-function loadCatalogSyncRecent(): string[] {
-	try {
-		const raw = localStorage.getItem(CATALOG_SYNC_RECENT_KEY);
-		if (!raw) return [];
-		const arr: unknown = JSON.parse(raw);
-		if (!Array.isArray(arr)) return [];
-		return arr.filter((s): s is string => typeof s === "string" && s.trim() !== "").slice(0, CATALOG_SYNC_RECENT_MAX);
-	} catch {
-		return [];
-	}
-}
-function rememberCatalogSyncUrl(url: string): string[] {
-	const src = url.trim();
-	if (!src) return loadCatalogSyncRecent();
-	const next = [src, ...loadCatalogSyncRecent().filter((s) => s !== src)].slice(0, CATALOG_SYNC_RECENT_MAX);
-	try {
-		localStorage.setItem(CATALOG_SYNC_RECENT_KEY, JSON.stringify(next));
-	} catch {
-		/* 隐私模式：记不住就记不住 */
-	}
-	return next;
-}
 
 /** 各来源排序权重：append 置顶（最常用），可编辑居中，只读沉底（纯预览）。 */
 function rankPromptToken(tk: string): number {
@@ -728,7 +689,7 @@ export function SettingsModal({
 	const defaultTab: SettingsTab = isClaude ? "models" : isDsh ? "models" : "prompt";
 	const [tab, setTab] = useState<SettingsTab>(initialSection ?? defaultTab);
 	// 界面插件分组内的子页签：市场 / 已安装（一次只看一坨，免得 5 大块堆在一起滚半天；默认进市场，安装一步直达）。
-	const [pluginSub, setPluginSub] = useState<"market" | "installed">("market");
+	const [pluginSub] = useState<"installed">("installed");
 	// 内容滚动容器：切换分组后回到顶部（各组高度不同，停留旧滚动位置会像没切换）。
 	const bodyRef = useRef<HTMLDivElement>(null);
 	useEffect(() => {
@@ -741,143 +702,11 @@ export function SettingsModal({
 	}, [tab]);
 
 	// 技能市场子页签、远程仓库与筛选
-	const [skillSubTab, setSkillSubTab] = useState<"installed" | "market">("installed");
-	const [skillMarketCategory, setSkillMarketCategory] = useState<string>("all");
-	const [skillMarketSearch, setSkillMarketSearch] = useState<string>("");
-	const [skillMarketRepo, setSkillMarketRepo] = useState<string>("anthropics/skills");
-	const [customSkillRepo, setCustomSkillRepo] = useState<string>("");
-	const [skillMarketLoading, setSkillMarketLoading] = useState<boolean>(false);
-	const [inspectingSkill, setInspectingSkill] = useState<PublicSkill | null>(null);
-	const [skillContentDraft, setSkillContentDraft] = useState<Record<string, string>>({});
-	const [fetchingSkillContentId, setFetchingSkillContentId] = useState<string | null>(null);
+	const [skillSubTab] = useState<"installed">("installed");
 
 	const installedSkillNames = useMemo(() => {
 		return new Set((settings?.skills ?? []).map((s) => s.name.toLowerCase()));
 	}, [settings?.skills]);
-
-	const effectiveSkillRepo = skillMarketRepo === "custom" ? customSkillRepo.trim() : skillMarketRepo;
-
-	const fetchSkillMarket = (refresh = false) => {
-		if (!effectiveSkillRepo) return;
-		setSkillMarketLoading(true);
-		appSend({
-			type: "fetch_skill_market",
-			repo: effectiveSkillRepo,
-			refresh,
-		});
-	};
-
-	useEffect(() => {
-		if (tab !== "skills" || skillSubTab !== "market") return;
-		if (!effectiveSkillRepo) return;
-		setSkillMarketLoading(true);
-		const timer = setTimeout(() => {
-			appSend({
-				type: "fetch_skill_market",
-				repo: effectiveSkillRepo,
-			});
-		}, 350);
-		return () => clearTimeout(timer);
-	}, [tab, skillSubTab, skillMarketRepo, customSkillRepo]);
-
-	useEffect(() => {
-		if (chat.skillMarketResult) {
-			setSkillMarketLoading(false);
-		}
-	}, [chat.skillMarketResult]);
-
-	useEffect(() => {
-		if (chat.skillContentResult?.ok && chat.skillContentResult.skillId) {
-			const id = chat.skillContentResult.skillId;
-			const content = chat.skillContentResult.content;
-			setSkillContentDraft((prev) => ({ ...prev, [id]: content }));
-			setFetchingSkillContentId(null);
-			if (inspectingSkill && inspectingSkill.id === id) {
-				setInspectingSkill((prev) => (prev ? { ...prev, content } : null));
-			}
-		}
-	}, [chat.skillContentResult]);
-
-	const remoteSkills = useMemo(() => {
-		if (chat.skillMarketResult?.ok && chat.skillMarketResult.skills?.length > 0) {
-			return chat.skillMarketResult.skills.map((s) => ({
-				id: s.id,
-				name: s.name,
-				nameZh: s.name,
-				description: s.description,
-				descriptionZh: s.description,
-				category: "workflow" as const,
-				content: skillContentDraft[s.id] || "",
-			}));
-		}
-		return PUBLIC_SKILLS;
-	}, [chat.skillMarketResult, skillContentDraft]);
-
-	const filteredMarketSkills = useMemo(() => {
-		return remoteSkills.filter((sk) => {
-			if (skillMarketCategory !== "all" && sk.category !== skillMarketCategory) {
-				return false;
-			}
-			if (skillMarketSearch.trim()) {
-				const q = skillMarketSearch.trim().toLowerCase();
-				const matchName = sk.name.toLowerCase().includes(q) || sk.nameZh.toLowerCase().includes(q);
-				const matchDesc = sk.description.toLowerCase().includes(q) || sk.descriptionZh.toLowerCase().includes(q);
-				return matchName || matchDesc;
-			}
-			return true;
-		});
-	}, [remoteSkills, skillMarketCategory, skillMarketSearch]);
-
-	const openInspectSkill = (sk: { id: string; name: string; description: string; content?: string }) => {
-		const cached = skillContentDraft[sk.id] || sk.content;
-		if (cached) {
-			setInspectingSkill({
-				id: sk.id,
-				name: sk.name,
-				nameZh: sk.name,
-				description: sk.description,
-				descriptionZh: sk.description,
-				category: "workflow",
-				content: cached,
-			});
-		} else {
-			setFetchingSkillContentId(sk.id);
-			setInspectingSkill({
-				id: sk.id,
-				name: sk.name,
-				nameZh: sk.name,
-				description: sk.description,
-				descriptionZh: sk.description,
-				category: "workflow",
-				content: "",
-			});
-			appSend({
-				type: "fetch_skill_content",
-				repo: effectiveSkillRepo,
-				skillId: sk.id,
-			});
-		}
-	};
-
-	const handleInstallSkill = (skill: { id: string; content?: string }, scope: "global" | "project") => {
-		const content = skillContentDraft[skill.id] || skill.content;
-		if (content) {
-			appSend({
-				type: "install_skill",
-				name: skill.id,
-				scope,
-				content,
-			});
-			setInspectingSkill(null);
-		} else {
-			setFetchingSkillContentId(skill.id);
-			appSend({
-				type: "fetch_skill_content",
-				repo: effectiveSkillRepo,
-				skillId: skill.id,
-			});
-		}
-	};
 
 	const handleUninstallSkill = (name: string, scope: "global" | "project") => {
 		appSend({
@@ -887,27 +716,10 @@ export function SettingsModal({
 		});
 	};
 
-	const skillCategoryBadge = (category: string) => {
-		switch (category) {
-			case "quality":
-				return t("skillCatQuality");
-			case "workflow":
-				return t("skillCatWorkflow");
-			case "architecture":
-				return t("skillCatArchitecture");
-			case "devops":
-				return t("skillCatDevops");
-			case "stack":
-				return t("skillCatStack");
-			default:
-				return t("skillCatAll");
-		}
-	};
-	// DSH 引擎：打开设置时自动拉取用户 patch 列表与社区插件市场数据（pi 引擎忽略该消息）。
+	// DSH 引擎：打开设置时自动拉取用户 patch 列表（pi 引擎忽略该消息）。
 	useEffect(() => {
 		if (isDsh) {
 			appSend({ type: "dsh_patches_list" });
-			appSend({ type: "dsh_market_fetch" });
 		}
 	}, [isDsh]);
 
@@ -1098,24 +910,10 @@ export function SettingsModal({
 	const [, bumpLogSeq] = useState(0);
 	useEffect(() => subscribePluginLogs(() => bumpLogSeq((n) => n + 1)), []);
 	// "Add to plugin list" form fields (plugin marketplace).
-	const [catSource, setCatSource] = useState("");
-	const [catId, setCatId] = useState("");
-	const [catName, setCatName] = useState("");
-	const [catDesc, setCatDesc] = useState("");
-	const [catIcon, setCatIcon] = useState("");
-	const [showCatAdd, setShowCatAdd] = useState(false);
 	/** 市场安装/更新时先做隔离源码构建（等价 CLI --build，issue #150）。
 	 *  没勾选也不怕：只有源码没有产物的插件服务端会自动构建（issue #165 的 --build 推断）；
 	 *  勾选 = 连产物齐全的也强制重编。 */
-	const [catBuild, setCatBuild] = useState(false);
 	// 「从目录同步」表单（issue #165）：来源 + 选项 + 等待中的请求 id。
-	const [showCatSync, setShowCatSync] = useState(false);
-	const [catSyncSource, setCatSyncSource] = useState("");
-	const [catSyncInstall, setCatSyncInstall] = useState(false);
-	const [catSyncReplace, setCatSyncReplace] = useState(false);
-	const [catSyncReq, setCatSyncReq] = useState<string | null>(null);
-	const [catSyncSent, setCatSyncSent] = useState("");
-	const [catSyncRecent, setCatSyncRecent] = useState<string[]>(() => loadCatalogSyncRecent());
 	// 快捷短语新增输入框草稿（Enter / 添加按钮提交）。
 	const [quickNew, setQuickNew] = useState("");
 	// 快捷短语行内编辑（null = 未在编辑；输入框受控于 value，回显不打断输入）。
@@ -1126,10 +924,6 @@ export function SettingsModal({
 	// DSH 用户补丁安装输入框草稿
 	const [dshPatchInput, setDshPatchInput] = useState("");
 	// DSH 插件市场子面板（探索 / 已安装）与搜索分类状态
-	const [dshMarketSub, setDshMarketSub] = useState<"discover" | "installed">("discover");
-	const [dshMarketSearch, setDshMarketSearch] = useState("");
-	const [dshMarketCat, setDshMarketCat] = useState<string>("all");
-	const [dshMarketPage, setDshMarketPage] = useState(1);
 
 	useEffect(() => {
 		if (!settings) return;
@@ -1697,7 +1491,6 @@ export function SettingsModal({
 			action,
 			id,
 			...(source ? { source } : {}),
-			...(action !== "uninstall" && catBuild ? { build: true } : {}),
 		});
 	};
 
@@ -1911,91 +1704,6 @@ export function SettingsModal({
 		runPluginJob("update", id, source);
 	};
 
-	/** 从市场一键安装（未装的直接装；已装的按钮走更新）。 */
-	const runCatalogInstall = (e: UiPluginCatalogEntry) => {
-		runPluginJob("install", e.id, e.source);
-	};
-
-	/** Remove a user-added plugin from the marketplace list. */
-	const runCatalogRemove = (id: string) => {
-		appSend({ type: "plugin_catalog_remove", id });
-	};
-
-	/** Submit the "add to plugin list" form (server validates + persists). */
-	const submitCatalogAdd = () => {
-		const source = catSource.trim();
-		if (!source) return;
-		appSend({
-			type: "plugin_catalog_add",
-			entry: {
-				source,
-				...(catId.trim() ? { id: catId.trim() } : {}),
-				...(catName.trim() ? { name: catName.trim() } : {}),
-				...(catDesc.trim() ? { description: catDesc.trim() } : {}),
-				...(catIcon.trim() ? { icon: catIcon.trim() } : {}),
-			},
-		});
-		setCatSource("");
-		setCatId("");
-		setCatName("");
-		setCatDesc("");
-		setCatIcon("");
-		setShowCatAdd(false);
-	};
-
-	/** 从目录文档同步可安装列表（issue #165）：走服务端现成的 plugin_catalog_sync 通道
-	 *  （与插件 host.reloadCatalog 同一条：同校验、同原子写盘、同回执），只是在设置面板里
-	 *  给用户一个直接入口 —— 第三方仓库不再需要为此专门发一个“目录同步插件”。 */
-	const runCatalogSync = (source: string) => {
-		const src = source.trim();
-		if (!src) return;
-		const requestId = randomUuid();
-		setCatSyncReq(requestId);
-		setCatSyncSent(src);
-		appSend({
-			type: "plugin_catalog_sync",
-			requestId,
-			source: src,
-			...(catSyncInstall ? { install: true } : {}),
-			...(catSyncReplace ? { replace: true } : {}),
-		});
-	};
-
-	/** 「安装前先读 spec」：来源变了（防抖 500ms）自动查一次 —— 输入框下面就地显示
-	 *  形状/已装/远端有没有 manifest，不用等 CLI 跑完再猜（DSH P0-3）。 */
-	const [catInspectReq, setCatInspectReq] = useState("");
-	useEffect(() => {
-		const source = catSource.trim();
-		if (!source) {
-			setCatInspectReq("");
-			return;
-		}
-		const timer = setTimeout(() => {
-			const requestId = randomUuid();
-			setCatInspectReq(requestId);
-			appSend({
-				type: "plugin_install_inspect",
-				requestId,
-				source,
-				...(catId.trim() ? { explicitId: catId.trim() } : {}),
-			});
-		}, 500);
-		return () => clearTimeout(timer);
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [catSource, catId]);
-	/** 与当前输入对齐的那次检查结果：requestId 对得上、且来源与输入框一致
-	 *  （值变了、新结果还没回来时不展示旧结论，免得说错话）。 */
-	const insp = chat.installInspect;
-	const catInspect = insp && insp.requestId === catInspectReq && insp.source === catSource.trim() ? insp : null;
-
-	/** 正在等的那次同步的回执（requestId 对上才展示；别人的/插件的同步不掺和）。 */
-	const syncReceipt = chat.catalogSync && chat.catalogSync.requestId === catSyncReq ? chat.catalogSync : null;
-	// 同步成功才记住 URL（失败的不进“最近”，免得一键重放一个坏地址）。
-	useEffect(() => {
-		if (syncReceipt?.ok && catSyncSent) setCatSyncRecent(rememberCatalogSyncUrl(catSyncSent));
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [syncReceipt?.requestId, syncReceipt?.ok]);
-
 	const toggleReviewSkill = (s: UiSkillInfo) => {
 		const disabled = new Set(settings.reviewSkills.filter((x) => !x.enabled).map((x) => x.name));
 		if (disabled.has(s.name)) disabled.delete(s.name);
@@ -2123,7 +1831,7 @@ export function SettingsModal({
 	};
 
 	// 按 Escape 键安全退出：先 flush 草稿再关闭；子弹窗开启时放行给子弹窗。
-	useEscapeKey(handleClose, !tplDraft && !ruleDraft && !editingToolPrompt && !presetShareFor && !inspectingSkill);
+	useEscapeKey(handleClose, !tplDraft && !ruleDraft && !editingToolPrompt && !presetShareFor);
 
 	// 组件卸载清理：兜底提交任何在途草稿。
 	useEffect(() => {
@@ -4275,30 +3983,8 @@ export function SettingsModal({
 									<span className="set-count">{settings.skills.length}</span>
 								</div>
 
-								{/* 子页签：已安装 vs 技能市场 */}
-								<div className="mcp-tab-bar">
-									<button
-										type="button"
-										className={`mcp-tab-btn${skillSubTab === "installed" ? " active" : ""}`}
-										onClick={() => setSkillSubTab("installed")}
-									>
-										<FiCpu />
-										<span>{t("skillTabInstalled")}</span>
-										<span className="set-count">{settings.skills.length}</span>
-									</button>
-									<button
-										type="button"
-										className={`mcp-tab-btn${skillSubTab === "market" ? " active" : ""}`}
-										onClick={() => setSkillSubTab("market")}
-									>
-										<FiShoppingBag />
-										<span>{t("skillTabMarket")}</span>
-										<span className="set-count">{PUBLIC_SKILLS.length}</span>
-									</button>
-								</div>
-
 								{/* 1. 已安装技能列表 */}
-								{skillSubTab === "installed" && (
+								{(true || skillSubTab === "installed") && (
 									<>
 										{!isDsh && piPresetFiltering && !presetShowsSkillCatalog(piPresetId ?? undefined) && (
 											<p className="set-catalog-hint warn">{t("skillsHiddenByPreset", { name: piPresetName })}</p>
@@ -4349,10 +4035,6 @@ export function SettingsModal({
 												</div>
 												<div className="mcp-empty-title">{isDsh ? t("dshSkillsNote") : t("noSkills")}</div>
 												<div className="mcp-empty-desc">{t("skillEmptyDesc")}</div>
-												<button type="button" className="mcp-goto-market-btn" onClick={() => setSkillSubTab("market")}>
-													<FiShoppingBag />
-													{t("skillBrowseMarket")}
-												</button>
 											</div>
 										) : (
 											<div className="set-list">
@@ -4379,659 +4061,10 @@ export function SettingsModal({
 										)}
 									</>
 								)}
-
-								{/* 2. 技能市场列表 */}
-								{skillSubTab === "market" && (
-									<div className="skill-market-view">
-										<div className="mcp-market-toolbar">
-											{/* GitHub 仓库源选择 */}
-											<div className="mcp-market-source-row">
-												<div className="mcp-source-select-wrap">
-													<label className="mcp-source-label">{t("skillRepoSelect")}:</label>
-													<select
-														className="set-select mcp-source-select"
-														value={skillMarketRepo}
-														onChange={(e) => setSkillMarketRepo(e.target.value)}
-													>
-														<option value="anthropics/skills">{t("skillRepoDefault")}</option>
-														<option value="custom">{t("skillRepoCustom")}</option>
-													</select>
-												</div>
-												<button
-													type="button"
-													className={`set-save-btn mcp-sync-btn${skillMarketLoading ? " spinning" : ""}`}
-													title={t("mcpReload")}
-													onClick={() => fetchSkillMarket(true)}
-												>
-													<FiRefreshCw />
-													<span>{t("mcpReload")}</span>
-												</button>
-											</div>
-
-											{skillMarketRepo === "custom" && (
-												<div className="mcp-custom-source-row">
-													<input
-														type="text"
-														className="set-input mcp-custom-input"
-														placeholder={t("skillRepoCustomPlaceholder")}
-														value={customSkillRepo}
-														onChange={(e) => setCustomSkillRepo(e.target.value)}
-														onKeyDown={(e) => {
-															if (e.key === "Enter") fetchSkillMarket(true);
-														}}
-													/>
-												</div>
-											)}
-
-											<div className="mcp-search-wrap">
-												<FiSearch className="mcp-search-icon" />
-												<input
-													type="text"
-													className="set-input mcp-search-input"
-													placeholder={t("skillMarketSearchPlaceholder")}
-													value={skillMarketSearch}
-													onChange={(e) => setSkillMarketSearch(e.target.value)}
-												/>
-												{skillMarketSearch && (
-													<button type="button" className="mcp-search-clear" onClick={() => setSkillMarketSearch("")}>
-														<FiX />
-													</button>
-												)}
-											</div>
-											<div className="mcp-category-chips">
-												{[
-													{ id: "all", label: t("skillCatAll") },
-													{ id: "quality", label: t("skillCatQuality") },
-													{ id: "workflow", label: t("skillCatWorkflow") },
-													{ id: "architecture", label: t("skillCatArchitecture") },
-													{ id: "devops", label: t("skillCatDevops") },
-													{ id: "stack", label: t("skillCatStack") },
-												].map((cat) => (
-													<button
-														key={cat.id}
-														type="button"
-														className={`mcp-cat-chip${skillMarketCategory === cat.id ? " active" : ""}`}
-														onClick={() => setSkillMarketCategory(cat.id)}
-													>
-														{cat.label}
-													</button>
-												))}
-											</div>
-										</div>
-
-										{/* 错误提示 */}
-										{chat.skillMarketResult?.error && (
-											<div className="mcp-error-box">
-												<FiAlertTriangle className="mcp-error-icon" />
-												<div className="mcp-error-text">{chat.skillMarketResult.error}</div>
-												<button type="button" className="mcp-mini-btn" onClick={() => fetchSkillMarket(true)}>
-													{t("skillMarketRetry")}
-												</button>
-											</div>
-										)}
-
-										{/* 加载指示器 */}
-										{skillMarketLoading && (
-											<div className="mcp-market-loading">
-												<FiRefreshCw className="spinning" />
-												<span>{t("skillMarketLoading")}</span>
-											</div>
-										)}
-
-										<div className="mcp-market-grid">
-											{filteredMarketSkills.map((sk) => {
-												const isInstalled = installedSkillNames.has(sk.id.toLowerCase());
-												const descText = isZhLocale(locale) ? sk.descriptionZh : sk.description;
-												const nameText = isZhLocale(locale) ? sk.nameZh : sk.name;
-												return (
-													<div key={sk.id} className="mcp-market-card skill-market-card">
-														<div className="mcp-market-card-head">
-															<div className="mcp-market-title-wrap">
-																<span className="mcp-market-name">{sk.name}</span>
-																{isZhLocale(locale) && <span className="mcp-market-subname">({nameText})</span>}
-															</div>
-															<span className="mcp-badge-official">{skillCategoryBadge(sk.category)}</span>
-														</div>
-
-														<p className="mcp-market-desc">{descText}</p>
-
-														<div className="skill-market-card-actions">
-															<button type="button" className="skill-inspect-btn" onClick={() => openInspectSkill(sk)}>
-																<FiEye />
-																{t("skillInspectPrompt")}
-															</button>
-															<div className="skill-action-btns">
-																{isInstalled ? (
-																	<div className="skill-installed-group">
-																		<span className="mcp-market-configured-badge">
-																			<FiCheck />
-																			{t("skillInstalled")}
-																		</span>
-																		<button
-																			type="button"
-																			className="icon-btn delete-btn"
-																			title={t("uninstallTitle")}
-																			onClick={() => handleUninstallSkill(sk.id, "global")}
-																		>
-																			<FiTrash2 />
-																		</button>
-																	</div>
-																) : (
-																	<div className="mcp-market-add-btns">
-																		<button
-																			type="button"
-																			className="mcp-btn-add global"
-																			title={t("skillInstallGlobalHint")}
-																			onClick={() => handleInstallSkill(sk, "global")}
-																		>
-																			<FiPlus />
-																			{t("skillInstallGlobal")}
-																		</button>
-																		<button
-																			type="button"
-																			className="mcp-btn-add project"
-																			title={t("skillInstallProjectHint")}
-																			onClick={() => handleInstallSkill(sk, "project")}
-																		>
-																			<FiPlus />
-																			{t("skillInstallProject")}
-																		</button>
-																	</div>
-																)}
-															</div>
-														</div>
-													</div>
-												);
-											})}
-										</div>
-									</div>
-								)}
-
-								{/* 技能提示词详情弹窗 */}
-								{inspectingSkill && (
-									<div className="modal-backdrop sub-modal" onClick={() => setInspectingSkill(null)}>
-										<div className="modal skill-inspect-modal" onClick={(e) => e.stopPropagation()}>
-											<button
-												type="button"
-												className="modal-close"
-												aria-label={t("close")}
-												onClick={() => setInspectingSkill(null)}
-											>
-												<FiX />
-											</button>
-											<div className="modal-head">
-												<FiCpu className="modal-head-icon" />
-												<h3>{t("skillInspectModalTitle", { name: inspectingSkill.name })}</h3>
-											</div>
-											<div className="modal-body skill-inspect-body">
-												{fetchingSkillContentId === inspectingSkill.id && !inspectingSkill.content ? (
-													<div className="mcp-market-loading">
-														<FiRefreshCw className="spinning" />
-														<span>{t("skillContentLoading")}</span>
-													</div>
-												) : (
-													<pre className="skill-code-preview">
-														<code>{inspectingSkill.content}</code>
-													</pre>
-												)}
-											</div>
-											<div className="modal-actions">
-												<button type="button" className="set-cancel-btn" onClick={() => setInspectingSkill(null)}>
-													{t("close")}
-												</button>
-												<button
-													type="button"
-													className="set-save-btn global"
-													onClick={() => handleInstallSkill(inspectingSkill, "global")}
-												>
-													<FiPlus />
-													<span>{t("skillInstallGlobal")}</span>
-												</button>
-												<button
-													type="button"
-													className="set-save-btn project"
-													onClick={() => handleInstallSkill(inspectingSkill, "project")}
-												>
-													<FiPlus />
-													<span>{t("skillInstallProject")}</span>
-												</button>
-											</div>
-										</div>
-									</div>
-								)}
 							</div>
 						)}
 
 						{/* ---- extensions (DSH: 独立 DSH 插件市场与管理面板) ------------------ */}
-						{tab === "extensions" && isDsh && (
-							<div className="set-section dsh-market-container">
-								<div className="dsh-market-header">
-									<div className="dsh-market-title-group">
-										<div className="dsh-market-main-title">
-											<FiPackage className="set-section-icon" />
-											<span>{t("dshMarketTitle")}</span>
-											<span className="dsh-market-version-tag">awesome-dsh-plugin</span>
-											<HintTip text={t("dshPluginsDesc")} />
-										</div>
-										<div className="dsh-market-subtitle-row">
-											<span>{t("dshMarketSubtitle")}</span>
-											<a
-												href="https://github.com/awesome-dsh-plugin/awesome-dsh-plugin"
-												target="_blank"
-												rel="noreferrer"
-												className="dsh-market-submit-link"
-											>
-												{t("dshMarketSubmit")}
-											</a>
-										</div>
-									</div>
-									<div className="dsh-market-header-actions">
-										<button
-											type="button"
-											className="set-uninstall"
-											title={t("dshMarketRefresh")}
-											onClick={() => {
-												appSend({ type: "dsh_market_fetch", force: true });
-												appSend({ type: "dsh_patches_list" });
-											}}
-										>
-											<FiRefreshCw />
-											{t("dshMarketRefresh")}
-										</button>
-										<button
-											type="button"
-											className="set-uninstall"
-											title={t("dshPatchesRescanHint")}
-											onClick={() => appSend({ type: "dsh_patches_rescan" })}
-										>
-											<FiRefreshCw />
-											{t("dshPatchesRescan")}
-										</button>
-									</div>
-								</div>
-
-								{/* 子选项卡导航：Discover (探索) | Installed (已安装) */}
-								<div className="dsh-market-tabs">
-									<button
-										type="button"
-										className={`dsh-market-tab ${dshMarketSub === "discover" ? "active" : ""}`}
-										onClick={() => setDshMarketSub("discover")}
-									>
-										{t("dshMarketTabDiscover")}
-										{chat.dshMarket?.count ? (
-											<span className="dsh-market-tab-badge">
-												{chat.dshMarket.count >= 1000
-													? `${(chat.dshMarket.count / 1000).toFixed(1)}k`
-													: chat.dshMarket.count}
-											</span>
-										) : null}
-									</button>
-									<button
-										type="button"
-										className={`dsh-market-tab ${dshMarketSub === "installed" ? "active" : ""}`}
-										onClick={() => setDshMarketSub("installed")}
-									>
-										{t("dshMarketTabInstalled")}
-										<span className="dsh-market-tab-badge">{chat.dshPatches?.files.length ?? 0}</span>
-									</button>
-								</div>
-
-								{/* ---------------- TAB 1: Discover (插件市场探索) ---------------- */}
-								{dshMarketSub === "discover" && (
-									<div className="dsh-market-discover">
-										{/* 兼容性提示横幅：明确声明 WebUI 视图类插件可能无效 */}
-										<div className="dsh-market-compat-banner">
-											<FiAlertTriangle className="dsh-market-banner-icon" />
-											<div className="dsh-market-banner-text">
-												<strong>{t("dshMarketDisclaimerTitle")}</strong>：{t("dshMarketDisclaimerText")}
-											</div>
-										</div>
-
-										<div className="dsh-market-search-box">
-											<FiSearch className="dsh-market-search-icon" />
-											<input
-												type="text"
-												className="dsh-market-search-input"
-												placeholder={t("dshMarketSearchPlaceholder")}
-												value={dshMarketSearch}
-												onChange={(e) => {
-													setDshMarketSearch(e.target.value);
-													setDshMarketPage(1);
-												}}
-											/>
-											{dshMarketSearch && (
-												<button
-													type="button"
-													className="dsh-market-search-clear"
-													onClick={() => {
-														setDshMarketSearch("");
-														setDshMarketPage(1);
-													}}
-												>
-													<FiX />
-												</button>
-											)}
-										</div>
-
-										<div className="dsh-market-cats">
-											<button
-												type="button"
-												className={`dsh-market-cat-chip ${dshMarketCat === "all" ? "active" : ""}`}
-												onClick={() => {
-													setDshMarketCat("all");
-													setDshMarketPage(1);
-												}}
-											>
-												{t("dshMarketAll")} ({chat.dshMarket?.plugins.length ?? 0})
-											</button>
-											{Object.entries(chat.dshMarket?.categories ?? {}).map(([catKey, catNames]) => {
-												const isZh = isZhLocale(locale);
-												const label = isZh ? catNames.zh || catNames.en : catNames.en || catNames.zh;
-												return (
-													<button
-														key={catKey}
-														type="button"
-														className={`dsh-market-cat-chip ${dshMarketCat === catKey ? "active" : ""}`}
-														onClick={() => {
-															setDshMarketCat(catKey);
-															setDshMarketPage(1);
-														}}
-													>
-														{label}
-													</button>
-												);
-											})}
-										</div>
-
-										{(() => {
-											const allPlugins = chat.dshMarket?.plugins ?? [];
-											const q = dshMarketSearch.trim().toLowerCase();
-											const installedIds = new Set(
-												(chat.dshPatches?.files ?? []).map((f) =>
-													f.name.replace(/\.ya?ml(\.disabled)?$/i, "").toLowerCase(),
-												),
-											);
-
-											const filtered = allPlugins.filter((p) => {
-												if (dshMarketCat !== "all" && p.category !== dshMarketCat) return false;
-												if (!q) return true;
-												const descZh = p.description?.zh?.toLowerCase() ?? "";
-												const descEn = p.description?.en?.toLowerCase() ?? "";
-												return (
-													p.name.toLowerCase().includes(q) ||
-													(p.owner?.toLowerCase().includes(q) ?? false) ||
-													(p.npm?.toLowerCase().includes(q) ?? false) ||
-													descZh.includes(q) ||
-													descEn.includes(q)
-												);
-											});
-
-											const PAGE_SIZE = 16;
-											const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-											const currentPage = Math.min(Math.max(1, dshMarketPage), totalPages);
-											const pagePlugins = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
-
-											const formatCount = (n?: number) => {
-												if (!n) return "0";
-												return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
-											};
-											const isZh = isZhLocale(locale);
-
-											return (
-												<>
-													<div className="dsh-market-grid">
-														{pagePlugins.map((p) => {
-															const cleanId = p.name.replace(/^dsh-plugin-|^dsh-/, "").toLowerCase();
-															const isInstalled = installedIds.has(p.name.toLowerCase()) || installedIds.has(cleanId);
-															const catInfo = p.category ? chat.dshMarket?.categories?.[p.category] : undefined;
-															const catLabel = catInfo
-																? isZh
-																	? catInfo.zh || catInfo.en
-																	: catInfo.en || catInfo.zh
-																: p.category;
-															const desc = isZh
-																? p.description?.zh || p.description?.en || ""
-																: p.description?.en || p.description?.zh || "";
-
-															const isWebUiPlugin =
-																p.category === "ui" ||
-																p.category === "theme" ||
-																p.name.includes("-ui") ||
-																p.name.includes("-sidebar") ||
-																p.name.includes("theme");
-
-															return (
-																<div className="dsh-market-card" key={`${p.owner ?? ""}/${p.name}`}>
-																	<div className="dsh-market-card-top">
-																		<div className="dsh-market-card-title-wrap">
-																			{p.url ? (
-																				<a
-																					href={p.url}
-																					target="_blank"
-																					rel="noreferrer"
-																					className="dsh-market-card-title"
-																				>
-																					{p.name}
-																					<FiExternalLink className="dsh-market-ext-icon" />
-																				</a>
-																			) : (
-																				<span className="dsh-market-card-title">{p.name}</span>
-																			)}
-																		</div>
-																		{isInstalled ? (
-																			<button
-																				type="button"
-																				className="dsh-market-install-btn installed"
-																				onClick={() => setDshMarketSub("installed")}
-																			>
-																				<FiCheck />
-																				{t("dshMarketInstalled")}
-																			</button>
-																		) : (
-																			<button
-																				type="button"
-																				className="dsh-market-install-btn"
-																				onClick={() =>
-																					appSend({
-																						type: "dsh_patch_install",
-																						spec: p.npm || p.name,
-																						id: cleanId || p.name,
-																					})
-																				}
-																			>
-																				{t("dshMarketInstall")}
-																			</button>
-																		)}
-																	</div>
-
-																	<div className="dsh-market-card-meta">
-																		{p.owner && (
-																			<span className="dsh-market-author">
-																				<img
-																					src={`https://github.com/${p.owner}.png?size=32`}
-																					alt={p.owner}
-																					className="dsh-market-avatar"
-																					loading="lazy"
-																					onError={(e) => {
-																						(e.currentTarget as HTMLImageElement).style.display = "none";
-																					}}
-																				/>
-																				{p.owner}
-																			</span>
-																		)}
-																		{p.version && <span>· v{p.version}</span>}
-																		{typeof p.downloads === "number" && p.downloads > 0 && (
-																			<span>· ↓ {formatCount(p.downloads)}</span>
-																		)}
-																		{typeof p.stars === "number" && p.stars > 0 && (
-																			<span>· ★ {formatCount(p.stars)}</span>
-																		)}
-																	</div>
-
-																	<p className="dsh-market-card-desc" title={desc}>
-																		{desc}
-																	</p>
-
-																	<div className="dsh-market-card-tags">
-																		{catLabel && <span className="dsh-market-tag">{catLabel}</span>}
-																		{isWebUiPlugin && (
-																			<span className="dsh-market-tag webui-warn" title={t("dshMarketWebuiWarn")}>
-																				⚠️ {t("dshMarketWebuiTag")}
-																			</span>
-																		)}
-																		{(p.capabilities ?? []).slice(0, 3).map((cap) => (
-																			<span className="dsh-market-tag cap" key={cap}>
-																				{cap}
-																			</span>
-																		))}
-																	</div>
-																</div>
-															);
-														})}
-													</div>
-
-													{/* 翻页控制器 (Pagination) */}
-													{totalPages > 1 && (
-														<div className="dsh-market-pagination">
-															<span className="dsh-market-page-info">
-																{t("dshMarketPageInfo")
-																	.replace("{page}", String(currentPage))
-																	.replace("{total}", String(totalPages))
-																	.replace("{count}", String(filtered.length))}
-															</span>
-															<div className="dsh-market-page-btns">
-																<button
-																	type="button"
-																	className="dsh-market-page-btn"
-																	disabled={currentPage <= 1}
-																	onClick={() => setDshMarketPage((p) => Math.max(1, p - 1))}
-																>
-																	{t("dshMarketPrevPage")}
-																</button>
-																{Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-																	let pageNum = i + 1;
-																	if (totalPages > 5 && currentPage > 3) {
-																		pageNum = Math.min(currentPage - 2 + i, totalPages - 4 + i);
-																	}
-																	return (
-																		<button
-																			key={pageNum}
-																			type="button"
-																			className={`dsh-market-page-btn ${pageNum === currentPage ? "active" : ""}`}
-																			onClick={() => setDshMarketPage(pageNum)}
-																		>
-																			{pageNum}
-																		</button>
-																	);
-																})}
-																<button
-																	type="button"
-																	className="dsh-market-page-btn"
-																	disabled={currentPage >= totalPages}
-																	onClick={() => setDshMarketPage((p) => Math.min(totalPages, p + 1))}
-																>
-																	{t("dshMarketNextPage")}
-																</button>
-															</div>
-														</div>
-													)}
-												</>
-											);
-										})()}
-									</div>
-								)}
-
-								{/* ---------------- TAB 2: Installed (已安装与本地补丁管理) ---------------- */}
-								{dshMarketSub === "installed" && (
-									<div className="dsh-market-installed">
-										<div className="dsh-patch-install-bar">
-											<input
-												type="text"
-												className="dsh-patch-input"
-												placeholder={t("dshPatchSpecPlaceholder")}
-												value={dshPatchInput}
-												onChange={(e) => setDshPatchInput(e.target.value)}
-												onKeyDown={(e) => {
-													if (e.key === "Enter" && dshPatchInput.trim()) {
-														appSend({ type: "dsh_patch_install", spec: dshPatchInput.trim() });
-														setDshPatchInput("");
-													}
-												}}
-											/>
-											<button
-												type="button"
-												className="set-save-btn dsh-patch-add-btn"
-												disabled={!dshPatchInput.trim()}
-												onClick={() => {
-													if (dshPatchInput.trim()) {
-														appSend({ type: "dsh_patch_install", spec: dshPatchInput.trim() });
-														setDshPatchInput("");
-													}
-												}}
-											>
-												<FiPlus />
-												{t("dshPatchAdd")}
-											</button>
-										</div>
-										{(chat.dshPatches?.files.length ?? 0) === 0 ? (
-											<p className="set-empty">{t("dshPatchesEmpty")}</p>
-										) : (
-											<div className="set-list">
-												{chat.dshPatches!.files.map((f) => {
-													const displayName = f.name.replace(/\.disabled$/, "");
-													return (
-														<div className="set-row dsh-patch-row" key={f.name}>
-															<div className="set-row-info">
-																<div className="set-row-name dsh-patch-name">
-																	<span>{displayName}</span>
-																	<span className={`dsh-patch-badge ${f.disabled ? "disabled" : "active"}`}>
-																		{f.disabled ? t("dshPatchDisabled") : t("dshPatchActive")}
-																	</span>
-																</div>
-																<div className="set-row-desc">
-																	{f.name} · {formatBytes(f.size)} · {new Date(f.mtimeMs).toLocaleString()}
-																</div>
-															</div>
-															<div className="dsh-patch-actions">
-																<button
-																	type="button"
-																	className={`dsh-patch-toggle ${f.disabled ? "off" : "on"}`}
-																	title={f.disabled ? t("dshPatchToggleOn") : t("dshPatchToggleOff")}
-																	onClick={() =>
-																		appSend({
-																			type: "dsh_patch_toggle",
-																			name: f.name,
-																			enabled: !!f.disabled,
-																		})
-																	}
-																>
-																	{f.disabled ? t("dshPatchToggleOn") : t("dshPatchToggleOff")}
-																</button>
-																<button
-																	type="button"
-																	className="set-uninstall"
-																	title={t("dshPatchDeleteConfirm")}
-																	onClick={() => {
-																		if (window.confirm(t("dshPatchDeleteConfirm"))) {
-																			appSend({ type: "dsh_patch_delete", name: f.name });
-																		}
-																	}}
-																>
-																	<FiTrash2 />
-																</button>
-															</div>
-														</div>
-													);
-												})}
-											</div>
-										)}
-										<p className="set-hint">
-											{t("dshPatchesPath")} {chat.dshPatches?.patchDir ?? ""}
-										</p>
-									</div>
-								)}
-							</div>
-						)}
 
 						{/* ---- extensions (pi: pi 扩展管理) -------------------------------- */}
 						{tab === "extensions" && !isDsh && (
@@ -5336,41 +4369,7 @@ export function SettingsModal({
 						)}
 						{/* 插件目录授权（issue #146）：插件访问工作区外目录要经用户确认，
 						    这里列出已授权目录并支持逐条撤销（插件自己也能 requestAccess）。 */}
-						{tab === "plugins" && !managed && (
-							<div className="set-subtabs" role="tablist">
-								<button
-									type="button"
-									role="tab"
-									aria-selected={pluginSub === "market"}
-									className={`set-subtab${pluginSub === "market" ? " active" : ""}`}
-									onClick={() => {
-										setPluginSub("market");
-										bodyRef.current?.scrollTo({ top: 0 });
-									}}
-								>
-									{t("pluginMarket")}
-									<span className="set-count">{chat.pluginCatalog.length}</span>
-								</button>
-								<button
-									type="button"
-									role="tab"
-									aria-selected={pluginSub === "installed"}
-									className={`set-subtab${pluginSub === "installed" ? " active" : ""}`}
-									onClick={() => {
-										setPluginSub("installed");
-										bodyRef.current?.scrollTo({ top: 0 });
-									}}
-								>
-									<FiBox />
-									{t("pluginListTab")}
-									<span className="set-count">{chat.plugins.length}</span>
-									{(hasBuiltinPluginUpdate || hasAnyPluginUpdate) && (
-										<span className="update-dot" style={{ marginLeft: 4 }} />
-									)}
-								</button>
-							</div>
-						)}
-						{tab === "plugins" && pluginSub === "installed" && (
+						{tab === "plugins" && (
 							<div className="set-section">
 								<div className="set-section-title">
 									<FiFolder className="set-section-icon" />
@@ -5405,7 +4404,7 @@ export function SettingsModal({
 								)}
 							</div>
 						)}
-						{tab === "plugins" && pluginSub === "installed" && (
+						{tab === "plugins" && (
 							<div className="set-section">
 								<div className="set-section-title">
 									<FiKey className="set-section-icon" />
@@ -5492,438 +4491,9 @@ export function SettingsModal({
 								<div className="set-note">{t("updatesManaged")}</div>
 							</div>
 						)}
-						{tab === "plugins" && !managed && pluginSub === "market" && (
-							<div className="set-section">
-								<div className="set-section-title">
-									<FiPackage className="set-section-icon" />
-									{t("pluginMarket")}
-									<span className="set-count">{chat.pluginCatalog.length}</span>
-								</div>
-								<div className="set-toolbar">
-									<a
-										href={OFFICIAL_PLUGINS_REPO_URL}
-										target="_blank"
-										rel="noreferrer noopener"
-										className="set-uninstall link"
-										title={t("pluginOfficialMarketHint")}
-									>
-										<FiExternalLink />
-										{t("pluginOfficialMarket")}
-									</a>
-									<label className="set-catalog-build" title={t("pluginBuildHint")}>
-										<input type="checkbox" checked={catBuild} onChange={(ev) => setCatBuild(ev.target.checked)} />
-										{t("pluginBuildSource")}
-									</label>
-									<button
-										type="button"
-										className="set-uninstall"
-										title={t("pluginCatalogSyncHint")}
-										onClick={() => setShowCatSync((v) => !v)}
-									>
-										<FiRefreshCw />
-										{t("pluginCatalogSync")}
-									</button>
-									<button
-										type="button"
-										className="set-uninstall"
-										title={t("pluginCatalogAddHint")}
-										onClick={() => setShowCatAdd((v) => !v)}
-									>
-										<FiPlus />
-										{t("pluginCatalogAdd")}
-									</button>
-								</div>
-								{showCatSync && (
-									<div className="set-catalog-add">
-										<div className="set-note">{t("pluginCatalogSyncHint")}</div>
-										<input
-											className="set-input"
-											placeholder={t("pluginCatalogSyncSource")}
-											value={catSyncSource}
-											onChange={(ev) => setCatSyncSource(ev.target.value)}
-											onKeyDown={(ev) => {
-												if (ev.key === "Enter") runCatalogSync(catSyncSource);
-											}}
-										/>
-										<label className="set-catalog-build" title={t("pluginCatalogSyncInstall")}>
-											<input
-												type="checkbox"
-												checked={catSyncInstall}
-												onChange={(ev) => setCatSyncInstall(ev.target.checked)}
-											/>
-											{t("pluginCatalogSyncInstall")}
-										</label>
-										<label className="set-catalog-build" title={t("pluginCatalogSyncReplace")}>
-											<input
-												type="checkbox"
-												checked={catSyncReplace}
-												onChange={(ev) => setCatSyncReplace(ev.target.checked)}
-											/>
-											{t("pluginCatalogSyncReplace")}
-										</label>
-										{catSyncRecent.length > 0 && (
-											<div className="set-catalog-recent">
-												<span className="set-catalog-recent-label">{t("pluginCatalogSyncRecent")}</span>
-												{catSyncRecent.map((u) => (
-													<button
-														key={u}
-														type="button"
-														className="set-catalog-recent-item"
-														title={u}
-														onClick={() => {
-															setCatSyncSource(u);
-															runCatalogSync(u);
-														}}
-													>
-														{u}
-													</button>
-												))}
-											</div>
-										)}
-										<div className="set-catalog-add-actions">
-											<button
-												type="button"
-												className="set-uninstall confirm"
-												disabled={!catSyncSource.trim()}
-												onClick={() => runCatalogSync(catSyncSource)}
-											>
-												{t("pluginCatalogSyncSubmit")}
-											</button>
-											<button type="button" className="set-uninstall" onClick={() => setShowCatSync(false)}>
-												{t("cancel")}
-											</button>
-										</div>
-										{syncReceipt &&
-											(syncReceipt.ok ? (
-												<div className="set-catalog-job ok">
-													<span>
-														✓ {t("pluginCatalogSyncOk", { n: syncReceipt.entryCount ?? 0 })}
-														{syncReceipt.installed
-															? ` · ${t("pluginCatalogSyncInstalled", {
-																	ok: syncReceipt.installed.filter((i) => i.ok).length,
-																	fail: syncReceipt.installed.filter((i) => !i.ok).length,
-																})}`
-															: null}
-													</span>
-													{syncReceipt.installed?.some((i) => !i.ok) && (
-														<pre className="set-catalog-job-out">
-															{syncReceipt.installed
-																.filter((i) => !i.ok)
-																.map((i) => `${i.id}：${i.error ?? "?"}`)
-																.join("\n")}
-														</pre>
-													)}
-												</div>
-											) : (
-												<div className="set-catalog-job error">
-													<span>✗ {syncReceipt.error || t("pluginJobFailed")}</span>
-												</div>
-											))}
-									</div>
-								)}
-								{showCatAdd && (
-									<div className="set-catalog-add">
-										<input
-											className="set-input"
-											placeholder={t("pluginCatalogSource")}
-											value={catSource}
-											onChange={(ev) => setCatSource(ev.target.value)}
-										/>
-										{inspectHint(catInspect)}
-										<input
-											className="set-input"
-											placeholder={t("pluginCatalogId")}
-											value={catId}
-											onChange={(ev) => setCatId(ev.target.value)}
-										/>
-										<input
-											className="set-input"
-											placeholder={t("pluginCatalogName")}
-											value={catName}
-											onChange={(ev) => setCatName(ev.target.value)}
-										/>
-										<input
-											className="set-input"
-											placeholder={t("pluginCatalogIcon")}
-											value={catIcon}
-											onChange={(ev) => setCatIcon(ev.target.value)}
-										/>
-										<textarea
-											className="set-input"
-											rows={2}
-											placeholder={t("pluginCatalogDesc")}
-											value={catDesc}
-											onChange={(ev) => setCatDesc(ev.target.value)}
-										/>
-										<div className="set-catalog-add-actions">
-											<button
-												type="button"
-												className="set-uninstall confirm"
-												disabled={!catSource.trim()}
-												onClick={submitCatalogAdd}
-											>
-												{t("pluginCatalogAddSubmit")}
-											</button>
-											<button type="button" className="set-uninstall" onClick={() => setShowCatAdd(false)}>
-												{t("cancel")}
-											</button>
-										</div>
-									</div>
-								)}
-								{(() => {
-									const builtinCount = chat.pluginCatalog.filter(
-										(e) => (e.origin ?? (e.builtin ? "builtin" : "custom")) === "builtin",
-									).length;
-									const communityCount = chat.pluginCatalog.filter(
-										(e) => (e.origin ?? (e.builtin ? "builtin" : "custom")) === "community",
-									).length;
-									const customCount = chat.pluginCatalog.filter(
-										(e) => (e.origin ?? (e.builtin ? "builtin" : "custom")) === "custom",
-									).length;
-									const q = catalogSearch.trim().toLowerCase();
-									const filtered = chat.pluginCatalog.filter((e) => {
-										const origin = e.origin ?? (e.builtin ? "builtin" : "custom");
-										if (catalogFilter !== "all" && origin !== catalogFilter) return false;
-										if (!q) return true;
-										const name = (!isZhLocale(locale) && e.nameEn ? e.nameEn : e.name).toLowerCase();
-										const desc = (
-											!isZhLocale(locale) && e.descriptionEn ? e.descriptionEn : (e.description ?? "")
-										).toLowerCase();
-										return (
-											name.includes(q) ||
-											desc.includes(q) ||
-											e.id.toLowerCase().includes(q) ||
-											e.source.toLowerCase().includes(q)
-										);
-									});
-
-									return (
-										<>
-											<div className="set-catalog-tabs" role="tablist">
-												<button
-													type="button"
-													role="tab"
-													aria-selected={catalogFilter === "all"}
-													className={`set-catalog-tab-btn${catalogFilter === "all" ? " active" : ""}`}
-													onClick={() => setCatalogFilter("all")}
-												>
-													{t("pluginCatalogTabAll")}
-													<span className="set-catalog-tab-count">{chat.pluginCatalog.length}</span>
-												</button>
-												<button
-													type="button"
-													role="tab"
-													aria-selected={catalogFilter === "builtin"}
-													className={`set-catalog-tab-btn${catalogFilter === "builtin" ? " active" : ""}`}
-													onClick={() => setCatalogFilter("builtin")}
-												>
-													{t("pluginCatalogTabBuiltin")}
-													<span className="set-catalog-tab-count">{builtinCount}</span>
-												</button>
-												<button
-													type="button"
-													role="tab"
-													aria-selected={catalogFilter === "community"}
-													className={`set-catalog-tab-btn${catalogFilter === "community" ? " active" : ""}`}
-													onClick={() => setCatalogFilter("community")}
-												>
-													{t("pluginCatalogTabCommunity")}
-													<span className="set-catalog-tab-count">{communityCount}</span>
-												</button>
-												{(customCount > 0 || catalogFilter === "custom") && (
-													<button
-														type="button"
-														role="tab"
-														aria-selected={catalogFilter === "custom"}
-														className={`set-catalog-tab-btn${catalogFilter === "custom" ? " active" : ""}`}
-														onClick={() => setCatalogFilter("custom")}
-													>
-														{t("pluginCatalogTabCustom")}
-														<span className="set-catalog-tab-count">{customCount}</span>
-													</button>
-												)}
-											</div>
-
-											<div className="set-catalog-filter-bar">
-												<div className="set-catalog-search-wrap">
-													<FiSearch className="set-catalog-search-icon" />
-													<input
-														type="text"
-														className="set-catalog-search-input"
-														placeholder={t("pluginCatalogSearchPlaceholder")}
-														value={catalogSearch}
-														onChange={(e) => setCatalogSearch(e.target.value)}
-													/>
-												</div>
-											</div>
-
-											{catalogFilter === "community" && (
-												<div className="set-catalog-community-banner">
-													<span>{t("pluginCatalogCommunityDesc")}</span>
-													<a
-														href={OFFICIAL_PLUGINS_REPO_URL}
-														target="_blank"
-														rel="noreferrer noopener"
-														title={t("pluginCatalogCommunitySubmit")}
-													>
-														<FiExternalLink />
-														{t("pluginCatalogCommunitySubmit")}
-													</a>
-												</div>
-											)}
-
-											{chat.pluginCatalog.length === 0 ? (
-												<p className="set-empty">{t("noPluginCatalog")}</p>
-											) : filtered.length === 0 ? (
-												<p className="set-empty">
-													{catalogFilter === "community" ? t("pluginCatalogCommunityEmpty") : t("searchNoResults")}
-												</p>
-											) : (
-												<div className="set-list set-list-flat">
-													{filtered.map((e) => {
-														const origin = e.origin ?? (e.builtin ? "builtin" : "custom");
-														const installed = installedPluginIds.has(e.id);
-														const upd = chat.pluginUpdates?.[e.id];
-														const isUpdatable = installed && upd?.updatable === true;
-														const isRunning = Boolean(jobFor(e.id) && jobFor(e.id)?.phase !== "done");
-														const name = !isZhLocale(locale) && e.nameEn ? e.nameEn : e.name;
-														const desc = !isZhLocale(locale) && e.descriptionEn ? e.descriptionEn : e.description;
-														return (
-															<div key={e.id} className="set-catalog-row">
-																<div className="set-catalog-main">
-																	<div className="set-catalog-title">
-																		<span>
-																			<PluginIcon icon={e.icon} iconSvg={e.iconSvg} /> {name}
-																		</span>
-																		{installed && <span className="set-catalog-installed">{t("pluginInstalled")}</span>}
-																		{origin === "builtin" && (
-																			<span className="set-catalog-origin builtin">{t("pluginCatalogBuiltin")}</span>
-																		)}
-																		{origin === "community" && (
-																			<span className="set-catalog-origin community">
-																				{t("pluginCatalogCommunity")}
-																			</span>
-																		)}
-																		{origin === "custom" && (
-																			<span className="set-catalog-origin custom">{t("pluginCatalogCustom")}</span>
-																		)}
-																		{isUpdatable && (
-																			<span
-																				className="set-catalog-update-badge"
-																				title={
-																					upd?.latestVersion
-																						? `${upd?.version ?? ""} → v${upd.latestVersion}`
-																						: (upd?.remoteSha ?? "")
-																				}
-																			>
-																				{t("pluginUpdateAvailableBadge")}
-																				{upd?.latestVersion ? ` v${upd.latestVersion}` : ""}
-																			</span>
-																		)}
-																	</div>
-																	{desc && <div className="set-catalog-desc">{desc}</div>}
-																	<div className="set-catalog-source">{e.source}</div>
-																	{renderJobStatus(e.id)}
-																</div>
-																<div className="set-row-actions">
-																	{pluginOfficialUrl(e) && (
-																		<a
-																			href={pluginOfficialUrl(e)!}
-																			target="_blank"
-																			rel="noreferrer noopener"
-																			className="set-uninstall link"
-																			title={t("pluginOfficialLinkHint")}
-																		>
-																			<FiExternalLink />
-																			{t("pluginOfficialLink")}
-																		</a>
-																	)}
-																	{installed ? (
-																		<>
-																			<button
-																				type="button"
-																				className={`set-uninstall${isUpdatable ? " accent" : ""}`}
-																				disabled={isRunning}
-																				title={
-																					isUpdatable && upd?.latestVersion
-																						? t("pluginUpdateAvailableDetail", {
-																								version: `v${upd.latestVersion}`,
-																							})
-																						: t("pluginUpdateHint")
-																				}
-																				onClick={() => runUiPluginUpdate(e.id, e.source)}
-																			>
-																				<FiRefreshCw className={isRunning ? "set-job-spin" : ""} />
-																				{isRunning ? t("pluginJobRunning") : t("pluginUpdate")}
-																			</button>
-																			{confirmUiUninstall === e.id ? (
-																				<button
-																					type="button"
-																					className="set-uninstall confirm"
-																					disabled={isRunning}
-																					title={t("pluginUninstallHint")}
-																					onClick={() => runUiPluginUninstall(e.id)}
-																				>
-																					{t("uninstallConfirm")}
-																				</button>
-																			) : (
-																				<button
-																					type="button"
-																					className="set-uninstall"
-																					disabled={isRunning}
-																					title={t("pluginUninstallHint")}
-																					onClick={() => setConfirmUiUninstall(e.id)}
-																				>
-																					<FiTrash2 />
-																					{t("uninstallExt")}
-																				</button>
-																			)}
-																		</>
-																	) : (
-																		<button
-																			type="button"
-																			className="set-uninstall"
-																			title={t("pluginInstallHint")}
-																			disabled={isRunning}
-																			onClick={() => runCatalogInstall(e)}
-																		>
-																			{isRunning ? (
-																				<>
-																					<FiRefreshCw className="set-job-spin" />
-																					{t("pluginJobRunning")}
-																				</>
-																			) : (
-																				<>
-																					<FiDownload />
-																					{t("pluginInstall")}
-																				</>
-																			)}
-																		</button>
-																	)}
-																	{origin === "custom" && (
-																		<button
-																			type="button"
-																			className="set-uninstall"
-																			title={t("pluginCatalogRemoveHint")}
-																			onClick={() => runCatalogRemove(e.id)}
-																		>
-																			<FiX />
-																		</button>
-																	)}
-																</div>
-															</div>
-														);
-													})}
-												</div>
-											)}
-										</>
-									);
-								})()}
-							</div>
-						)}
 
 						{/* ---- UI plugins（<dataDir>/plugins，纯 UI 隐藏） ----------------- */}
-						{tab === "plugins" && pluginSub === "installed" && (
+						{tab === "plugins" && (
 							<div className="set-section">
 								<div className="set-section-title">
 									<FiBox className="set-section-icon" />
@@ -6009,9 +4579,7 @@ export function SettingsModal({
 														action={
 															<div className="set-row-actions">
 																{(() => {
-																	const url =
-																		pluginOfficialUrl(chat.pluginCatalog.find((c) => c.id === p.id)) ||
-																		pluginOfficialUrl(p);
+																	const url = pluginOfficialUrl(p);
 																	return url ? (
 																		<a
 																			href={url}

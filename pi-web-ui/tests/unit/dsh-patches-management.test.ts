@@ -5,7 +5,6 @@ import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { loadDshMarketData } from "../../server/dsh/dsh-market-service.js";
 
 describe("DSH 用户补丁管理核心逻辑", () => {
 	let testDir: string;
@@ -102,31 +101,5 @@ describe("DSH 用户补丁管理核心逻辑", () => {
 		expect(files).toHaveLength(2);
 		expect(files[0]).toEqual({ name: "a-active.yml", disabled: false });
 		expect(files[1]).toEqual({ name: "b-disabled.yml.disabled", disabled: true });
-	});
-
-	it("DSH 插件市场：命中有效本地缓存时无需请求远端", async () => {
-		const cacheFile = join(testDir, "dsh-market-cache.json");
-		const mockData = {
-			count: 1,
-			updated: "2026-10-13",
-			savedAt: Date.now(),
-			categories: { model: { en: "Models", zh: "模型" } },
-			plugins: [
-				{
-					name: "dsh-our-free-model",
-					owner: "Ebony-Vinyl",
-					category: "model",
-					version: "2.1.0",
-					stars: 100,
-					downloads: 500,
-				},
-			],
-		};
-		writeFileSync(cacheFile, JSON.stringify(mockData), "utf8");
-
-		const res = await loadDshMarketData(testDir, false);
-		expect(res.count).toBe(1);
-		expect(res.plugins[0].name).toBe("dsh-our-free-model");
-		expect(res.categories.model.zh).toBe("模型");
 	});
 });

@@ -222,9 +222,6 @@ describe("引擎接口一致性门禁 (DispatchSession Interface Conformance)", 
 			"pushSlashCommands",
 			"installSkill",
 			"uninstallSkill",
-			"fetchSkillMarket",
-			"fetchSkillContent",
-			"fetchMcpMarket",
 
 			// 2. 预设生命周期与跨端共享
 			"savePreset",

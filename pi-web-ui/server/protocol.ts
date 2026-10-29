@@ -1119,43 +1119,10 @@ export type ClientMessage =
 			name: string;
 			scope: "global" | "project";
 	  }
-	// -- 远程市场检索 (MCP & Skill) --------------------------------------------
-	/** 查询公开远程 MCP 服务器市场（支持 Smithery API、GitHub 及自定义源） */
-	| {
-			type: "fetch_mcp_market";
-			source?: string;
-			query?: string;
-			page?: number;
-			refresh?: boolean;
-	  }
-	/** 查询公开远程 Skill 技能仓库（支持 GitHub 仓库，默认 anthropics/skills） */
-	| {
-			type: "fetch_skill_market";
-			repo?: string;
-			refresh?: boolean;
-	  }
-	/** 从远程仓库拉取单个技能的完整 SKILL.md 内容供预览或安装 */
-	| {
-			type: "fetch_skill_content";
-			repo: string;
-			skillId: string;
-	  }
 	/** Save a UI plugin's declarative settings (manifest "settings" schema).
 	 *  The host validates against the schema, persists to storage.json and
 	 *  notifies the plugin (host.onSettingsChanged). */
 	| { type: "plugin_settings"; pluginId: string; values: Record<string, unknown> }
-	/** Add a third-party plugin to the user's installable-plugin list
-	 *  (<dataDir>/plugin-catalog.json). `source` is required
-	 *  (owner/repo or owner/repo/subdir[#ref]); id/name/description/icon are
-	 *  optional — the server normalizes defaults (id falls back to the CLI's
-	 *  repo/subdir naming, name falls back to id). */
-	| {
-			type: "plugin_catalog_add";
-			entry: { source: string; id?: string; name?: string; description?: string; icon?: string };
-	  }
-	/** Remove a user-added plugin from the installable-plugin list (builtin
-	 *  entries from the shipped catalog can't be removed via the UI). */
-	| { type: "plugin_catalog_remove"; id: string }
 	/** Run a plugin install / update / uninstall as a BACKGROUND JOB
 	 *  (server/plugin-installer.ts) instead of a visible terminal tab: the
 	 *  settings panel stays open, the job keeps running page-side, and
@@ -1209,22 +1176,6 @@ export type ClientMessage =
 	 *  只收绝对路径（相对路径直接丢弃）、去重、最多 8 个；按项目（cwd）持久化在
 	 *  client-state.json，改了立刻推一次快照并在插件宿主里同步。 */
 	| { type: "set_workspace_roots"; roots?: string[] }
-	/** Sync the plugin marketplace list from a remote/local JSON document
-	 *  (array or the documented `{ entries: [...] }` shape): validated, written
-	 *  atomically to <dataDir>/plugin-catalog.json, optionally installed/
-	 *  updated, then plugins are reloaded and the refreshed list is pushed to
-	 *  every client. Result → `plugin_catalog_sync_result` (requestId echoed). */
-	| {
-			type: "plugin_catalog_sync";
-			requestId: string;
-			/** http(s) URL or a local JSON file path. */
-			source: string;
-			/** Also install/update every entry (default false). */
-			install?: boolean;
-			/** Replace the user list wholesale instead of merging (default false =
-			 *  upsert by id, keep entries the document doesn't mention). */
-			replace?: boolean;
-	  }
 	// -- DSH engine user patches (<dataDir>/dsh-patches) ---------------------
 	/** List <dataDir>/dsh-patches/*.yml (DSH engine only; pi engine ignores). */
 	| { type: "dsh_patches_list" }
@@ -1247,8 +1198,6 @@ export type ClientMessage =
 	| { type: "dsh_patch_toggle"; name: string; enabled: boolean }
 	/** 删除 DSH 插件补丁文件（移除文件并重载运行时）。 */
 	| { type: "dsh_patch_delete"; name: string }
-	/** 拉取 DSH 插件市场数据（force: true 表示绕过本地缓存重新拉取）。 */
-	| { type: "dsh_market_fetch"; force?: boolean }
 	/** DSH engine: answer a model ask_user_question dialog (id echoes
 	 *  question_pending.id). `cancelled` (user ✗) rejects the pending ask.
 	 *  owner = 跨页作答：转给持有方会话（elsewhere_question 预告的那张问卷）。 */
@@ -3318,28 +3267,6 @@ export type ServerMessage =
 			projectConfigPath?: string;
 	  }
 	| {
-			type: "mcp_market_result";
-			ok: boolean;
-			servers: RemoteMcpServer[];
-			total?: number;
-			source: string;
-			error?: string;
-	  }
-	| {
-			type: "skill_market_result";
-			ok: boolean;
-			skills: RemoteSkillSummary[];
-			repo: string;
-			error?: string;
-	  }
-	| {
-			type: "skill_content_result";
-			ok: boolean;
-			skillId: string;
-			content: string;
-			error?: string;
-	  }
-	| {
 			type: "ready";
 			clientId: string;
 			serverVersion: string;
@@ -3850,12 +3777,6 @@ export type ServerMessage =
 	/** Result of a check_plugin_updates run or an all-source update check
 	 *  containing UI plugins. Broadcast to all clients so plugin badges stay in sync. */
 	| { type: "plugin_updates"; updates: UiPluginUpdateInfo[] }
-	/** Installable-plugin list (marketplace). Pushed on attach and after every
-	 *  plugin_catalog_add/remove. Merges the shipped catalog
-	 *  (<pkgRoot>/plugins/catalog.json) with user-added entries
-	 *  (<dataDir>/plugin-catalog.json). `epoch` increments on every add/remove
-	 *  so the frontend can re-render. */
-	| { type: "plugin_catalog"; entries: UiPluginCatalogEntry[]; epoch: number }
 	/** App-level message from a plugin's server side to its client bundles.
 	 *  Broadcast to every connected socket (plugins have no per-client state
 	 *  in v1); the frontend fans it out to the matching loaded view. */
@@ -3937,25 +3858,6 @@ export type ServerMessage =
 	  }
 	/** 一条能力授权请求已被某端答复（多标签页互斥：先答复者胜，其余静默收起）。 */
 	| { type: "plugin_permission_resolved"; id: string }
-	/** Result of a plugin_catalog_sync (requestId echoed). */
-	| {
-			type: "plugin_catalog_sync_result";
-			requestId: string;
-			ok: boolean;
-			error?: string;
-			/** The merged marketplace list after the sync. */
-			entries?: UiPluginCatalogEntry[];
-			/** Per-entry install results when install:true was asked. */
-			installed?: { id: string; ok: boolean; error?: string }[];
-	  }
-	/** DSH 插件市场全量清单推送（DSH only；初始化或拉取后推）。 */
-	| {
-			type: "dsh_market_data";
-			count: number;
-			updated?: string;
-			categories: Record<string, { en: string; zh: string }>;
-			plugins: DshMarketPlugin[];
-	  }
 	// -- DSH engine user patches --------------------------------------------
 	/** List of <dataDir>/dsh-patches/*.yml files (DSH engine only; pi engine
 	 *  never emits it). Pushed on request (dsh_patches_list) and after a

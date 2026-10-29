@@ -90,7 +90,6 @@ import {
 	listCustomModelsFromConfig,
 	isModelProtocolSupportedByEngine,
 } from "../model-resolver.js";
-import { loadDshMarketData } from "./dsh-market-service.js";
 import { formatTextQuote, readTextQuote, messageTextWithQuotes } from "../text-quote.js";
 import { MarkerService } from "../marker-service.js";
 import {
@@ -3133,27 +3132,6 @@ export class DshClientSession {
 		}
 
 		await this.rescanDshPatches();
-	}
-
-	/** 拉取 DSH 插件市场数据并推送给客户端。 */
-	async fetchDshMarket(force = false): Promise<void> {
-		try {
-			const data = await loadDshMarketData(this.dataDir, force);
-			this.emit({
-				type: "dsh_market_data",
-				count: data.count,
-				updated: data.updated,
-				categories: data.categories,
-				plugins: data.plugins,
-			});
-		} catch (err) {
-			this.emit({
-				type: "notice",
-				level: "warning",
-				text: `拉取 DSH 插件市场失败：${(err as Error).message}`,
-				textEn: `Failed to fetch DSH plugin market: ${(err as Error).message}`,
-			});
-		}
 	}
 
 	// -----------------------------------------------------------------------

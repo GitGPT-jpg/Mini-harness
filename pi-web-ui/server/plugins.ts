@@ -64,7 +64,6 @@ import {
 } from "./plugin-schedule.js";
 import { PluginPermissionStore, type PermissionFamily } from "./plugin-permissions.js";
 import { getAppVersion } from "./pkg-info.js";
-import { readCatalog, addCustomEntry, removeCustomEntry, type CatalogAddInput } from "./plugin-catalog.js";
 import { PluginGrantsStore, normalizeGrantPath } from "./plugin-grants.js";
 import { normalizeIconSvg } from "./icon-svg.js";
 import { PluginDomConsent, declarationWantsDom } from "./plugin-dom.js";
@@ -1734,7 +1733,6 @@ export class PluginManager {
 	/** 服务端重载纪元：每次 reload() +1，前端用作 import 缓存击穿参数。 */
 	private epochCounter = 0;
 	/** 插件市场列表纪元：每次 add/remove +1，前端据此重渲。 */
-	private catalogEpoch = 0;
 	/** 当前全局工作区（host.cwd 的背后存储）——随 notifyCwd 更新。 */
 	private cwdValue: string;
 	/** 当前项目的**额外工作区根**（宿主侧多根，见 protocol 的 set_workspace_roots）——
@@ -1910,71 +1908,9 @@ export class PluginManager {
 		return this.epochCounter;
 	}
 
-	/** 用户自定义插件列表文件（<dataDir>/plugin-catalog.json）。 */
-	get customCatalogPath(): string {
-		return join(this.dataDir, "plugin-catalog.json");
-	}
-
-	/** 官方社区生态插件清单文件（<dataDir>/community-catalog.json）。 */
-	get communityCatalogPath(): string {
-		return join(this.dataDir, "community-catalog.json");
-	}
-
-	/** 合并后的插件市场列表（builtin + community + 用户自定义，同 id 用户覆盖）。 */
-	catalog(): UiPluginCatalogEntry[] {
-		return this.builtinCatalogPath
-			? readCatalog(this.builtinCatalogPath, this.customCatalogPath, this.communityCatalogPath)
-			: [];
-	}
-
-	/** 插件市场列表纪元（随 plugin_catalog 消息下发）。 */
-	get catalogEpochValue(): number {
-		return this.catalogEpoch;
-	}
-
-	/** 把插件市场列表推给所有 socket。 */
-	async pushCatalog(): Promise<void> {
-		this.deliverAll({ type: "plugin_catalog", entries: this.catalog(), epoch: this.catalogEpoch });
-	}
-
 	/** 把能力授权表推给所有 socket（attach 推 + 授权/撤销后重推）。 */
 	async pushPermissions(): Promise<void> {
 		this.deliverAll({ type: "plugin_permissions", grants: this.permGrants.list() });
-	}
-
-	/** 往用户自定义列表加一条（同 id 覆盖）；返回错误信息或 null（成功）。
-	 *  成功后 epoch+1 并重推列表。 */
-	addCatalogEntry(input: CatalogAddInput, lang?: () => ServerLang): { error?: string } {
-		try {
-			addCustomEntry(this.customCatalogPath, input, lang);
-			this.catalogEpoch += 1;
-			void this.pushCatalog();
-			return {};
-		} catch (err) {
-			return { error: (err as Error).message };
-		}
-	}
-
-	/** 移除一条用户自定义条目（builtin / 社区条目不可经此删除）；返回错误信息或 null。 */
-	removeCatalogEntry(id: string, lang?: () => ServerLang): { error?: string } {
-		const l = lang?.() ?? "en";
-		try {
-			const ok = removeCustomEntry(this.customCatalogPath, id);
-			if (!ok)
-				return {
-					error: pick(
-						l,
-						"未找到该条目，或它是内置/社区条目（不可移除）",
-						"Entry not found, or it is a built-in/community entry (cannot be removed)",
-						"plugins.catalog.entry.cannot.remove",
-					),
-				};
-			this.catalogEpoch += 1;
-			void this.pushCatalog();
-			return {};
-		} catch (err) {
-			return { error: (err as Error).message };
-		}
 	}
 
 	addSender(send: (msg: ServerMessage) => void, cid: () => string | null): () => void {

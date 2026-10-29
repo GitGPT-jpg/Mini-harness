@@ -79,7 +79,6 @@ import { receiveToolPrompt } from "./tool-prompt-state";
 import { receiveCompactedMessages } from "./compacted-history-state";
 import { emitPluginData } from "./plugin-loader";
 import { ingestPluginLogsData } from "./plugin-logs";
-import { resolveCatalogSyncResult } from "./plugin-host";
 import { PROTOCOL_VERSION } from "./protocol-version";
 import { mergeEarlierPage } from "./history-window";
 import { enqueueNotice } from "./notice-policy";
@@ -156,21 +155,6 @@ export interface PluginJobState {
 	lines: string[];
 	/** 本地收到 start 的时间（算耗时；作业在服务端）。 */
 	startedAt: number;
-}
-
-/** 目录同步回执（issue #165：设置面板「从目录同步」框用；发起它的客户端才看得到）。
- *  由服务端的 `plugin_catalog_sync_result` 即时通道消息驱动（与 plugin-host 的
- *  reloadCatalog 等待者在 use-chat 里共用同一条消息，各取所需）。 */
-export interface CatalogSyncState {
-	requestId: string;
-	ok: boolean;
-	error?: string;
-	/** 同步后的完整市场列表长度（成功时）。 */
-	entryCount?: number;
-	/** install:true 时逐条安装结果。 */
-	installed?: { id: string; ok: boolean; error?: string }[];
-	/** 本地收到回执的时间。 */
-	receivedAt: number;
 }
 
 /** 预设导出结果（`preset_export_result`）：json = 可复制/下载的交换文档文本。 */
@@ -468,15 +452,8 @@ export interface ChatState {
 	pluginUpdates: Record<string, UiPluginUpdateInfo> | null;
 	/** 正在检查插件更新 */
 	checkingPluginUpdates: boolean;
-	/** Installable-plugin list (marketplace): shipped catalog + user-added
-	 *  entries, each a one-click install candidate (see plugin_catalog msg). */
-	pluginCatalog: UiPluginCatalogEntry[];
-	/** Catalog epoch (increments on every add/remove — re-render trigger). */
-	pluginCatalogEpoch: number;
 	/** 插件后台作业的实时状态，key = jobId（即时通道消息：刷新即丢，作业在服务端继续跑）。 */
 	pluginJobs: Record<string, PluginJobState>;
-	/** 最近一次目录同步的回执（设置面板「从目录同步」框展示用；刷新即丢）。 */
-	catalogSync: CatalogSyncState | null;
 	/** 预设分享（server/preset-share.ts）：导出结果 / 导入预览 / 社区目录（刷新即丢）。 */
 	presetExport: PresetExportState | null;
 	presetImport: PresetImportState | null;
@@ -509,13 +486,6 @@ export interface ChatState {
 	}[];
 	/** DSH engine: <dataDir>/dsh-patches user patch files (list + dir). */
 	dshPatches: { patchDir: string; files: DshPatchFileInfo[] } | null;
-	/** DSH engine: awesome-dsh-plugin / dsh-market 社区插件市场数据。 */
-	dshMarket: {
-		count: number;
-		updated?: string;
-		categories: Record<string, { en: string; zh: string }>;
-		plugins: DshMarketPlugin[];
-	} | null;
 	/** DSH engine: Agent 预设名录（null = 未加载/legacy，UI 隐藏预设条）。 */
 	dshPresets: { presets: UiAgentPreset[]; defaultPreset: string } | null;
 	/** DSH engine: 权限预设选项表 + 新会话默认（null = 未就绪/legacy，UI 隐藏权限条）。 */
@@ -526,28 +496,6 @@ export interface ChatState {
 	/** Server wire-protocol version differs from ours — the page was loaded
 	 *  before/after an app update; show a persistent refresh banner. */
 	protocolMismatch: boolean;
-	/** 公开远程 MCP 市场查询结果（来自 Smithery/GitHub/自定义源） */
-	mcpMarketResult: {
-		ok: boolean;
-		servers: RemoteMcpServer[];
-		total?: number;
-		source: string;
-		error?: string;
-	} | null;
-	/** 公开远程 Skill 技能仓库检索结果 */
-	skillMarketResult: {
-		ok: boolean;
-		skills: RemoteSkillSummary[];
-		repo: string;
-		error?: string;
-	} | null;
-	/** 单个技能的远程 SKILL.md 内容拉取结果 */
-	skillContentResult: {
-		ok: boolean;
-		skillId: string;
-		content: string;
-		error?: string;
-	} | null;
 	/** 工作区/历史会话/新对话的流式阶段切换状态（像传输文件一样展示实时进度与先行预览消息）。 */
 	transition: WorkspaceTransitionState | null;
 	/** 沙盒与源项目的最新对比结果（点击「写回源项目」弹窗时拉取展示）。 */
@@ -759,28 +707,14 @@ type Action =
 			globalConfigPath?: string;
 			projectConfigPath?: string;
 	  }
-	| {
-			type: "mcp_market_result";
-			result: { ok: boolean; servers: RemoteMcpServer[]; total?: number; source: string; error?: string };
-	  }
-	| {
-			type: "skill_market_result";
-			result: { ok: boolean; skills: RemoteSkillSummary[]; repo: string; error?: string };
-	  }
-	| {
-			type: "skill_content_result";
-			result: { ok: boolean; skillId: string; content: string; error?: string };
-	  }
 	| { type: "bg_servers"; servers: BgServer[] }
 	| { type: "scheduler_tasks"; tasks: SchedulerTaskView[] }
 	| { type: "plugin_panel_items"; groups: PluginPanelGroup[] }
 	| { type: "plugins"; plugins: UiPluginInfo[]; epoch: number }
 	| { type: "plugin_updates"; updates: UiPluginUpdateInfo[] }
 	| { type: "plugin_updates_check_started" }
-	| { type: "plugin_catalog"; entries: UiPluginCatalogEntry[]; epoch: number }
 	/** 插件后台作业进度（安装/更新/卸载）：line 为该次新增的一行输出。 */
 	| { type: "plugin_job"; job: Omit<PluginJobState, "lines" | "startedAt">; line?: string }
-	| { type: "plugin_catalog_sync_result"; result: Omit<CatalogSyncState, "receivedAt"> }
 	/** 预设分享（server/preset-share.ts）：导出/导入/目录/一键分享回执。 */
 	| { type: "preset_export_result"; result: Omit<PresetExportState, "receivedAt"> }
 	| {
@@ -826,13 +760,6 @@ type Action =
 			type: "dsh_patches";
 			patchDir: string;
 			files: DshPatchFileInfo[];
-	  }
-	| {
-			type: "dsh_market_data";
-			count: number;
-			updated?: string;
-			categories: Record<string, { en: string; zh: string }>;
-			plugins: DshMarketPlugin[];
 	  }
 	| { type: "dsh_presets"; presets: UiAgentPreset[]; defaultPreset: string }
 	| { type: "dsh_permission"; options: DshPermissionOption[]; defaultPreset: string }
@@ -1344,12 +1271,6 @@ function reducer(state: ChatState, action: Action): ChatState {
 				},
 			};
 		}
-		case "mcp_market_result":
-			return { ...state, mcpMarketResult: action.result };
-		case "skill_market_result":
-			return { ...state, skillMarketResult: action.result };
-		case "skill_content_result":
-			return { ...state, skillContentResult: action.result };
 		case "bg_servers":
 			return { ...state, bgServers: action.servers };
 		case "scheduler_tasks":
@@ -1367,8 +1288,6 @@ function reducer(state: ChatState, action: Action): ChatState {
 			}
 			return { ...state, pluginUpdates: map, checkingPluginUpdates: false };
 		}
-		case "plugin_catalog":
-			return { ...state, pluginCatalog: action.entries, pluginCatalogEpoch: action.epoch };
 		case "plugin_grants":
 			return { ...state, pluginGrants: action.grants };
 		case "plugin_permissions":
@@ -1414,8 +1333,6 @@ function reducer(state: ChatState, action: Action): ChatState {
 				pluginJobs: { ...state.pluginJobs, [action.job.jobId]: next },
 			};
 		}
-		case "plugin_catalog_sync_result":
-			return { ...state, catalogSync: { ...action.result, receivedAt: Date.now() } };
 		case "preset_export_result":
 			return { ...state, presetExport: { ...action.result, receivedAt: Date.now() } };
 		case "preset_import_result":
@@ -1429,16 +1346,6 @@ function reducer(state: ChatState, action: Action): ChatState {
 			return { ...state, installInspect: action.result };
 		case "dsh_patches":
 			return { ...state, dshPatches: { patchDir: action.patchDir, files: action.files } };
-		case "dsh_market_data":
-			return {
-				...state,
-				dshMarket: {
-					count: action.count,
-					updated: action.updated,
-					categories: action.categories,
-					plugins: action.plugins,
-				},
-			};
 		case "dsh_presets":
 			return { ...state, dshPresets: { presets: action.presets, defaultPreset: action.defaultPreset } };
 		case "dsh_permission":
@@ -1859,10 +1766,7 @@ export function useChat() {
 		pluginsEpoch: 0,
 		pluginUpdates: null,
 		checkingPluginUpdates: false,
-		pluginCatalog: [],
-		pluginCatalogEpoch: 0,
 		pluginJobs: {},
-		catalogSync: null,
 		presetExport: null,
 		presetImport: null,
 		presetCatalog: null,
@@ -1873,10 +1777,6 @@ export function useChat() {
 		pathRequests: [],
 		permRequests: [],
 		dshPatches: null,
-		dshMarket: null,
-		mcpMarketResult: null,
-		skillMarketResult: null,
-		skillContentResult: null,
 		dshPresets: null,
 		dshPermission: null,
 		protocolMismatch: false,
@@ -2684,15 +2584,6 @@ export function useChat() {
 						projectConfigPath: msg.projectConfigPath,
 					});
 					break;
-				case "mcp_market_result":
-					dispatch({ type: "mcp_market_result", result: msg });
-					break;
-				case "skill_market_result":
-					dispatch({ type: "skill_market_result", result: msg });
-					break;
-				case "skill_content_result":
-					dispatch({ type: "skill_content_result", result: msg });
-					break;
 				case "bg_servers":
 					dispatch({ type: "bg_servers", servers: msg.servers });
 					break;
@@ -2707,9 +2598,6 @@ export function useChat() {
 					break;
 				case "plugin_updates":
 					dispatch({ type: "plugin_updates", updates: msg.updates });
-					break;
-				case "plugin_catalog":
-					dispatch({ type: "plugin_catalog", entries: msg.entries, epoch: msg.epoch });
 					break;
 				case "plugin_grants":
 					dispatch({ type: "plugin_grants", grants: msg.grants });
@@ -2789,21 +2677,6 @@ export function useChat() {
 						},
 					});
 					break;
-				case "plugin_catalog_sync_result":
-					// host.reloadCatalog() 的回执（等待中的 Promise 由 plugin-host 管）。
-					resolveCatalogSyncResult(msg);
-					// 设置面板发起的同步也在此收回执（requestId 对上才展示，见 SettingsModal）。
-					dispatch({
-						type: "plugin_catalog_sync_result",
-						result: {
-							requestId: String(msg.requestId ?? ""),
-							ok: msg.ok === true,
-							...(msg.error ? { error: msg.error } : {}),
-							...(msg.entries ? { entryCount: msg.entries.length } : {}),
-							...(msg.installed ? { installed: msg.installed } : {}),
-						},
-					});
-					break;
 				case "preset_export_result":
 					dispatch({
 						type: "preset_export_result",
@@ -2870,9 +2743,6 @@ export function useChat() {
 					break;
 				case "dsh_patches":
 					dispatch({ type: "dsh_patches", patchDir: msg.patchDir, files: msg.files });
-					break;
-				case "dsh_market_data":
-					dispatch(msg);
 					break;
 				case "dsh_presets":
 					dispatch({ type: "dsh_presets", presets: msg.presets, defaultPreset: msg.defaultPreset });

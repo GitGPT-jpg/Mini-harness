@@ -329,7 +329,6 @@ import {
 	deleteMcpServer as deleteMcpServerFile,
 	toggleMcpServer as toggleMcpServerFile,
 } from "./mcp-manager.js";
-import { fetchRemoteMcpMarket, fetchRemoteSkillMarket, fetchRemoteSkillContent } from "./market-service.js";
 import type { McpBridge } from "./mcp-bridge.js";
 import {
 	serializeMessage,
@@ -7452,57 +7451,6 @@ export class ClientSession {
 				textEn: `Failed to uninstall skill: ${msg}`,
 			});
 		}
-	}
-
-	/** 查询公开远程 MCP 服务器市场 */
-	async fetchMcpMarket(source?: string, query?: string, page?: number, refresh?: boolean): Promise<void> {
-		const res = await fetchRemoteMcpMarket({
-			source,
-			query,
-			page,
-			refresh,
-			dataDir: this.stateStore.dataDir,
-		});
-		this.emit({
-			type: "mcp_market_result",
-			ok: res.ok,
-			servers: res.servers,
-			source: res.source,
-			total: res.total,
-			error: res.error,
-		});
-	}
-
-	/** 查询公开远程 Skill 技能仓库 */
-	async fetchSkillMarket(repo?: string, refresh?: boolean): Promise<void> {
-		const res = await fetchRemoteSkillMarket({
-			repo,
-			refresh,
-			dataDir: this.stateStore.dataDir,
-		});
-		this.emit({
-			type: "skill_market_result",
-			ok: res.ok,
-			skills: res.skills,
-			repo: res.repo,
-			error: res.error,
-		});
-	}
-
-	/** 从远程仓库拉取单个技能的完整 SKILL.md 内容 */
-	async fetchSkillContent(repo: string, skillId: string): Promise<void> {
-		const res = await fetchRemoteSkillContent({
-			repo,
-			skillId,
-			dataDir: this.stateStore.dataDir,
-		});
-		this.emit({
-			type: "skill_content_result",
-			ok: res.ok,
-			skillId: res.skillId,
-			content: res.content,
-			error: res.error,
-		});
 	}
 
 	/** 重新加载当前运行中会话并重放门控 */
