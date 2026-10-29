@@ -610,6 +610,7 @@ try {
     `\t\t\t\t\tif(slot){\n` +
     `\t\t\t\t\t\tslot.querySelectorAll('button').forEach(function(b){var t=(b.textContent||'').trim();if(t==='提炼')b.textContent='帮我细化';else if(t==='发送')b.textContent='开始';});\n` +
     `\t\t\t\t\t\treplaceText(slot,'调研模型','规划模型');replaceText(slot,'细化模型','规划模型');replaceText(slot,'最大轮数','最多尝试');\n` +
+    `\t\t\t\t\t\tvar wc=document.querySelector('.goalbar-active.wizard .goalbar-chip');if(wc&&(wc.textContent||'').indexOf('轮')!==-1)wc.textContent=wc.textContent.replace('轮','题');\n` +
     `\t\t\t\t\t\tensureReviewChip(slot);\n` +
     `\t\t\t\t\t\tif(!slot.querySelector('.goalbar')){slot.querySelectorAll('.mh-llm-hint').forEach(function(h){h.remove();});}\n` +
     `\t\t\t\t\t\tif(slot.querySelector('.goalbar')&&!slot.querySelector('.mh-llm-hint:not(.mh-llm-same)')){\n` +
@@ -798,6 +799,28 @@ try {
   }
 } catch (e) {
   log("WARN: 双 Loop 入口注入失败", e.message);
+}
+
+// ---- 7g) 目标调研向导（帮我细化）：先问问题，别先翻工作区 ----
+// 原版给向导挂了 read/ls/find/grep，并允许"先做 1-3 次只读检查"，实测会连续翻目录/读文件
+// 40 秒才弹第一题。这里把工具裁到只剩 goal_ask，并把提示词改成"先问、不要探索"。幂等。
+try {
+  const gsFile = path.join(DIST, "goal-service.js");
+  let gs = fs.readFileSync(gsFile, "utf8");
+  const before = gs;
+  const oldTools = 'tools: ["goal_ask", "read", "ls", "find", "grep"],';
+  const newTools = 'tools: ["goal_ask"], /* HARDENED:wizard-ask-first */';
+  if (gs.includes(oldTools)) gs = gs.split(oldTools).join(newTools);
+  const oldGuide =
+    "`- If you need to verify a specific file or directory in the workspace, do at most 1 to 3 quick read-only checks (read/ls/find/grep), then IMMEDIATELY call goal_ask. Never do exhaustive exploration or attempt the actual task during scoping.`, // eslint-disable-line max-len";
+  const newGuide =
+    "`- Call goal_ask FIRST: this session has no read/ls/find/grep tools. Base every question on the requirement and the conversation context above. Never attempt the actual task during scoping.`, // eslint-disable-line max-len";
+  if (gs.includes(oldGuide)) gs = gs.split(oldGuide).join(newGuide);
+  const ok = gs.includes("HARDENED:wizard-ask-first") && gs.includes("Call goal_ask FIRST");
+  if (gs !== before) { fs.writeFileSync(gsFile, gs); log("目标调研向导：已改为先提问（去掉探索工具）"); }
+  else log(ok ? "目标调研向导：已是先提问（跳过）" : "WARN: 目标调研向导锚点未命中（pi-web-ui 可能升级，需重新适配）");
+} catch (e) {
+  log("WARN: 目标调研向导加固失败", e.message);
 }
 
 // ---- 8) 提示词模板：隐藏 25 个 pi 内置模板，灌入从 harness+Ku 沉淀的多个可直接用模板 ----
