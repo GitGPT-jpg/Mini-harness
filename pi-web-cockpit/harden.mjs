@@ -305,6 +305,48 @@ try {
     `  } catch (e) { res.status(500).end(String(e)); }\n` +
     `});\n` +
     `// 目标历史（永久）：LLM loop 目录\n` +
+    `// 集群连接：保存 kubeconfig 并用 kubectl 实测连通性（结果缓存 8s）\n` +
+    `let __mhClusterCache = { at: 0, result: null };\n` +
+    `async function __mhClusterCheck(force) {\n` +
+    `  const now = Date.now();\n` +
+    `  if (!force && __mhClusterCache.result && now - __mhClusterCache.at < 8000) return __mhClusterCache.result;\n` +
+    `  const fsC = await import("node:fs"); const pathC = await import("node:path"); const osC = await import("node:os");\n` +
+    `  const cpC = await import("node:child_process");\n` +
+    `  const f = pathC.join(osC.homedir(), ".pi-web", "kubeconfig");\n` +
+    `  if (!fsC.existsSync(f)) { __mhClusterCache = { at: now, result: { configured: false, connected: false, message: "未配置 kubeconfig" } }; return __mhClusterCache.result; }\n` +
+    `  const result = await new Promise((resolve) => {\n` +
+    `    cpC.execFile("kubectl", ["--kubeconfig", f, "cluster-info", "--request-timeout=5s"], { timeout: 9000 }, (err, stdout, stderr) => {\n` +
+    `      const out = String(stdout || "") + String(stderr || "");\n` +
+    `      if (err) { const em = String(err.message || err); const msg = (err.code === "ENOENT") ? "未找到 kubectl，请先安装或把它加入 PATH" : (out.trim() || em); resolve({ configured: true, connected: false, message: msg.slice(0, 400) }); }\n` +
+    `      else resolve({ configured: true, connected: true, message: out.trim().slice(0, 400) });\n` +
+    `    });\n` +
+    `  });\n` +
+    `  __mhClusterCache = { at: now, result };\n` +
+    `  return result;\n` +
+    `}\n` +
+    `app.get("/api/mini-harness/cluster", async (req, res) => {\n` +
+    `  if (!tokenOk(req)) { res.status(403).end("unauthorized"); return; }\n` +
+    `  try { res.json(await __mhClusterCheck(false)); } catch (e) { res.status(500).end(String(e)); }\n` +
+    `});\n` +
+    `app.post("/api/mini-harness/cluster", async (req, res) => {\n` +
+    `  if (!tokenOk(req)) { res.status(403).end("unauthorized"); return; }\n` +
+    `  try {\n` +
+    `    const text = String((req.body && req.body.kubeconfig) || "");\n` +
+    `    if (!text.trim()) { res.status(400).json({ error: "kubeconfig 内容为空" }); return; }\n` +
+    `    const fsC2 = await import("node:fs"); const pathC2 = await import("node:path"); const osC2 = await import("node:os");\n` +
+    `    const dir = pathC2.join(osC2.homedir(), ".pi-web"); fsC2.mkdirSync(dir, { recursive: true });\n` +
+    `    const f2 = pathC2.join(dir, "kubeconfig");\n` +
+    `    fsC2.writeFileSync(f2, text, { mode: 0o600 });\n` +
+    `    const r = await __mhClusterCheck(true);\n` +
+    `    res.json(r);\n` +
+    `  } catch (e) { res.status(500).end(String(e)); }\n` +
+    `});\n` +
+    `app.post("/api/mini-harness/cluster/clear", async (req, res) => {\n` +
+    `  if (!tokenOk(req)) { res.status(403).end("unauthorized"); return; }\n` +
+    `  try { const fsC3 = await import("node:fs"); const pathC3 = await import("node:path"); const osC3 = await import("node:os");\n` +
+    `    fsC3.rmSync(pathC3.join(osC3.homedir(), ".pi-web", "kubeconfig"), { force: true });\n` +
+    `    __mhClusterCache = { at: 0, result: null }; res.json({ ok: true }); } catch (e) { res.status(500).end(String(e)); }\n` +
+    `});\n` +
     `app.get("/api/mini-harness/goals", async (req, res) => {\n` +
     `  if (!tokenOk(req)) { res.status(403).end("unauthorized"); return; }\n` +
     `  try {\n` +
@@ -434,6 +476,8 @@ export PI_WEB_ENGINE="pi"
 export PI_WEB_MANAGED="1"
 # 若已建堡垒机隧道（~/.mini-harness/proxy.env 存在），继承代理环境，子进程 kubectl 才能连内网
 [ -f "$HOME/.mini-harness/proxy.env" ] && . "$HOME/.mini-harness/proxy.env"
+# 任务台里保存的 kubeconfig：存在就用它（agent 直接 kubectl 即可连集群）
+[ -f "$HOME/.pi-web/kubeconfig" ] && export KUBECONFIG="$HOME/.pi-web/kubeconfig"
 # Finder/LaunchServices 双击启动时 PATH 很精简，可能找不到 node；补上常见位置
 for d in "$HOME/.local/share/pi-node/current/bin" /usr/local/bin /opt/homebrew/bin; do
   [ -x "$d/node" ] && PATH="$d:$PATH"
@@ -613,7 +657,27 @@ try {
     `\t\t<style id="pi-loop-modes-style">\n` +
     `\t\t\t.mh-code-loop-btn{align-self:center;display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 9px;margin-left:6px;font-size:12px;border-radius:6px;cursor:pointer;color:#c4b5fd;background:rgba(168,85,247,.12);border:1px solid rgba(168,85,247,.45);white-space:nowrap;}\n` +
     `\t\t\t.mh-code-loop-btn:hover{background:rgba(168,85,247,.22);color:#ddd6fe;}\n` +
-    `\t\t\t#mh-loop-dock{position:fixed;z-index:2147483520;display:flex;align-items:center;gap:8px;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;}\n` +
+    `\t\t\t#mh-loop-dock{position:fixed;z-index:2147483520;display:flex;flex-direction:column;align-items:center;gap:8px;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;}\n` +
+    `\t\t\t.mh-loop-row{display:flex;align-items:center;gap:8px;}\n` +
+    `\t\t\t.mh-cluster-btn{height:30px;padding:0 16px;border-radius:999px;background:rgba(168,85,247,.12);border:1px solid rgba(168,85,247,.45);color:#ddd6fe;font-size:12.5px;font-weight:600;cursor:pointer;backdrop-filter:blur(10px);transition:background .15s,border-color .15s,color .15s;}\n` +
+    `\t\t\t.mh-cluster-btn:hover{background:rgba(168,85,247,.22);border-color:rgba(168,85,247,.7);}\n` +
+    `\t\t\t.mh-cluster-btn:active{opacity:.7;}\n` +
+    `\t\t\t.mh-cluster-btn.ok{background:rgba(52,211,153,.10);border-color:rgba(52,211,153,.45);color:#6ee7b7;}\n` +
+    `\t\t\t#mh-cluster-modal{position:fixed;inset:0;z-index:2147483580;display:flex;align-items:center;justify-content:center;background:rgba(15,17,21,.72);backdrop-filter:blur(3px);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;}\n` +
+    `\t\t\t#mh-cluster-modal .kc-card{width:min(620px,92vw);background:#1b1e24;color:#e7e9ee;border:1px solid #333a45;border-radius:14px;padding:22px 24px;box-shadow:0 18px 60px rgba(0,0,0,.5);}\n` +
+    `\t\t\t#mh-cluster-modal h2{margin:0 0 6px;font-size:17px;}\n` +
+    `\t\t\t#mh-cluster-modal .kc-sub{font-size:12px;color:#9aa3b2;margin:0 0 12px;line-height:1.6;}\n` +
+    `\t\t\t#mh-cluster-modal textarea{width:100%;box-sizing:border-box;min-height:180px;background:#11141a;border:1px solid #2b313b;border-radius:8px;color:#e7e9ee;padding:10px;font-size:12px;font-family:ui-monospace,Menlo,monospace;resize:vertical;}\n` +
+    `\t\t\t#mh-cluster-modal .kc-state{font-size:12px;margin-top:10px;line-height:1.5;color:#9aa3b2;white-space:pre-wrap;max-height:120px;overflow:auto;}\n` +
+    `\t\t\t#mh-cluster-modal .kc-state.ok{color:#34d399;}\n` +
+    `\t\t\t#mh-cluster-modal .kc-state.bad{color:#f87171;}\n` +
+    `\t\t\t#mh-cluster-modal .kc-row{display:flex;gap:10px;justify-content:flex-end;margin-top:14px;}\n` +
+    `\t\t\t#mh-cluster-modal button{font-size:13px;border-radius:8px;padding:8px 16px;cursor:pointer;border:1px solid transparent;}\n` +
+    `\t\t\t#mh-cluster-modal .kc-cancel{background:#2b313b;color:#d8dde6;border-color:#3a414d;}\n` +
+    `\t\t\t#mh-cluster-modal .kc-clear{background:transparent;color:#f87171;border-color:#f87171;margin-right:auto;}\n` +
+    `\t\t\t#mh-cluster-modal .kc-save{background:#a855f7;color:#fff;}\n` +
+    `\t\t\t.mh-cluster-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#f87171;margin-right:5px;vertical-align:middle;}\n` +
+    `\t\t\t.mh-cluster-dot.ok{background:#34d399;}\n` +
     `\t\t\t.mh-loop-card{height:22px;padding:0 10px;border-radius:999px;background:rgba(255,255,255,.03);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.07);color:#a9b2c1;font-size:11.5px;line-height:20px;letter-spacing:.2px;cursor:pointer;transition:background .15s,border-color .15s,color .15s,transform .12s,opacity .12s;}\n` +
     `\t\t\t.mh-loop-card.llm::before{content:"◎";margin-right:5px;color:#a78bfa;}\n` +
     `\t\t\t.mh-loop-card.code::before{content:"⌘";margin-right:5px;color:#7dd3fc;}\n` +
@@ -884,6 +948,54 @@ try {
     `\t\t\t\tsetTimeout(function(){goal.focus();},80);\n` +
     `\t\t\t}\n` +
     `\t\t\t// 自绘 Dock：固定在原生入口条位置上方，避免被 React 重渲染冲掉导致闪烁\n` +
+    `\t\t\t// ---- 连接集群：弹窗填 kubeconfig + 左下角双状态 ----
+` +
+    `\t\t\tfunction getTok(){return new URLSearchParams(location.search).get('token')||'';}\n` +
+    `\t\t\tfunction authHdr(){var t=getTok();var h={'Content-Type':'application/json'};if(t)h['x-pi-token']=t;return h;}\n` +
+    `\t\t\tfunction withTok(u){var t=getTok();return u+(t?((u.indexOf('?')>=0?'&':'?')+'token='+encodeURIComponent(t)):'');}\n` +
+    `\t\t\tvar __mhCluster={configured:false,connected:false,message:''};\n` +
+    `\t\t\tfunction openClusterModal(){\n` +
+    `\t\t\t\tif(document.getElementById('mh-cluster-modal'))return;\n` +
+    `\t\t\t\tvar o=document.createElement('div');o.id='mh-cluster-modal';\n` +
+    `\t\t\t\to.innerHTML='<div class="kc-card"><h2>连接集群</h2><p class="kc-sub">粘贴 kubeconfig（YAML）。保存后会立刻用 kubectl cluster-info 实测；配置存在 ~/.pi-web/kubeconfig，本机 agent 会自动通过 KUBECONFIG 使用它。</p><textarea id="kc-text" placeholder="apiVersion: v1&#10;kind: Config&#10;clusters:&#10;- cluster:&#10;    server: https://..."></textarea><div class="kc-state" id="kc-state"></div><div class="kc-row"><button type="button" class="kc-clear">清除配置</button><button type="button" class="kc-cancel">取消</button><button type="button" class="kc-save">测试并保存</button></div></div>';\n` +
+    `\t\t\t\tdocument.body.appendChild(o);\n` +
+    `\t\t\t\tvar st=o.querySelector('#kc-state');\n` +
+    `\t\t\t\to.querySelector('.kc-cancel').addEventListener('click',function(){o.remove();});\n` +
+    `\t\t\t\to.addEventListener('click',function(e){if(e.target===o)o.remove();});\n` +
+    `\t\t\t\to.querySelector('.kc-clear').addEventListener('click',function(){if(!confirm('清除已保存的 kubeconfig？'))return;\n` +
+    `\t\t\t\t\tfetch(withTok('/api/mini-harness/cluster/clear'),{method:'POST',headers:authHdr()}).then(function(){st.className='kc-state';st.textContent='已清除';pollCluster();});});\n` +
+    `\t\t\t\to.querySelector('.kc-save').addEventListener('click',function(){\n` +
+    `\t\t\t\t\tvar txt=(o.querySelector('#kc-text').value||'').trim();if(!txt){st.className='kc-state bad';st.textContent='请先粘贴 kubeconfig 内容';return;}\n` +
+    `\t\t\t\t\tst.className='kc-state';st.textContent='正在测试连接…';\n` +
+    `\t\t\t\t\tfetch(withTok('/api/mini-harness/cluster'),{method:'POST',headers:authHdr(),body:JSON.stringify({kubeconfig:txt})}).then(function(r){return r.json();}).then(function(j){\n` +
+    `\t\t\t\t\t\tif(j&&j.connected){st.className='kc-state ok';st.textContent='连接成功：\\n'+(j.message||'');}else{st.className='kc-state bad';st.textContent='连接失败：\\n'+((j&&j.message)||'未知错误');}\n` +
+    `\t\t\t\t\t\tpollCluster();\n` +
+    `\t\t\t\t\t}).catch(function(e){st.className='kc-state bad';st.textContent='请求失败：'+e;});\n` +
+    `\t\t\t\t});\n` +
+    `\t\t\t}\n` +
+    `\t\t\tfunction renderClusterStatus(){\n` +
+    `\t\t\t\ttry{\n` +
+    `\t\t\t\t\tvar left=document.querySelector('.statusbar-left');if(!left)return;\n` +
+    `\t\t\t\t\tvar conn=left.querySelector('.status-conn');if(!conn)return;\n` +
+    `\t\t\t\t\tvar api=conn.querySelector('.status-conn-label');if(api){var ok=/已连接|connected/i.test(api.textContent||'');var want=ok?'API 已连接':'API 未连接';if(api.textContent!==want)api.textContent=want;}\n` +
+    `\t\t\t\t\tvar el=document.getElementById('mh-cluster-status');\n` +
+    `\t\t\t\t\tif(!el){el=document.createElement('span');el.id='mh-cluster-status';el.className='bar-item status-item';el.style.cursor='pointer';el.title='点击连接/更新集群 kubeconfig';el.addEventListener('click',openClusterModal);conn.parentNode.insertBefore(el,conn.nextSibling);}\n` +
+    `\t\t\t\t\tvar on=!!__mhCluster.connected;var txt=on?'集群已连接':(__mhCluster.configured?'集群未连通':'集群未连接');\n` +
+    `\t\t\t\t\tvar html='<span class="mh-cluster-dot'+(on?' ok':'')+'"></span><span class="bar-item-text">'+txt+'</span>';\n` +
+    `\t\t\t\t\tif(el.__h!==html){el.__h=html;el.innerHTML=html;}\n` +
+    `\t\t\t\t\tel.title=on?'集群已连接 · 点击更新 kubeconfig':((__mhCluster.message||'')+' · 点击填写 kubeconfig');\n` +
+    `\t\t\t\t}catch(e){}\n` +
+    `\t\t\t}\n` +
+    `\t\t\tvar __mhClusterBusy=false;\n` +
+    `\t\t\tfunction pollCluster(){\n` +
+    `\t\t\t\tif(__mhClusterBusy)return;__mhClusterBusy=true;\n` +
+    `\t\t\t\tfetch(withTok('/api/mini-harness/cluster'),{headers:authHdr()}).then(function(r){return r.ok?r.json():null;}).then(function(j){\n` +
+    `\t\t\t\t\tif(j)__mhCluster=j;\n` +
+    `\t\t\t\t\tvar btn=document.getElementById('mh-cluster-btn');\n` +
+    `\t\t\t\t\tif(btn){var on=!!__mhCluster.connected;var t=on?'集群已连接':'连接集群';if(btn.textContent!==t)btn.textContent=t;btn.classList.toggle('ok',on);}\n` +
+    `\t\t\t\t\trenderClusterStatus();\n` +
+    `\t\t\t\t}).catch(function(){}).then(function(){__mhClusterBusy=false;});\n` +
+    `\t\t\t}\n` +
     `\t\t\tfunction ensureBtn(){\n` +
     `\t\t\t\ttry{\n` +
     `\t\t\t\t\tvar gi0=document.querySelector('.goalbar-input');var isOpen=!!(gi0&&gi0.getBoundingClientRect().width>10);\n` +
@@ -893,9 +1005,10 @@ try {
     `\t\t\t\t\tvar native=row.querySelector('.goalbar-hint');if(native&&native.style.opacity!=='0')native.style.opacity='0';\n` +
     `\t\t\t\t\tvar d=document.getElementById('mh-loop-dock');\n` +
     `\t\t\t\t\tif(!d){d=document.createElement('div');d.id='mh-loop-dock';\n` +
-    `\t\t\t\t\t\td.innerHTML='<button type="button" class="mh-loop-card llm">LLM loop</button><button type="button" class="mh-loop-card code">代码 loop</button>';\n` +
+    `\t\t\t\t\t\td.innerHTML='<button type="button" class="mh-cluster-btn" id="mh-cluster-btn">连接集群</button><div class="mh-loop-row"><button type="button" class="mh-loop-card llm">LLM loop</button><button type="button" class="mh-loop-card code">代码 loop</button></div>';\n` +
     `\t\t\t\t\t\td.querySelector('.llm').addEventListener('click',function(){var h=document.querySelector('.goalbar-hint');if(h)h.click();});\n` +
     `\t\t\t\t\t\td.querySelector('.code').addEventListener('click',function(e){e.stopPropagation();openModal();});\n` +
+    `\t\t\t\t\t\td.querySelector('#mh-cluster-btn').addEventListener('click',function(e){e.stopPropagation();openClusterModal();});\n` +
     `\t\t\t\t\t\tdocument.body.appendChild(d);}\n` +
     `\t\t\t\t\tvar expanded=false;var r=row.getBoundingClientRect();\n` +
     `\t\t\t\t\tif(expanded||r.width<60){d.style.display='none';return;}\n` +
@@ -904,12 +1017,14 @@ try {
     `\t\t\t\t\tvar bottom=Math.round(window.innerHeight-cr.top+7);\n` +
     `\t\t\t\t\tvar w=d.offsetWidth;var left=Math.round(cr.left+cr.width/2-w/2);\n` +
     `\t\t\t\t\tif(d.__b!==bottom||d.__l!==left){d.__b=bottom;d.__l=left;d.style.bottom=bottom+'px';d.style.left=left+'px';}\n` +
+    `\t\t\t\t\tvar cb=document.getElementById('mh-cluster-btn');if(cb){var onC=!!__mhCluster.connected;var tc=onC?'集群已连接':'连接集群';if(cb.textContent!==tc){cb.textContent=tc;cb.classList.toggle('ok',onC);}}\n` +
+    `\t\t\t\t\trenderClusterStatus();\n` +
     `\t\t\t\t}catch(e){}\n` +
     `\t\t\t}\n` +
     `\t\t\tfunction tick(){relabel();ensureBtn();}\n` +
     `\t\t\tif(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){setTimeout(tick,700);setTimeout(showStatusCard,900);});else setTimeout(tick,700);\n` +
     `\t\t\tsetTimeout(showStatusCard,900);\n` +
-    `\t\t\tif(!window.__mhTickTimer){window.__mhTickTimer=setInterval(function(){if(document.hidden)return;ensureBtn();},400);window.__mhRelabelTimer=setInterval(function(){if(document.hidden)return;relabel();},3000);}\n` +
+    `\t\t\tif(!window.__mhTickTimer){window.__mhTickTimer=setInterval(function(){if(document.hidden)return;ensureBtn();},400);window.__mhRelabelTimer=setInterval(function(){if(document.hidden)return;relabel();},3000);window.__mhClusterTimer=setInterval(function(){if(!document.hidden)pollCluster();},6000);setTimeout(pollCluster,1200);}\n` +
     `\t\t\tif(!window.__mhClickTick){window.__mhClickTick=true;document.addEventListener('click',function(){if(document.querySelector('.goalbar-opts'))setTimeout(relabel,300);},true);}\n` +
     `\t\t}catch(e){}})();\n` +
     `\t\t</script>\n\t`;
