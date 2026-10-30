@@ -1597,7 +1597,6 @@ export function SettingsModal({
 		{ slot: "composer.actions", labelKey: "uiLayoutComposer" },
 		{ slot: "rightpanel.tabs", labelKey: "uiLayoutRightPanel" },
 		{ slot: "terminal.toolbar", labelKey: "uiLayoutTerminal" },
-		{ slot: "scm.toolbar", labelKey: "uiLayoutScm" },
 		{ slot: "bottombar", labelKey: "uiLayoutBottombar" },
 		{ slot: "file.preview.toolbar", labelKey: "uiLayoutFilePreview" },
 		{ slot: "contextmenu.topbar", labelKey: "uiLayoutContextTopbar" },

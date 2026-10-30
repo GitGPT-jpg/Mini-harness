@@ -67,8 +67,6 @@ const ALL = [
 	"ephemeral-chat-test",
 	// issue #381 回归：助手气泡上的 fork/rollback 必须解析成功（mock LLM，tsx 起源码）。
 	"fork-assistant-bubble-test",
-	"dsh-smoke-test",
-	"dsh-stats-test",
 	"fetch-models-test",
 	"global-search-test",
 	"goal-prefs-test",
@@ -80,7 +78,6 @@ const ALL = [
 	// 审查者模式（自动委派）：开关快照 + prompt 自动转给常驻执行对话 + 关闭后恢复（零 token）。
 	"delegate-mode-test",
 	"left-panel-delete-test",
-	"legado-web-engine-test",
 	"legado-web-test",
 	"list-files-missing-dir-test",
 	// #262 regression: directory symlinks classify as dir on all platforms + "~/" expansion in the panel path bar (Android/Termux).
@@ -120,7 +117,6 @@ const ALL = [
 	"restart-handoff-test",
 	"restart-service-test",
 	"running-list-test",
-	"scm-features-test",
 	"settings-test",
 	// SFTP 插件（项目级 .pi/sftp.json）：差异计划 / dry-run / 删除保护 / 凭据引用 / 变更迁移。
 	// 用 tests/lib/mock-ssh.mjs 的内嵌 SFTP 服务，首次需 ssh2（离线拷不到就现场装，故不进 CORE）。
@@ -131,7 +127,6 @@ const ALL = [
 	// 历史消息服务端按需加载（窗口化）：首份快照只带尾部窗口 + 往前翻页 + get_state 不回退。
 	"message-window-test",
 	"ssh-plugin-test",
-	"steer-queue-smoke",
 	"subagent-template-test",
 	// 子代理接管（#652 变体）：被接管页面已加载子代理工具但不再活跃时，
 	// 目录里不能再出现「已加载却永不激活」的死路条目（见 PATCH-B1 门控）。

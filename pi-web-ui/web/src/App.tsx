@@ -483,7 +483,6 @@ export function App() {
 	const uiLeftRunning = useMemo(() => uiSlots["leftpanel.running"].filter((e) => !e.hidden), [uiSlots]);
 	const uiLeftHistory = useMemo(() => uiSlots["leftpanel.history"].filter((e) => !e.hidden), [uiSlots]);
 	const uiTerminalToolbar = useMemo(() => uiSlots["terminal.toolbar"].filter((e) => !e.hidden), [uiSlots]);
-	const uiScmToolbar = useMemo(() => uiSlots["scm.toolbar"].filter((e) => !e.hidden), [uiSlots]);
 	const uiGoalbarActions = useMemo(() => uiSlots["goalbar.actions"].filter((e) => !e.hidden), [uiSlots]);
 	// P0 幽灵槽位接线：纯插件新增位，无条目时各渲染层返回 null，DOM 与旧版一致。
 	const uiChatHeader = useMemo(() => uiSlots["chat.header"].filter((e) => !e.hidden), [uiSlots]);
