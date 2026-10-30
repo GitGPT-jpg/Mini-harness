@@ -515,15 +515,6 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 
 	// ---- 底栏（基本都是「展示型」条目 kind="badge"；只有工作目录可点） ----
 	{ id: "host:conn", slot: "bottombar", labelKey: "connected", icon: "dot", kind: "badge", order: 5, group: "status" },
-	{
-		id: "host:engine",
-		slot: "bottombar",
-		labelKey: "engineBadge",
-		icon: "aperture",
-		kind: "action",
-		order: 6,
-		group: "status",
-	},
 	{ id: "host:ctx", slot: "bottombar", labelKey: "context", icon: "gauge", kind: "badge", order: 10, group: "usage" },
 	{
 		id: "host:cost",

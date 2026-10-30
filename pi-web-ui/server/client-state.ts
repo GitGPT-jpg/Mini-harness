@@ -1670,7 +1670,7 @@ export class ClientStateStore {
 	/** 读取某客户端（标签页）上次使用的引擎（未设置返回 undefined）。 */
 	getClientEngine(clientId: string): EngineId | undefined {
 		const eng = this.load()[clientId]?.engine;
-		return eng === "dsh" || eng === "pi" || eng === "claude" || eng === "durable" ? eng : undefined;
+		return eng === "pi" ? eng : undefined;
 	}
 
 	/** 保存某客户端（标签页）当前使用的引擎。 */
@@ -1685,7 +1685,7 @@ export class ClientStateStore {
 	/** 读取全局默认引擎（存在 __settings__ 下，新标签页及服务重启后默认跟随）。 */
 	getDefaultEngine(): EngineId | undefined {
 		const eng = this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY]?.defaultEngine;
-		return eng === "dsh" || eng === "pi" || eng === "claude" || eng === "durable" ? eng : undefined;
+		return eng === "pi" ? eng : undefined;
 	}
 
 	/** 保存全局默认引擎。 */

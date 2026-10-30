@@ -35,7 +35,7 @@
  */
 
 import { useSyncExternalStore } from "react";
-import type { ClientMessage, ConnStatus, UiServiceInfo, AgentEngineCapabilities, EngineStatus } from "./types";
+import type { ClientMessage, ConnStatus, UiServiceInfo, AgentEngineCapabilities } from "./types";
 
 /** 出厂默认能力声明：镜像 server/engine-capabilities.ts 的 DEFAULT_PI_CAPABILITIES。
  *  老服务端不发 capabilities 时前端就用它（全能力）。
@@ -92,7 +92,6 @@ export interface AppGlobals {
 	/** 当前底座能力声明（Capabilities）—— 前端据此自适应隐藏不支持的入口。 */
 	engineCapabilities: AgentEngineCapabilities;
 	/** 引擎安装探测结果列表（包含各引擎是否已在宿主中安装、对应包名与版本）。 */
-	engines?: EngineStatus[];
 }
 
 export const DEFAULT_APP_GLOBALS: AppGlobals = {
@@ -131,12 +130,6 @@ function sameShallow<T extends object>(a: T | undefined, b: T | undefined): bool
 	return true;
 }
 
-function sameEngines(a?: EngineStatus[], b?: EngineStatus[]): boolean {
-	if (a === b) return true;
-	if (!a || !b || a.length !== b.length) return false;
-	return a.every((v, i) => sameShallow(v, b[i]));
-}
-
 function same(a: AppGlobals, b: AppGlobals): boolean {
 	return (
 		a.engine === b.engine &&
@@ -153,7 +146,6 @@ function same(a: AppGlobals, b: AppGlobals): boolean {
 		a.desktopDir === b.desktopDir &&
 		sameArray(a.tabs, b.tabs) &&
 		sameShallow(a.engineCapabilities, b.engineCapabilities) &&
-		sameEngines(a.engines, b.engines) &&
 		// ready 每次重连都会带一份新的 service 对象——比字段，避免白重渲染。
 		sameShallow(a.service, b.service)
 	);
@@ -213,11 +205,6 @@ export function useAppField<K extends keyof AppGlobals>(key: K): AppGlobals[K] {
 /** 当前是否 DSH 引擎（最常用的那个判断：DSH 缺一堆 pi 才有的能力）。 */
 export function useIsDsh(): boolean {
 	return useAppField("engine") === "dsh";
-}
-
-/** 订阅全部引擎的探测安装状态列表。 */
-export function useEngineStatuses(): EngineStatus[] {
-	return useAppField("engines") ?? [];
 }
 
 /** 实例是否受管（PI_WEB_MANAGED=1）。 */

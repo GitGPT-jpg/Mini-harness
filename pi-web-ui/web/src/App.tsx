@@ -1343,7 +1343,6 @@ export function App() {
 				send({ type: "extensions_reload" });
 				send({ type: "plugins_reload" });
 				send({ type: "check_updates_all", force: true });
-				send({ type: "check_engines", force: true });
 			}
 		}
 	}, [chat.terminals, send]);

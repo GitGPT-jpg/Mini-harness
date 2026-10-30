@@ -152,27 +152,7 @@ export interface AgentEngineCapabilities {
 /**
  * 支持的智能体底座引擎标识。
  */
-export type EngineId = "pi" | "dsh" | "claude" | "durable";
-
-/**
- * 引擎状态元数据：描述该引擎在宿主系统中的安装就绪状态。
- */
-export interface EngineStatus {
-	/** 引擎唯一标识（如 "pi" | "dsh" | "claude" | "durable" 或第三方扩展标识） */
-	id: string;
-	/** 是否已在宿主环境中检测到对应的全局包或 CLI 运行时 */
-	installed: boolean;
-	/** 对应的全局 npm 包名（如 "@deepseek-ai/dsh"） */
-	packageName?: string;
-	/** 检测到的本地已安装版本号（若可用） */
-	version?: string;
-	/** npm 远端最新版本号（若可用） */
-	latestVersion?: string | null;
-	/** 是否存在可用新版本 */
-	hasUpdate?: boolean;
-	/** 是否正在后台子进程执行更新 */
-	updating?: boolean;
-}
+export type EngineId = "pi";
 
 export interface UiState {
 	clientId: string;
@@ -736,12 +716,6 @@ export type ClientMessage =
 	 *  this process exits and its supervisor brings it back). The server refuses
 	 *  when no supervisor manages this instance (foreground / dev / Docker). */
 	| { type: "restart_service" }
-	/** Switch active agent engine ("pi" | "dsh" | "claude" | "durable") for this client tab in-process without restarting. */
-	| { type: "switch_engine"; engine: EngineId }
-	/** Re-check engine installation statuses (e.g. after installing an engine via terminal). */
-	| { type: "check_engines"; force?: boolean }
-	/** Update an agent engine to its latest version via background child process (npm i -g <pkg>@latest). */
-	| { type: "update_engine"; engineId: string }
 	// -- pi agent setup ------------------------------------------------------
 	/** Auto-install the pi agent (mkdir config dir + npm i -g the CLI). */
 	| { type: "install_pi_agent" }
@@ -3220,13 +3194,6 @@ export type ServerMessage =
 			 *  foreground/dev/Docker: no supervisor, so the client hides the
 			 *  "restart service" action and the server refuses restart_service. */
 			service?: UiServiceInfo;
-			/** 引擎安装探测结果列表（pi、dsh、claude 等）。 */
-			engines?: EngineStatus[];
-	  }
-	| {
-			/** 引擎安装状态列表（按需/后台探测刷新下发） */
-			type: "engines_status";
-			engines: EngineStatus[];
 	  }
 	| { type: "snapshot"; state: UiState }
 	| {

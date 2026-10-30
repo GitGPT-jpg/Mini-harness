@@ -50,7 +50,6 @@ import { PluginPage } from "./PluginPage";
 import { PluginSettingsForm } from "./PluginSettingsForm";
 import { ToolPromptEditor } from "./ToolPromptEditor";
 import { McpServersPanel } from "./McpServersPanel";
-import { SUPPORTED_ENGINES } from "./EnginePicker";
 import type {
 	CommandDef,
 	DshMarketPlugin,
@@ -112,7 +111,7 @@ import type {
 	PresetShareState,
 } from "../use-chat";
 import { PresetShareModal, type PresetShareTab } from "./PresetShareModal";
-import { appSend, useAppGlobals, useEngineStatuses } from "../app-globals";
+import { appSend, useAppGlobals } from "../app-globals";
 import { countPluginPhases, pluginPhase, type PluginPhase } from "../plugin-phase";
 import {
 	PLUGIN_LOG_LEVELS,
@@ -680,7 +679,6 @@ export function SettingsModal({
 	const approvalPolicy = settings?.approvalPolicy;
 	// 全局运行态（引擎 / 受管）：不再从 App 一路传进来，见 web/src/app-globals.ts。
 	const { engine, managed } = useAppGlobals();
-	const engines = useEngineStatuses();
 	// 引擎特性分支判断：动态适应引擎，隐藏不可用的分区
 	const isDsh = engine === "dsh";
 	const isClaude = engine === "claude";
@@ -1934,124 +1932,7 @@ export function SettingsModal({
 						{/* ---- models & providers (all engines) ------------------------ */}
 						{tab === "models" && (
 							<div className="set-section">
-								<div className="set-section-title">
-									<FiAperture className="set-section-icon" />
-									{t("settingsEngineSection")}
-									<HintTip text={t("settingsEngineHint")} />
-								</div>
-								<div className="set-mode-row" role="radiogroup" aria-label={t("settingsEngineSection")}>
-									{SUPPORTED_ENGINES.map((item) => {
-										const isSelected = item.id === engine;
-										const status = engines.find((e) => e.id === item.id);
-										const isInstalled = item.id === "pi" || (status ? status.installed : false);
-										const isUpdating = Boolean(status?.updating);
-										const hasUpdate = Boolean(isInstalled && status?.hasUpdate && status?.latestVersion);
-										const showUpdate = hasUpdate || isUpdating;
-
-										const handleInstall = (e: React.MouseEvent) => {
-											e.stopPropagation();
-											if (item.installCommand) {
-												runTerminalCommand(t("installEngineTabTitle", { name: item.badge }), item.installCommand);
-											}
-										};
-
-										const handleUpdate = (e: React.MouseEvent) => {
-											e.stopPropagation();
-											if (isUpdating) return;
-											appSend({ type: "update_engine", engineId: item.id });
-										};
-
-										return (
-											<button
-												key={item.id}
-												type="button"
-												role="radio"
-												aria-checked={isSelected}
-												data-testid={`engine-switch-${item.id}`}
-												title={!isInstalled ? t("engineInstallTip") : undefined}
-												className={`set-mode-btn${isSelected ? " active" : ""}${!isInstalled ? " uninstalled" : ""}`}
-												onClick={() => {
-													if (!isInstalled) {
-														if (item.installCommand) {
-															runTerminalCommand(t("installEngineTabTitle", { name: item.badge }), item.installCommand);
-														}
-														return;
-													}
-													if (!isSelected) appSend({ type: "switch_engine", engine: item.id as EngineId });
-												}}
-											>
-												<div
-													className="set-mode-title"
-													style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}
-												>
-													<div style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-														{t(item.titleKey) !== item.badge ? (
-															<>
-																<span>{t(item.titleKey)}</span>
-																<span className={`engine-badge ${item.colorClass}`}>{item.badge}</span>
-															</>
-														) : (
-															<span className={`engine-badge ${item.colorClass}`}>{item.badge}</span>
-														)}
-														{!isInstalled ? (
-															<span className="engine-picker-item-tag uninstalled" style={{ marginLeft: 4 }}>
-																{t("engineNotInstalled")}
-															</span>
-														) : isUpdating ? (
-															<span className="engine-picker-item-tag update-available" style={{ marginLeft: 4 }}>
-																{t("engineUpdating")}
-															</span>
-														) : hasUpdate ? (
-															<span
-																className="engine-picker-item-tag update-available"
-																style={{ marginLeft: 4 }}
-																title={t("engineUpdateTip", {
-																	current: status?.version ?? "",
-																	latest: status?.latestVersion ?? "",
-																})}
-															>
-																{t("engineUpdateAvailable")}
-															</span>
-														) : null}
-													</div>
-													{!isInstalled && item.installCommand && (
-														<button
-															type="button"
-															className="engine-picker-install-btn"
-															title={t("engineInstallTip")}
-															onClick={handleInstall}
-														>
-															<FiDownload className="engine-install-icon" />
-															<span>{t("engineInstall")}</span>
-														</button>
-													)}
-													{showUpdate && (
-														<button
-															type="button"
-															className="engine-picker-update-btn"
-															disabled={isUpdating}
-															title={
-																isUpdating
-																	? t("engineUpdating")
-																	: t("engineUpdateTip", {
-																			current: status?.version ?? "",
-																			latest: status?.latestVersion ?? "",
-																		})
-															}
-															onClick={handleUpdate}
-														>
-															<FiRefreshCw className={`engine-update-icon${isUpdating ? " spinning" : ""}`} />
-															<span>{isUpdating ? t("engineUpdating") : t("engineUpdate")}</span>
-														</button>
-													)}
-												</div>
-												<div className="set-mode-desc">{t(item.descKey)}</div>
-											</button>
-										);
-									})}
-								</div>
-
-								<div className="set-section-title" style={{ marginTop: 20 }}>
+								<div className="set-section-title" style={{ marginTop: 0 }}>
 									<FiCpu className="set-section-icon" />
 									{t("settingsModelsAndProviders")}
 									<HintTip text={t("settingsModelsDesc")} />
@@ -2091,123 +1972,7 @@ export function SettingsModal({
 						{/* ---- system prompt -------------------------------------------- */}
 						{tab === "prompt" && (
 							<div className="set-section">
-								<div className="set-section-title">
-									<FiAperture className="set-section-icon" />
-									{t("settingsEngineSection")}
-									<HintTip text={t("settingsEngineHint")} />
-								</div>
-								<div className="set-mode-row" role="radiogroup" aria-label={t("settingsEngineSection")}>
-									{SUPPORTED_ENGINES.map((item) => {
-										const isSelected = item.id === engine;
-										const status = engines.find((e) => e.id === item.id);
-										const isInstalled = item.id === "pi" || (status ? status.installed : false);
-										const isUpdating = Boolean(status?.updating);
-										const hasUpdate = Boolean(isInstalled && status?.hasUpdate && status?.latestVersion);
-										const showUpdate = hasUpdate || isUpdating;
-
-										const handleInstall = (e: React.MouseEvent) => {
-											e.stopPropagation();
-											if (item.installCommand) {
-												runTerminalCommand(t("installEngineTabTitle", { name: item.badge }), item.installCommand);
-											}
-										};
-
-										const handleUpdate = (e: React.MouseEvent) => {
-											e.stopPropagation();
-											if (isUpdating) return;
-											appSend({ type: "update_engine", engineId: item.id });
-										};
-
-										return (
-											<button
-												key={item.id}
-												type="button"
-												role="radio"
-												aria-checked={isSelected}
-												data-testid={`engine-switch-${item.id}`}
-												title={!isInstalled ? t("engineInstallTip") : undefined}
-												className={`set-mode-btn${isSelected ? " active" : ""}${!isInstalled ? " uninstalled" : ""}`}
-												onClick={() => {
-													if (!isInstalled) {
-														if (item.installCommand) {
-															runTerminalCommand(t("installEngineTabTitle", { name: item.badge }), item.installCommand);
-														}
-														return;
-													}
-													if (!isSelected) appSend({ type: "switch_engine", engine: item.id as EngineId });
-												}}
-											>
-												<div
-													className="set-mode-title"
-													style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}
-												>
-													<div style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-														{t(item.titleKey) !== item.badge ? (
-															<>
-																<span>{t(item.titleKey)}</span>
-																<span className={`engine-badge ${item.colorClass}`}>{item.badge}</span>
-															</>
-														) : (
-															<span className={`engine-badge ${item.colorClass}`}>{item.badge}</span>
-														)}
-														{!isInstalled ? (
-															<span className="engine-picker-item-tag uninstalled" style={{ marginLeft: 4 }}>
-																{t("engineNotInstalled")}
-															</span>
-														) : isUpdating ? (
-															<span className="engine-picker-item-tag update-available" style={{ marginLeft: 4 }}>
-																{t("engineUpdating")}
-															</span>
-														) : hasUpdate ? (
-															<span
-																className="engine-picker-item-tag update-available"
-																style={{ marginLeft: 4 }}
-																title={t("engineUpdateTip", {
-																	current: status?.version ?? "",
-																	latest: status?.latestVersion ?? "",
-																})}
-															>
-																{t("engineUpdateAvailable")}
-															</span>
-														) : null}
-													</div>
-													{!isInstalled && item.installCommand && (
-														<button
-															type="button"
-															className="engine-picker-install-btn"
-															title={t("engineInstallTip")}
-															onClick={handleInstall}
-														>
-															<FiDownload className="engine-install-icon" />
-															<span>{t("engineInstall")}</span>
-														</button>
-													)}
-													{showUpdate && (
-														<button
-															type="button"
-															className="engine-picker-update-btn"
-															disabled={isUpdating}
-															title={
-																isUpdating
-																	? t("engineUpdating")
-																	: t("engineUpdateTip", {
-																			current: status?.version ?? "",
-																			latest: status?.latestVersion ?? "",
-																		})
-															}
-															onClick={handleUpdate}
-														>
-															<FiRefreshCw className={`engine-update-icon${isUpdating ? " spinning" : ""}`} />
-															<span>{isUpdating ? t("engineUpdating") : t("engineUpdate")}</span>
-														</button>
-													)}
-												</div>
-												<div className="set-mode-desc">{t(item.descKey)}</div>
-											</button>
-										);
-									})}
-								</div>
-								<div className="set-section-title" style={{ marginTop: 16 }}>
+								<div className="set-section-title" style={{ marginTop: 0 }}>
 									<FiZap className="set-section-icon" />
 									{t("settingsSystemPrompt")}
 									<HintTip

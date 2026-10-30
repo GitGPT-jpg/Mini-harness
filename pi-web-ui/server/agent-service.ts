@@ -71,7 +71,6 @@ import {
 	sortUpdateItems,
 	type UpdateItem,
 } from "./update-check.js";
-import { collectInstalledEngineTargets } from "./engine-probe.js";
 import { checkPluginUpdates } from "./plugin-updater.js";
 import { getAppVersion } from "./pkg-info.js";
 import { isBundledInUse, sdkCopies } from "./sdk-origin.js";
@@ -281,7 +280,7 @@ import { getWorktreeContext, removeWorktree, normalizeWirePath } from "./worktre
 import type { WorktreeInfo } from "./protocol.js";
 import { sameSessionFile, type SchedulerStore } from "./scheduler-tasks.js";
 import { buildAttachmentMessages, findTurnBaseEntryId, parseModelSpec } from "./attachments.js";
-import { scanAtMentions } from "./universal/universal-attachments.js";
+import { scanAtMentions } from "./universal-attachments.js";
 import { formatQuotedPrompt, formatStreamingPrompt, readTextQuote, splitQuotedPrompt } from "./text-quote.js";
 import { buildVisionBridgePrompt, findVisionModels, transcribeImages } from "./vision-bridge.js";
 import { generateScmCommitMessage } from "./scm-commitmsg.js";
@@ -6350,7 +6349,6 @@ export class ClientSession {
 		try {
 			const targets = collectTargets(this.agentDir, ClientSession.currentAppVersion(), undefined, {
 				projectCwd: this.convs.get(this.activeId)?.cwd ?? this.cwd,
-				extraTargets: collectInstalledEngineTargets(),
 			});
 			const items = await checkAllUpdates(targets, undefined, () => this.getLang(), resolveNpmRegistry(this.agentDir));
 

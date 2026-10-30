@@ -11,9 +11,9 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { basename, isAbsolute, relative, resolve } from "node:path";
-import type { PromptAttachment, UiMessage } from "../protocol.js";
-import { readSkillInstruction, type DiscoveredSkill } from "../skill-discovery.js";
-import { isRemoteWorkspaceUri } from "../remote-ssh-service.js";
+import type { PromptAttachment, UiMessage } from "./protocol.js";
+import { readSkillInstruction, type DiscoveredSkill } from "./skill-discovery.js";
+import { isRemoteWorkspaceUri } from "./remote-ssh-service.js";
 
 export interface ScanResult {
 	detectedAttachments: PromptAttachment[];

@@ -59,7 +59,6 @@ import { LocaleModal } from "./LocaleModal";
 import { focusComposer } from "../composer-bridge";
 import { useFloatingPanel } from "../use-floating-panel";
 import { BarItem } from "./BarItem";
-import { EnginePicker } from "./EnginePicker";
 import { appUrl } from "../base-url";
 
 /** 「安装全局引擎」按钮的目标（issue #321）：buildUpdateCommand 对 pi-core 生成
@@ -314,7 +313,6 @@ export function TopBar({
 	const FALLBACK_TOPBAR_IDS = [
 		"host:history",
 		"host:brand",
-		"host:engine",
 		"host:open-project",
 		"host:chat",
 		"host:terminal",
@@ -1261,7 +1259,7 @@ export function TopBar({
 				<span className="chip-sub">{chat.status}</span>
 			</span>
 		),
-		"host:engine": <EnginePicker direction="down" align="left" caret={false} bar="top" />,
+
 		"host:ctx": (
 			<span className="chip" data-tip={t("contextUsage")}>
 				<span className="chip-sub">
@@ -1320,7 +1318,7 @@ export function TopBar({
 	/** 溢出菜单里**整块搬进来**的宿主条目（菜单型：下拉/外链/自带面板）。
 	 *  其余宿主条目（history / files / new-chat / search / tasks / settings）在菜单里是一条扁平
 	 *  菜单项，由 dispatchHostOverflow 分派到本地处理器 —— 扁平的更像菜单，整块的才需要搬组件。 */
-	const OVERFLOW_AS_NODE_IDS = new Set(["host:language", "host:theme", "host:update", "host:browser", "host:engine"]);
+	const OVERFLOW_AS_NODE_IDS = new Set(["host:language", "host:theme", "host:update", "host:browser"]);
 	/** TABS 白名单门禁（历史口径，不扩大）：search/tasks/settings 的显隐还受白名单管，
 	 *  其余宿主入口只看 slot（各节点工厂内部自行判断，见 hostNodes）。 */
 	const isTabGatedOff = (id: string) => TABS_GATED_IDS.has(id) && !tabOn(id.slice("host:".length));

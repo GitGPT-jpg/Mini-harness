@@ -112,28 +112,6 @@ describe("app-globals", () => {
 		expect(getAppGlobals()).toBe(DEFAULT_APP_GLOBALS);
 	});
 
-	it("引擎状态：updating / hasUpdate / latestVersion 变化必须落地（否则「正在更新」永远看不到）", () => {
-		let hits = 0;
-		const off = subscribeAppGlobals(() => hits++);
-		const base = { id: "pi", installed: true, version: "1.0.0", packageName: "@earendil-works/pi-coding-agent" };
-		setAppGlobals({ engines: [{ ...base }] });
-		expect(hits).toBe(1);
-
-		// 同版本、仅 updating 翻转：曾经被 sameEngines 的 4 字段白名单判为「没变」而丢弃
-		setAppGlobals({ engines: [{ ...base, updating: true }] });
-		expect(getAppGlobals().engines?.[0].updating).toBe(true);
-		expect(hits).toBe(2);
-
-		setAppGlobals({ engines: [{ ...base, latestVersion: "1.1.0", hasUpdate: true }] });
-		expect(getAppGlobals().engines?.[0].hasUpdate).toBe(true);
-		expect(hits).toBe(3);
-
-		// 完全等价的新对象：不白刷
-		setAppGlobals({ engines: [{ ...base, latestVersion: "1.1.0", hasUpdate: true }] });
-		expect(hits).toBe(3);
-		off();
-	});
-
 	it("能力声明：steer / ephemeralChat 也算字段（切换引擎后输入框行为不能沿用旧值）", () => {
 		const caps = { ...DEFAULT_ENGINE_CAPABILITIES };
 		setAppGlobals({ engineCapabilities: caps });

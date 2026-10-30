@@ -171,7 +171,6 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 		]);
 		expect(ids(slots.bottombar)).toEqual([
 			"host:conn",
-			"host:engine",
 			"host:ctx",
 			"host:cost",
 			"host:cache",

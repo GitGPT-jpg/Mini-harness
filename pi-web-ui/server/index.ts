@@ -389,41 +389,14 @@ if (AUTH_TOKEN) {
 /** 共享客户端持久化存储：双引擎（pi + dsh）共用同一份内存缓存与落盘通道，避免互相覆盖。 */
 const sharedStateStore = new ClientStateStore(join(DATA_DIR, "client-state.json"));
 
-/** 启动参数显式指定的引擎（--engine pi|dsh|claude|durable 或 PI_WEB_ENGINE）。未显式传则优先读持久化默认引擎。 */
-const EXPLICIT_ENGINE_ARG = cliFlag("--engine") ?? process.env.PI_WEB_ENGINE;
-let currentDefaultEngine: EngineId =
-	EXPLICIT_ENGINE_ARG === "durable"
-		? "durable"
-		: EXPLICIT_ENGINE_ARG === "claude"
-			? "claude"
-			: EXPLICIT_ENGINE_ARG === "dsh"
-				? "dsh"
-				: EXPLICIT_ENGINE_ARG === "pi"
-					? "pi"
-					: (sharedStateStore.getDefaultEngine() ?? "pi");
+/** 精简发行版只保留 pi 引擎。 */
+let currentDefaultEngine: EngineId = "pi";
 /** 默认引擎标识（兼容 /api/health 等读取）。 */
-/** 每个客户端（浏览器标签页 clientId）当前激活的引擎。支持多标签页同时跑不同引擎 + 零重启热切。 */
+/** 精简发行版只保留 pi 引擎，所有客户端恒走 pi。 */
 const clientEngines = new Map<string, EngineId>();
 
-function resolveClientEngine(clientId: string): EngineId {
-	const mem = clientEngines.get(clientId);
-	if (mem) return mem;
-	if (!EXPLICIT_ENGINE_ARG) {
-		const saved = sharedStateStore.getClientEngine(clientId);
-		if (saved) {
-			clientEngines.set(clientId, saved);
-			return saved;
-		}
-	}
-	clientEngines.set(clientId, currentDefaultEngine);
-	return currentDefaultEngine;
-}
-
-function setClientEngine(clientId: string, engine: EngineId): void {
-	clientEngines.set(clientId, engine);
-	currentDefaultEngine = engine;
-	sharedStateStore.saveClientEngine(clientId, engine);
-	sharedStateStore.saveDefaultEngine(engine);
+function resolveClientEngine(_clientId: string): EngineId {
+	return "pi";
 }
 
 /** PI_WEB_MANAGED=1: this instance is updated by whoever deploys it. */
@@ -1197,21 +1170,7 @@ const heartbeatTimer = setInterval(() => {
 heartbeatTimer.unref?.();
 
 // 引擎分发：PI_WEB_ENGINE=dsh 时使用 DeepSeek Harness 引擎（server/dsh/），
-// PI_WEB_ENGINE=claude 时使用通用底座下的 Claude Code 驱动（server/universal/），
-// PI_WEB_ENGINE=durable 时使用 Pi Durable 引擎（server/durable/），
-// 默认 pi 引擎。同一 wire 协议，前端无感知（ready/health 携带 engine 字段）。
-import { DshAgentService } from "./dsh/dsh-agent-service.js";
-import { UniversalAgentService, ClaudeCodeDriver, probeClaudeCode } from "./universal/index.js";
-import { DurableAgentService } from "./durable/index.js";
-import {
-	probeAllEngines,
-	probeEngine,
-	getCachedEngineStatuses,
-	updateEngineBackground,
-	isEngineUpdating,
-	ENGINE_PACKAGES,
-} from "./engine-probe.js";
-import type { EngineId, EngineStatus } from "./protocol.js";
+import type { EngineId } from "./protocol.js";
 
 /** dispatch 表所需的方法契约（pi 的 ClientSession 与 dsh 的 DshClientSession
  *  都结构兼容；dsh 引擎对不支持的功能做简化实现）。 */
@@ -1616,9 +1575,6 @@ export interface EngineService {
 }
 
 let piServiceInstance: AgentService | null = null;
-let dshServiceInstance: DshAgentService | null = null;
-let claudeServiceInstance: UniversalAgentService | null = null;
-let durableServiceInstance: DurableAgentService | null = null;
 let wireEngineHooks: ((svc: EngineService) => void) | null = null;
 let sharedSocketCount = 0;
 let sharedQuiesced = false;
@@ -1626,51 +1582,10 @@ let sharedQuiesced = false;
 function activeEngines(): EngineService[] {
 	const list: EngineService[] = [];
 	if (piServiceInstance) list.push(piServiceInstance);
-	if (dshServiceInstance) list.push(dshServiceInstance);
-	if (claudeServiceInstance) list.push(claudeServiceInstance);
-	if (durableServiceInstance) list.push(durableServiceInstance);
 	return list;
 }
 
-function ensureEngine(engine: EngineId): EngineService {
-	if (engine === "durable") {
-		if (!durableServiceInstance) {
-			durableServiceInstance = new DurableAgentService({
-				cwd: CWD,
-				dataDir: DATA_DIR,
-				agentDir: getAgentDir(),
-				stateStore: sharedStateStore,
-			});
-			for (let i = 0; i < sharedSocketCount; i++) durableServiceInstance.noteSocketOpen();
-			if (sharedQuiesced) durableServiceInstance.quiesce();
-			wireEngineHooks?.(durableServiceInstance);
-		}
-		return durableServiceInstance;
-	}
-	if (engine === "claude") {
-		if (!claudeServiceInstance) {
-			claudeServiceInstance = new UniversalAgentService({
-				cwd: CWD,
-				dataDir: DATA_DIR,
-				agentDir: getAgentDir(),
-				stateStore: sharedStateStore,
-				driverFactory: (cwd) => new ClaudeCodeDriver(cwd, { agentDir: getAgentDir() }),
-			});
-			for (let i = 0; i < sharedSocketCount; i++) claudeServiceInstance.noteSocketOpen();
-			if (sharedQuiesced) claudeServiceInstance.quiesce();
-			wireEngineHooks?.(claudeServiceInstance);
-		}
-		return claudeServiceInstance;
-	}
-	if (engine === "dsh") {
-		if (!dshServiceInstance) {
-			dshServiceInstance = new DshAgentService(CWD, sharedStateStore, DATA_DIR, getAgentDir());
-			for (let i = 0; i < sharedSocketCount; i++) dshServiceInstance.noteSocketOpen();
-			if (sharedQuiesced) dshServiceInstance.quiesce();
-			wireEngineHooks?.(dshServiceInstance);
-		}
-		return dshServiceInstance;
-	}
+function ensureEngine(_engine: EngineId): EngineService {
 	if (!piServiceInstance) {
 		piServiceInstance = new AgentService(CWD, sharedStateStore);
 		for (let i = 0; i < sharedSocketCount; i++) piServiceInstance.noteSocketOpen();
@@ -2557,254 +2472,9 @@ wss.on("connection", (ws) => {
 			.catch(() => {});
 	};
 
-	const handleSwitchEngine = async (msg: Extract<ClientMessage, { type: "switch_engine" }>): Promise<void> => {
-		const targetEngine: EngineId | null =
-			msg.engine === "durable"
-				? "durable"
-				: msg.engine === "claude"
-					? "claude"
-					: msg.engine === "dsh"
-						? "dsh"
-						: msg.engine === "pi"
-							? "pi"
-							: null;
-		if (!targetEngine) {
-			send({
-				type: "notice",
-				level: "error",
-				text: `无效的引擎类型：${String(msg.engine)}（仅支持 pi / dsh / claude / durable）`,
-				textEn: `Invalid engine "${String(msg.engine)}" (supported: pi, dsh, claude, durable)`,
-			});
-			return;
-		}
-		if (!clientId) return;
-
-		// 闸门：非 pi 引擎需确认宿主环境中已安装对应的全局包/运行时，未安装时拒绝切换
-		if (targetEngine !== "pi") {
-			const probe = await probeEngine(targetEngine);
-			if (!probe.installed) {
-				send({
-					type: "notice",
-					level: "warning",
-					text: `引擎 ${targetEngine.toUpperCase()} 尚未安装全局包（${probe.packageName ?? targetEngine}），请先安装后再切换`,
-					textEn: `Engine ${targetEngine.toUpperCase()} global package (${probe.packageName ?? targetEngine}) is not installed; please install it before switching`,
-				});
-				return;
-			}
-		}
-
-		const prevEngine = resolveClientEngine(clientId);
-		if (prevEngine === targetEngine) {
-			setClientEngine(clientId, targetEngine);
-			return;
-		}
-
-		// 从旧引擎解绑当前 socket 的推送
-		try {
-			ensureEngine(prevEngine).detach(clientId, send);
-		} catch {
-			/* best effort */
-		}
-		setClientEngine(clientId, targetEngine);
-		attachDone = false;
-		if (!closed) {
-			send(readyMsg(clientId));
-		}
-		const cid = clientId;
-		const nextSvc = ensureEngine(targetEngine);
-		const switchGen = ++attachGen;
-		nextSvc
-			.attach(cid, send)
-			.then((newCs) => {
-				if (closed) {
-					nextSvc.detach(cid, send);
-					return;
-				}
-				if (switchGen !== attachGen) {
-					// 期间又有新的 switch/hello attach：本会话已是孤儿，只清理不接管（#699）
-					nextSvc.detach(cid, send);
-					return;
-				}
-				nextSvc.applyPluginCommandCatalog();
-				newCs.flushSnapshot(true);
-				newCs.pushSettings();
-				void newCs.refreshSessions();
-				void newCs.pushProjects();
-				void newCs.listModels();
-				// 切换引擎后重新广播插件状态与面板项，确保跨引擎切换时自定义布局与插件图标完全一致
-				pluginMgr
-					.ensureLoaded(() => newCs.getLang())
-					.then((plugins) => {
-						if (closed) return;
-						send({ type: "plugins", plugins, epoch: pluginMgr.epoch });
-						send({ type: "plugin_panel_items", groups: pluginMgr.panelGroups() });
-					})
-					.catch(() => {});
-				attachDone = true;
-				for (const m of pending.drain()) dispatch(m);
-				if (targetEngine === "claude") {
-					void probeClaudeCode().then((probe) => {
-						if (!probe.installed) {
-							newCs.emitNotice(
-								"warning",
-								"已热切换至 Claude Code 引擎。检测到未安装 Claude Code CLI，请在终端执行 npm i -g @anthropic-ai/claude-code 安装并运行 claude 完成登录。",
-								"Switched to Claude Code engine. Claude Code CLI not found; run: npm i -g @anthropic-ai/claude-code and log in with claude.",
-							);
-						} else {
-							newCs.emitNotice(
-								"info",
-								"已热切换至 Claude Code 引擎（已连接本地 CLI 登录态，无需在页面配置 API Key）",
-								"Switched to Claude Code engine (connected to local CLI login session, no API Key needed)",
-							);
-						}
-					});
-				} else if (targetEngine === "dsh") {
-					newCs.emitNotice(
-						"info",
-						"已热切换至 DSH 引擎（其他引擎后台会话保持运行，可随时切回）",
-						"Switched to DSH engine in-place (other background conversations keep running)",
-					);
-				} else {
-					newCs.emitNotice(
-						"info",
-						"已热切换至 pi 引擎（其他引擎后台会话保持运行，可随时切回）",
-						"Switched to pi engine in-place (other background conversations keep running)",
-					);
-				}
-			})
-			.catch((err: unknown) => {
-				// 切换失败时事务回滚：原样切回 prevEngine，避免状态悬挂
-				setClientEngine(cid, prevEngine);
-				const rollbackGen = ++attachGen;
-				ensureEngine(prevEngine)
-					.attach(cid, send)
-					.then((rollbackCs) => {
-						if (closed || rollbackGen !== attachGen) {
-							ensureEngine(prevEngine).detach(cid, send);
-							return;
-						}
-						rollbackCs.flushSnapshot(true);
-						attachDone = true;
-						for (const m of pending.drain()) dispatch(m);
-					})
-					.catch(() => {
-						attachDone = true;
-					});
-				send({
-					type: "notice",
-					level: "error",
-					text: `切换引擎失败，已恢复至 ${prevEngine} 引擎：${(err as Error).message}`,
-					textEn: `Failed to switch engine, rolled back to ${prevEngine}: ${(err as Error).message}`,
-				});
-			});
-	};
-
-	const handleUpdateEngine = async (msg: Extract<ClientMessage, { type: "update_engine" }>): Promise<void> => {
-		const targetEngine = String(msg.engineId || "").trim();
-		const meta = ENGINE_PACKAGES[targetEngine];
-		if (!meta || !meta.packageName) {
-			send({
-				type: "notice",
-				level: "error",
-				text: `不支持或未知的引擎「${targetEngine}」`,
-				textEn: `Unsupported or unknown engine "${targetEngine}"`,
-			});
-			return;
-		}
-
-		const refusal = managedRefusal("update_engine", MANAGED);
-		if (refusal) {
-			send({ type: "notice", level: "error", text: refusal });
-			return;
-		}
-
-		if (isEngineUpdating(targetEngine)) {
-			send({
-				type: "notice",
-				level: "warning",
-				text: `引擎「${targetEngine.toUpperCase()}」正在后台更新中，请稍候…`,
-				textEn: `Engine "${targetEngine.toUpperCase()}" is already updating, please wait…`,
-			});
-			return;
-		}
-
-		const engineDisplayNames: Record<string, { zh: string; en: string }> = {
-			pi: { zh: "Pi", en: "Pi" },
-			dsh: { zh: "DSH", en: "DSH" },
-			claude: { zh: "Claude Code", en: "Claude Code" },
-			durable: { zh: "Pi Durable", en: "Pi Durable" },
-		};
-		const displayName = engineDisplayNames[targetEngine] ?? {
-			zh: targetEngine.toUpperCase(),
-			en: targetEngine.toUpperCase(),
-		};
-
-		const broadcastStatuses = (list: EngineStatus[]) => {
-			const payload = JSON.stringify({ type: "engines_status", engines: list });
-			for (const c of wss.clients) {
-				if (c.readyState === WebSocket.OPEN) {
-					try {
-						c.send(payload);
-					} catch {
-						/* ignore */
-					}
-				}
-			}
-		};
-
-		send({
-			type: "notice",
-			level: "info",
-			text: `正在后台更新 ${displayName.zh} 引擎（npm i -g ${meta.packageName}@latest）…`,
-			textEn: `Updating ${displayName.en} engine in background (npm i -g ${meta.packageName}@latest)…`,
-		});
-
-		const updatePromise = updateEngineBackground(targetEngine);
-		broadcastStatuses(getCachedEngineStatuses());
-
-		const res = await updatePromise;
-		const freshEngines = await probeAllEngines(true);
-		broadcastStatuses(freshEngines);
-
-		if (res.ok) {
-			send({
-				type: "notice",
-				level: "info",
-				text: `✅ ${displayName.zh} 引擎更新完成`,
-				textEn: `✅ ${displayName.en} engine updated successfully`,
-			});
-		} else {
-			const detail = res.error || (res.output ? res.output.slice(-200) : "");
-			send({
-				type: "notice",
-				level: "error",
-				text: `❌ ${displayName.zh} 引擎更新失败${detail ? `：${detail}` : ""}`,
-				textEn: `❌ Failed to update ${displayName.en} engine${detail ? `: ${detail}` : ""}`,
-			});
-		}
-	};
-
 	const dispatch = (msg: ClientMessage): void => {
 		if (!clientId) {
 			pending.push(msg);
-			return;
-		}
-
-		// switch_engine 为宿主级控制消息：豁免 cs 初始化与 attachDone 门禁，确保任何异常状态下都能自由切回！
-		if (msg.type === "switch_engine") {
-			void handleSwitchEngine(msg);
-			return;
-		}
-
-		if (msg.type === "update_engine") {
-			void handleUpdateEngine(msg);
-			return;
-		}
-
-		if (msg.type === "check_engines") {
-			void probeAllEngines(msg.force).then((engines) => {
-				if (!closed) send({ type: "engines_status", engines });
-			});
 			return;
 		}
 
@@ -2956,9 +2626,6 @@ wss.on("connection", (ws) => {
 					break;
 				case "check_updates_all":
 					void cs.checkUpdatesAll(msg.force === true);
-					void probeAllEngines(true).then((engines) => {
-						if (!closed) send({ type: "engines_status", engines });
-					});
 					break;
 				case "check_plugin_updates":
 					if (typeof cs.checkPluginUpdates === "function") {
@@ -3038,7 +2705,6 @@ wss.on("connection", (ws) => {
 		managed: MANAGED,
 		tabs: TABS ? [...TABS] : undefined,
 		service: SERVICE_INFO ?? undefined,
-		engines: getCachedEngineStatuses(),
 	});
 
 	ws.on("message", (data) => {
@@ -3074,9 +2740,6 @@ wss.on("connection", (ws) => {
 			// ready 在握手里先发，前端立刻离开「正在连接」（快照随后到）。
 			if (!closed) {
 				send(readyMsg(cid));
-				void probeAllEngines().then((engines) => {
-					if (!closed) send({ type: "engines_status", engines });
-				});
 			}
 			// attach 慢提示：本体继续等，不取消；完成后照常走快照流程。
 			const slowTimer = setTimeout(() => {
@@ -3099,7 +2762,7 @@ wss.on("connection", (ws) => {
 						return;
 					}
 					if (helloGen !== attachGen) {
-						// hello 慢 attach 落定前用户已 switch_engine：旧引擎会话成孤儿，只清理（#699）
+						// hello 慢 attach 落定前用户已切换：旧引擎会话成孤儿，只清理（#699）
 						helloSvc.detach(cid, send);
 						return;
 					}

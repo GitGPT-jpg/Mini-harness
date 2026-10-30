@@ -329,13 +329,7 @@ export function resolveModelProtocol(api?: string, providerId?: string, modelId?
 }
 
 /**
- * 严格按照实际的通信协议类型（Protocol Type）判断目标引擎是否支持。
- * 核心原则：按协议本身做过滤，严禁无依据随意过滤。
- *
- * 1. Pi 原生引擎：支持全部协议全集；
- * 2. DSH 引擎：仅支持 OpenAI 兼容协议（openai-completions / openai-responses），严格拒绝 Anthropic Messages 协议等；
- * 3. Claude Code 引擎：仅支持 Anthropic Messages 协议（无论模型名称叫什么，只要走 Anthropic 协议即可）；
- * 4. Durable 引擎：由 @earendil-works/pi-ai 驱动，支持主流开放标准协议（OpenAI, Anthropic, Google 等）。
+ * 精简发行版只保留 pi 引擎，支持全部协议全集。
  */
 export function isProtocolSupportedByEngine(
 	engine: string,
@@ -343,35 +337,6 @@ export function isProtocolSupportedByEngine(
 	providerId?: string,
 	modelId?: string,
 ): boolean {
-	const normEngine = engine.toLowerCase().trim();
-	const protocol = resolveModelProtocol(api, providerId, modelId);
-
-	// 1. Pi 原生引擎支持全协议全集
-	if (normEngine === "pi") {
-		return true;
-	}
-
-	// 2. DSH 引擎：仅支持 OpenAI 兼容协议（openai-completions / openai-responses）
-	//    严格不支持 Anthropic Messages 协议、Google Generative AI 协议等！
-	if (normEngine === "dsh") {
-		return protocol === "openai-completions" || protocol === "openai-responses";
-	}
-
-	// 3. Claude Code 引擎：仅支持 Anthropic Messages 协议
-	if (normEngine === "claude") {
-		return protocol === "anthropic-messages";
-	}
-
-	// 4. Durable 引擎：基于 @earendil-works/pi-ai，支持主流标准协议
-	if (normEngine === "durable") {
-		return (
-			protocol === "openai-completions" ||
-			protocol === "openai-responses" ||
-			protocol === "anthropic-messages" ||
-			protocol === "google-generative-ai"
-		);
-	}
-
 	return true;
 }
 
