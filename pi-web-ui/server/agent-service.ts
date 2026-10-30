@@ -198,6 +198,7 @@ import { readDelegateModeFromSession } from "./permission-preset.js";
 import { makePersistentTerminalTools, makeTerminalBashTool, stripAnsi, TERMINAL_TOOLS_GUIDANCE } from "./terminals.js";
 import {
 	applyAgentToolsGating,
+	CODEMODE_TOOL_NAME,
 	ASK_USER_QUESTION_TOOL_NAME,
 	effectiveDisabledAgentTools,
 	filterToolsByPreset,
@@ -2959,16 +2960,28 @@ export class ClientSession {
 					// 否则按主会话禁用集过滤。预设拿掉 skill 加载器时（minimal/code/ask）
 					// 名录同步隐藏——列出来但调不动只是噪音（见 tool-manager.ts 语义总表）。
 					skillsOverride: (res) => {
+						// 推理发行版硬禁的高风险技能（联网抓取 / 转写 / 第三方 CLI）：无论用户设置如何，
+						// 始终从技能名录剔除（纵深防御；setup.sh 另把它们移出 ~/.pi/agent 技能发现目录）。
+						const HARD_DENY = new Set([
+							"browser-tools",
+							"transcribe",
+							"brave-search",
+							"gccli",
+							"gdcli",
+							"gmcli",
+							"youtube-transcript",
+						]);
+						const denyFilter = (skills: typeof res.skills) => skills.filter((s) => !HARD_DENY.has(s.name));
 						if (apply && apply.enabledSkills.length > 0) {
 							const set = new Set(apply.enabledSkills);
-							return { ...res, skills: res.skills.filter((s) => set.has(s.name)) };
+							return { ...res, skills: denyFilter(res.skills.filter((s) => set.has(s.name))) };
 						}
 						const preset =
 							this.convs.get(ownerId ?? "")?.agentPreset ?? this.settingsSvc.current.defaultAgentPreset ?? "standard";
 						if (!presetShowsSkillCatalog(preset)) return { ...res, skills: [] };
 						return {
 							...res,
-							skills: res.skills.filter((s) => !this.settingsSvc.current.disabledSkills.includes(s.name)),
+							skills: denyFilter(res.skills.filter((s) => !this.settingsSvc.current.disabledSkills.includes(s.name))),
 						};
 					},
 					// 插件：模板非空扩展白名单时只加载白名单里的；否则按主会话禁用集过滤。
@@ -3008,12 +3021,18 @@ export class ClientSession {
 					// 覆盖，则用 composer 把 {{token}} 展开为各来源文本（工具列表/项目上下文/技能
 					// 等都取自本次 run 的 systemPromptOptions，永远最新）。
 					extensionFactories: [
-						{
-							name: "codemode",
-							hidden: true,
-							replaceable: true,
-							factory: createCodemodeExtension(),
-						},
+						// codemode 默认关（AGENT_TOOL_CATALOG defaultOn=false）：只有用户显式开启
+						// codemode 工具时才注册其扩展，否则连工具都不注入（推理发行版默认不走 codemode）。
+						...(isAgentToolEnabled(CODEMODE_TOOL_NAME, effectiveDisabledAgentTools(this.settingsSvc.current))
+							? [
+									{
+										name: "codemode",
+										hidden: true,
+										replaceable: true,
+										factory: createCodemodeExtension(),
+									},
+								]
+							: []),
 						{
 							name: "tool-search",
 							hidden: true,

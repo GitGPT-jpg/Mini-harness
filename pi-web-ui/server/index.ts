@@ -24,7 +24,7 @@ import { readFile, stat } from "node:fs/promises";
 import { createServer, request as proxyRequest, type IncomingMessage } from "node:http";
 import { createConnection } from "node:net";
 import { basename, delimiter, join, resolve, sep } from "node:path";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import express from "express";
 import compression from "compression";
@@ -457,6 +457,16 @@ app.get("/api/attachment/:hash", async (req, res) => {
 });
 
 /**
+ * Harness 发行版收紧「整机浏览」：绝对 wire 路径只放行工作区根、loop 运行产物目录
+ * （~/.mini-harness，产物按约定落在源码仓库之外）与系统临时目录，其余一律 403。
+ * 上游允许经 /api/file、/api/office-media、/api/preview/__abs__ 读任意文件。
+ */
+const ABS_READ_ROOTS = [join(homedir(), ".mini-harness"), resolve(tmpdir())];
+function absReadAllowed(abs: string, workspaceRoot: string): boolean {
+	return [resolve(workspaceRoot), ...ABS_READ_ROOTS].some((r) => abs === r || abs.startsWith(r + sep));
+}
+
+/**
  * Stream a workspace file over HTTP.
  *
  * Media preview (no download param): only image/video kinds are served —
@@ -483,6 +493,10 @@ app.get("/api/file", async (req, res) => {
 		let abs: string;
 		if (absWire) {
 			abs = wireToAbs(raw);
+			if (!absReadAllowed(abs, root)) {
+				res.status(403).end("absolute path not allowed");
+				return;
+			}
 		} else {
 			const wp = workspacePath(root, raw);
 			if (!wp) {
@@ -514,9 +528,7 @@ app.get("/api/file", async (req, res) => {
 			// filename* encoding for non-ASCII names.
 			// dotfiles: allow — issue #223：Express 5 的 send 默认 dotfiles=ignore，
 			// 工作区/数据目录常位于隐藏目录下（如 ~/.pi-web），绝对路径含点号段会被判 404。
-			// 路径已由上方的 workspacePath/isAbsoluteWirePath 做工作区 containment 校验，放行安全。
-			// 注：绝对 wire 路径分支是机器浏览设计（whole-machine browsing），
-			// 不受工作区约束——别被注释误导（审查 #352）。
+			// 路径已由上方的 workspacePath / absReadAllowed 做 containment 校验，放行安全。
 			res.download(abs, name, { dotfiles: "allow" });
 		} else {
 			if (isHtmlPreview) {
@@ -568,6 +580,10 @@ app.get("/api/office-media", async (req, res) => {
 		let abs: string;
 		if (absWire) {
 			abs = wireToAbs(rawPath);
+			if (!absReadAllowed(abs, root)) {
+				res.status(403).end("absolute path not allowed");
+				return;
+			}
 		} else {
 			const wp = workspacePath(root, rawPath);
 			if (!wp) {
@@ -646,6 +662,10 @@ app.get("/api/preview/*splat", async (req, res) => {
 				return;
 			}
 			abs = wireToAbs(wire);
+			if (!absReadAllowed(abs, root)) {
+				res.status(403).end("absolute path not allowed");
+				return;
+			}
 		} else {
 			const wp = workspacePath(root, captured);
 			if (!wp) {

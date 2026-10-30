@@ -118,6 +118,8 @@ describe("legacy sync", () => {
 		for (const n of TERMINAL_TOOL_NAMES) expect(d).toContain(n);
 		expect(d).toContain("edit_soft");
 		expect(d).not.toContain(ASK_USER_QUESTION_TOOL_NAME);
+		// 全新安装：目录里默认关的工具（eval / browser_page / codemode …）保持关闭。
+		for (const n of defaultDisabledAgentTools()) expect(d).toContain(n);
 		// 新字段优先，遗留值忽略。
 		expect(legacyToDisabled({ disabledAgentTools: [], terminalToolsEnabled: false })).toEqual([]);
 	});

@@ -742,7 +742,9 @@ export interface LegacyToolSwitches {
  */
 export function legacyToDisabled(s: LegacyToolSwitches): string[] {
 	if (Array.isArray(s.disabledAgentTools)) return normalizeDisabledAgentTools(s.disabledAgentTools);
-	const off: string[] = [];
+	// 从目录默认关名单起步：否则全新安装（无存档）会把 eval / browser_page / codemode /
+	// tool_search 等 defaultOn=false 的工具一并打开。
+	const off: string[] = defaultDisabledAgentTools();
 	if (s.terminalToolsEnabled !== true) off.push(...TERMINAL_TOOL_NAMES);
 	if (s.editSoftEnabled !== true) off.push(EDIT_SOFT_TOOL_NAME);
 	if (s.questionnaireEnabled === false) off.push(ASK_USER_QUESTION_TOOL_NAME);
