@@ -219,12 +219,12 @@ describe("TopBar 是单一扁直流（无按种类包裹的容器、无贴边例
 		const rule = css.match(/\.topbar\.no-labels[\s\S]{0,600}?\.brand-name/);
 		expect(rule?.[0]).toContain(":not(.chip-emoji)");
 
-		// 回归：临时对话按钮采用虚线对话气泡图标（LuMessageSquareDashed），在 no-labels 模式下原生保留 SVG 图标
+		// Harness 发行版：临时对话入口由 capabilities.ephemeralChat=false 默认关闭（取代 harden 的 CSS 隐藏），
+		// 顶栏不再渲染该按钮。
 		const { container } = mount("chat", undefined, undefined, undefined, {
 			settings: { uiLayout: { topbarText: false } },
 		});
-		const ephemSvg = container.querySelector(".topbar-flow .ephemeral-chat-btn svg");
-		expect(ephemSvg).toBeTruthy();
+		expect(container.querySelector(".topbar-flow .ephemeral-chat-btn")).toBeNull();
 	});
 
 	it("顶栏所有可点控件都带 data-tip（悬浮即时说明），唯品牌徽标例外", () => {
