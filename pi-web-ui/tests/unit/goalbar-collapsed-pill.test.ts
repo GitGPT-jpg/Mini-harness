@@ -152,12 +152,17 @@ describe("目标条折叠态", () => {
 	});
 
 	it("CSS：兜底把 .goalbar 面板皮从折叠态抹掉（老 bundle/插件带回面板类也不画带子）", () => {
-		// 主题对 .goalbar 的底色/上边框写的是 !important，只能同权重压。
+		// 这条规则在文件末尾的「无层结构性覆盖」区：无层规则天然胜过 theme 层，不需要
+		// !important（css-layers 契约把整份 styles.css 的 !important 限在 ≤ 1 条）。
 		const body = bodyOf(".goalbar.goalbar-collapsed");
 		expect(body).not.toBe("");
-		expect(/border:\s*0\s*!important/.test(body)).toBe(true);
-		expect(/background:\s*none\s*!important/.test(body)).toBe(true);
-		expect(/box-shadow:\s*none\s*!important/.test(body)).toBe(true);
-		expect(/padding:\s*0\s*!important/.test(body)).toBe(true);
+		expect(/border:\s*0\s*;/.test(body)).toBe(true);
+		expect(/background:\s*none\s*;/.test(body)).toBe(true);
+		expect(/box-shadow:\s*none\s*;/.test(body)).toBe(true);
+		expect(/padding:\s*0\s*;/.test(body)).toBe(true);
+		// 必须是无层规则：出现在最后一个 @layer 块闭合之后
+		const lastLayer = CSS.lastIndexOf("@layer ");
+		const ruleAt = CSS.lastIndexOf(".goalbar.goalbar-collapsed {");
+		expect(ruleAt).toBeGreaterThan(CSS.indexOf("\n}\n", lastLayer));
 	});
 });

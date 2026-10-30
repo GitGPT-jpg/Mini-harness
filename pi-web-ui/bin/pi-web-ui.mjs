@@ -28,7 +28,6 @@ import { spawn, spawnSync } from "node:child_process";
 import { createConnection } from "node:net";
 import { get as httpGet } from "node:http";
 import { createInterface } from "node:readline/promises";
-import { frpCmd } from "./frp-manager.mjs";
 import {
 	ensureBackup as ensurePluginBackup,
 	restoreBackup as restorePluginBackup,
@@ -137,17 +136,6 @@ server 选项:
                 --catalog <url> 目录同步模式：读目录文档 → 写可安装列表 → 逐条安装
                 --replace 配合 --catalog：整体替换列表（默认按 id 合并）
 
-FRP 内网穿透（将本地 pi-web-ui 服务端口通过 FRP 穿透转发到远程公网服务器）:
-  pi-web-ui frp                           进入交互式向导自动配置并部署 FRP
-  pi-web-ui frp deploy [选项]              自动部署远程 frps 与本地 frpc
-  pi-web-ui frp start|stop|restart|status 启动 / 停止 / 重启 / 查看本地客户端状态
-  pi-web-ui frp run                       前台运行本地 frpc 并输出实时日志
-  pi-web-ui frp install|uninstall         安装或卸载本地开机自启系统服务
-  pi-web-ui frp script [选项]              输出远程服务器一键部署 bash 脚本
-  选项: --server <host> 远程服务器 IP · --remote-port <n> 外网访问端口
-        --local-port <n> 本地端口 · --server-port <n> FRP 端口
-        --token <str> 鉴权密钥 · --ssh-user/--ssh-port/--ssh-key/--ssh-pass
-
 环境变量（flag 优先，环境变量后备）:
   PI_WEB_PORT / PI_WEB_CWD / PI_WEB_DATA_DIR / PI_WEB_ENGINE / PI_WEB_HOST /
   PI_CODING_AGENT_DIR。
@@ -204,17 +192,6 @@ UI plugins (installed into <data-dir>/plugins/; refresh browser to activate whil
                    --catalog <url> Catalog mode: read a catalog document, write the
                                  installable list, then install every entry
                    --replace     With --catalog: replace the whole list (default merges by id)
-
-FRP Reverse Proxy (forward local pi-web-ui port to public server via FRP):
-  pi-web-ui frp                           Interactive wizard to setup and deploy FRP
-  pi-web-ui frp deploy [options]          Auto-deploy remote frps and local frpc
-  pi-web-ui frp start|stop|restart|status Manage local client service and view status
-  pi-web-ui frp run                       Run frpc in foreground with live logs
-  pi-web-ui frp install|uninstall         Install or uninstall local autostart service
-  pi-web-ui frp script [options]          Generate standalone bash script for remote server
-  options: --server <host> Remote IP · --remote-port <n> Public access port
-           --local-port <n> Local port · --server-port <n> FRP bind port
-           --token <str> Auth token · --ssh-user/--ssh-port/--ssh-key/--ssh-pass
 
 Environment variables (flag takes precedence, env var as fallback):
   PI_WEB_PORT / PI_WEB_CWD / PI_WEB_DATA_DIR / PI_WEB_ENGINE / PI_WEB_HOST /
@@ -3623,10 +3600,6 @@ async function main() {
 	}
 	if (first === "server") {
 		await serverCmd(argv.slice(1));
-		return;
-	}
-	if (first === "frp") {
-		await frpCmd(argv.slice(1));
 		return;
 	}
 	if (first === "install") {

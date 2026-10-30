@@ -234,19 +234,6 @@ pi-web-ui server stop                                      # Stop background ser
 pi-web-ui server uninstall                                 # Remove system service
 ```
 
-### FRP Reverse Proxy Tunnel (`pi-web-ui frp` / `piwebui frp`)
-
-Automatically deploy and configure FRP (Fast Reverse Proxy) to forward your local pi-web-ui port to a remote server with a public IP:
-
-```bash
-pi-web-ui frp                                              # Interactive setup wizard
-pi-web-ui frp deploy --server <ip> --remote-port 8787      # Auto-deploy remote frps and local frpc
-pi-web-ui frp status                                       # Check client status and public URL
-pi-web-ui frp start|stop|restart                           # Manage local frpc service
-pi-web-ui frp run                                          # Run frpc in foreground with live logs
-pi-web-ui frp script --server <ip>                         # Generate standalone remote deploy bash script
-```
-
 ### Updating & Uninstalling
 
 ```bash
