@@ -125,10 +125,8 @@ import {
 	formatCwdForPrompt,
 	getGlobalRemoteSshService,
 	isRemoteWorkspaceUri,
-	RemoteSshService,
 	resolveWorkspaceSessionDir,
 	restoreWorkspaceUriFromSessionDir,
-	setGlobalRemoteSshService,
 } from "./remote-ssh-service.js";
 import {
 	DEFAULT_TOOL_WATCHDOG_TIMEOUT_MS,
@@ -2722,9 +2720,6 @@ export class ClientSession {
 		const agentDir = process.env.PI_CODING_AGENT_DIR ?? getAgentDir();
 
 		const cs = new ClientSession(clientId, cwd, agentDir, stateStore);
-		if (!getGlobalRemoteSshService()) {
-			setGlobalRemoteSshService(new RemoteSshService(stateStore.dataDir));
-		}
 		const sessionBaseDir = resolveWorkspaceSessionDir(stateStore.dataDir, cwd);
 		const conversationId = cs.nextConversationId();
 		const terminals = cs.makeTerminalManager(conversationId, cwd);

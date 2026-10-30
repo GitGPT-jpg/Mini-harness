@@ -1407,86 +1407,7 @@ export type ClientMessage =
 			type: "get_compacted_messages";
 			compactionMessageId: string;
 			conversationId?: string;
-	  }
-	// -- remote SSH & probe (远程项目环境探针与目录浏览) -------------------
-	/** 远程 SSH 连接与环境探针（探测操作系统、架构、git/node/bash 依赖） */
-	| {
-			type: "remote_ssh_probe";
-			reqId?: string;
-			params: RemoteSshProbeParams;
-	  }
-	/** 浏览远程目录（通过已有连接或指定路径） */
-	| {
-			type: "remote_ssh_list_dir";
-			reqId?: string;
-			connectionId: string;
-			path?: string;
-	  }
-	/** 在远端执行工具一键安装（如 git / bash） */
-	| {
-			type: "remote_ssh_install_tools";
-			reqId?: string;
-			connectionId: string;
-			tools: string[];
-	  }
-	/** 获取已保存的 SSH 远程连接配置列表 */
-	| {
-			type: "remote_ssh_list_profiles";
-			reqId?: string;
-	  }
-	/** 删除已保存的 SSH profile */
-	| {
-			type: "remote_ssh_delete_profile";
-			name: string;
 	  };
-
-// -- Remote SSH & Probe types -----------------------------------------------
-export type RemoteSshAuth =
-	| { type: "password"; password: string }
-	| { type: "key"; privateKeyPath?: string; privateKey?: string; passphrase?: string }
-	| { type: "agent" };
-
-export interface RemoteSshProbeParams {
-	host: string;
-	port?: number;
-	username: string;
-	auth: RemoteSshAuth;
-	profileName?: string;
-	saveProfile?: boolean;
-}
-
-export interface RemoteSshSystemInfo {
-	os: string;
-	arch: string;
-	hostname: string;
-	homeDir: string;
-	user: string;
-}
-
-export interface RemoteSshToolsInfo {
-	git: { installed: boolean; version?: string };
-	node: { installed: boolean; version?: string };
-	bash: { installed: boolean; path?: string };
-	python?: { installed: boolean; version?: string };
-}
-
-export interface RemoteSshDirItem {
-	name: string;
-	path: string;
-	type: "dir" | "file";
-	size?: number;
-	mtime?: number;
-}
-
-export interface RemoteSshProfileSummary {
-	name: string;
-	host: string;
-	port: number;
-	username: string;
-	authType: "password" | "key" | "agent";
-	privateKeyPath?: string;
-	lastConnected?: number;
-}
 
 // ---------------------------------------------------------------------------
 // Server -> Client
@@ -3981,42 +3902,6 @@ export type ServerMessage =
 			messages: UiMessage[];
 			historyStart: number;
 			historyTotal: number;
-	  }
-	// -- remote SSH & probe results ------------------------------------------
-	| {
-			type: "remote_ssh_probe_result";
-			reqId?: string;
-			ok: boolean;
-			connectionId?: string;
-			error?: string;
-			system?: RemoteSshSystemInfo;
-			tools?: RemoteSshToolsInfo;
-			packageManager?: string;
-			suggestedInstall?: string[];
-	  }
-	| {
-			type: "remote_ssh_list_dir_result";
-			reqId?: string;
-			ok: boolean;
-			connectionId: string;
-			path: string;
-			parentPath?: string | null;
-			items: RemoteSshDirItem[];
-			error?: string;
-	  }
-	| {
-			type: "remote_ssh_install_result";
-			reqId?: string;
-			ok: boolean;
-			connectionId: string;
-			tool: string;
-			output?: string;
-			error?: string;
-	  }
-	| {
-			type: "remote_ssh_profiles_result";
-			reqId?: string;
-			profiles: RemoteSshProfileSummary[];
 	  }
 	| {
 			type: "transition_progress";

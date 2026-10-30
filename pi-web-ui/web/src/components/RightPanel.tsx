@@ -30,7 +30,6 @@ import type { UiSlotEntry } from "../ui-slots";
 import { contextMenuItems, openContextMenu } from "../context-menu-state";
 import { SlotTabs, type SlotTab } from "./SlotTabs";
 import { copyTextToClipboard } from "../use-copy-feedback";
-import { isRemoteWorkspaceUri, parseRemoteWorkspaceUri } from "../remote-ssh-client";
 
 /** 机器根（此电脑/盘符列表）wire 字面量 —— 与 server/files-service.ts 的 MACHINE_ROOT 同值。 */
 const MACHINE_ROOT = "@root";
@@ -285,18 +284,9 @@ export const RightPanel = memo(function RightPanel({
 		[cwd],
 	);
 
-	/** 将当前选中的 wire 路径转换为传输对话框（压缩/解压/上传文件夹）所用的绝对路径：
-	 *  远程 SSH 项目转换为远程 posix 绝对路径；本地项目转换为本地绝对路径。 */
+	/** 将当前选中的 wire 路径转换为传输对话框（压缩/解压/上传文件夹）所用的绝对路径。 */
 	const transferAbsPathOf = useCallback(
 		(p: string): string => {
-			if (isRemoteWorkspaceUri(cwd)) {
-				const parsed = parseRemoteWorkspaceUri(cwd);
-				const root = parsed ? parsed.remotePath : "/";
-				if (!p) return root;
-				if (p.startsWith("/")) return p;
-				const cleanRoot = root.replace(/\/+$/, "") || "/";
-				return cleanRoot === "/" ? `/${p}` : `${cleanRoot}/${p}`;
-			}
 			return absPathOf(p);
 		},
 		[cwd, absPathOf],

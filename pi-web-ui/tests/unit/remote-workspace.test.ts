@@ -7,17 +7,15 @@ import {
 	buildRemoteWorkspacePersona,
 	createRemoteSdkOperations,
 	formatCwdForPrompt,
+	formatRemoteWorkspaceUri,
+	isRemoteWorkspaceUri,
 	mapResolvedPathToRemote,
+	parseRemoteWorkspaceUri,
 	resolveRemoteWorkspacePath,
 	resolveWorkspaceSessionDir,
 	restoreWorkspaceUriFromSessionDir,
 } from "../../server/remote-ssh-service.js";
 import { isInsideWorkspaceRoots } from "../../server/tool-guards.js";
-import {
-	formatRemoteWorkspaceUri,
-	isRemoteWorkspaceUri,
-	parseRemoteWorkspaceUri,
-} from "../../web/src/remote-ssh-client.js";
 
 describe("Remote Workspace & SSH URI", () => {
 	it("formats and parses remote workspace URIs accurately", () => {

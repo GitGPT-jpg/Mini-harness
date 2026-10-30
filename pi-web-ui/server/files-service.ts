@@ -2168,13 +2168,13 @@ export class FilesService {
 				return;
 			}
 			const completions = entries
-				.filter((d) => d.name.startsWith(prefix))
-				.map((e) => ({
+				.filter((d: { name: string }) => d.name.startsWith(prefix))
+				.map((e: { name: string; type: string }) => ({
 					name: e.name,
 					type: e.type,
 					path: dirPart === "/" ? `/${e.name}` : `${dirPart.replace(/\/+$/, "")}/${e.name}`,
 				}))
-				.sort((a, b) => {
+				.sort((a: { type: string; name: string }, b: { type: string; name: string }) => {
 					if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
 					return a.name.localeCompare(b.name);
 				})

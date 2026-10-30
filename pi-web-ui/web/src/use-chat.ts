@@ -82,7 +82,6 @@ import { ingestPluginLogsData } from "./plugin-logs";
 import { PROTOCOL_VERSION } from "./protocol-version";
 import { mergeEarlierPage } from "./history-window";
 import { enqueueNotice } from "./notice-policy";
-import { dispatchRemoteSshMessage } from "./remote-ssh-client";
 import {
 	initialProviderOAuthState,
 	reduceProviderOAuthState,
@@ -2753,12 +2752,6 @@ export function useChat() {
 				case "plugin_data":
 					// 宿主保留通道（host.log 按需拉取回包）先拦截：命中即吞掉，只进日志 store。
 					if (!ingestPluginLogsData(msg.pluginId, msg.payload)) emitPluginData(msg.pluginId, msg.payload);
-					break;
-				case "remote_ssh_probe_result":
-				case "remote_ssh_list_dir_result":
-				case "remote_ssh_install_result":
-				case "remote_ssh_profiles_result":
-					dispatchRemoteSshMessage(msg);
 					break;
 				default:
 					break;

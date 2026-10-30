@@ -15,7 +15,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildAttachmentMessages, type AttachmentContext } from "../../server/attachments.js";
 import { saveUpload, uploadsRoot } from "../../server/uploads.js";
-import { setGlobalRemoteSshService } from "../../server/remote-ssh-service.js";
 
 const dirs: string[] = [];
 function tempDir(): string {
@@ -308,75 +307,6 @@ describe("buildAttachmentMessages — 编辑重问附件恢复", () => {
 		])) as Aside[];
 		const text = out[0].message.content[0].text ?? "";
 		expect(text).toContain('title="a &quot;b&quot; &lt;c&gt;"');
-	});
-});
-
-describe("buildAttachmentMessages — 远程 SSH 工作区附件引用", () => {
-	it("在远程 SSH 工作区下正确引用远程文件与目录", async () => {
-		const remoteUri = "ssh://root@39.99.235.208:22/root/workspace/ljz";
-		const mockSvc = {
-			sftpStat: async (_uri: string, p: string) => {
-				if (p === "/root/workspace/ljz/小区名单/全省小区台账") {
-					return { isDirectory: true, isFile: false, size: 4096, mtime: Date.now() };
-				}
-				if (p === "/root/workspace/ljz/小区名单/全省小区台账/附件4 石家庄市居民小区台账 (2).xls") {
-					return { isDirectory: false, isFile: true, size: 10240, mtime: Date.now() };
-				}
-				throw new Error("File not found");
-			},
-			sftpReadFile: async () => ({ data: Buffer.from("mock"), size: 4 }),
-		};
-
-		setGlobalRemoteSshService(mockSvc as any);
-		try {
-			const notices: { level: string; text: string }[] = [];
-			const ctx = makeCtx({ dataDir: tempDir(), cwd: remoteUri, clientId: "c", notices });
-			const out = (await buildAttachmentMessages(ctx, [
-				{ path: "小区名单/全省小区台账", mode: "reference" },
-				{ path: "小区名单/全省小区台账/附件4 石家庄市居民小区台账 (2).xls", mode: "reference" },
-			])) as Aside[];
-
-			expect(notices).toEqual([]);
-			expect(out).toHaveLength(2);
-
-			// 目录引用
-			expect(out[0].message.details.type).toBe("folder");
-			expect(out[0].message.details.path).toBe("小区名单/全省小区台账");
-			expect(out[0].message.content[0].text).toContain('<folder path="小区名单/全省小区台账" />');
-
-			// 文件引用
-			expect(out[1].message.details.mode).toBe("reference");
-			expect(out[1].message.details.path).toBe("小区名单/全省小区台账/附件4 石家庄市居民小区台账 (2).xls");
-			expect(out[1].message.details.size).toBe(10240);
-			expect(out[1].message.content[0].text).toContain(
-				'<file path="小区名单/全省小区台账/附件4 石家庄市居民小区台账 (2).xls" size="10240" />',
-			);
-		} finally {
-			setGlobalRemoteSshService(null as any);
-		}
-	});
-
-	it("在远程 SSH 工作区下正确识别不存在的文件并提示错误", async () => {
-		const remoteUri = "ssh://root@39.99.235.208:22/root/workspace/ljz";
-		const mockSvc = {
-			sftpStat: async () => {
-				throw new Error("File not found");
-			},
-		};
-
-		setGlobalRemoteSshService(mockSvc as any);
-		try {
-			const notices: { level: string; text: string }[] = [];
-			const ctx = makeCtx({ dataDir: tempDir(), cwd: remoteUri, clientId: "c", notices });
-			const out = await buildAttachmentMessages(ctx, [{ path: "nonexistent.txt", mode: "reference" }]);
-
-			expect(out).toHaveLength(0);
-			expect(notices).toHaveLength(1);
-			expect(notices[0].level).toBe("error");
-			expect(notices[0].text).toContain("附件不存在：nonexistent.txt");
-		} finally {
-			setGlobalRemoteSshService(null as any);
-		}
 	});
 });
 
