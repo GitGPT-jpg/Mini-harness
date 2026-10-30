@@ -419,6 +419,17 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		// 缺省收进「⋯」：只有装了 page-picker 扩展、真要用模型看页面的人才需要它
 		hidden: true,
 	},
+	// Loop 任务台（LLM loop / 代码 loop 目录 + 执行者工具调用 + 暂停/继续）：与「后台任务」并列。
+	{
+		id: "host:task-desk",
+		slot: "topbar.primary",
+		labelKey: "taskDesk",
+		icon: "list",
+		kind: "action",
+		order: 41.5,
+		group: "tools",
+		align: "end",
+	},
 	{
 		id: "host:tasks",
 		slot: "topbar.primary",
@@ -494,6 +505,16 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 
 	// ---- 底栏（基本都是「展示型」条目 kind="badge"；只有工作目录可点） ----
 	{ id: "host:conn", slot: "bottombar", labelKey: "connected", icon: "dot", kind: "badge", order: 5, group: "status" },
+	// 集群连通状态（kubeconfig + kubectl 实测；点击打开「连接集群」弹窗）。
+	{
+		id: "host:cluster",
+		slot: "bottombar",
+		labelKey: "clusterStatus",
+		icon: "share",
+		kind: "action",
+		order: 6,
+		group: "status",
+	},
 	{ id: "host:ctx", slot: "bottombar", labelKey: "context", icon: "gauge", kind: "badge", order: 10, group: "usage" },
 	{
 		id: "host:cost",

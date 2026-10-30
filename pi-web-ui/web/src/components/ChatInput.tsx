@@ -44,6 +44,7 @@ import { groupByAlign } from "../ui-slots";
 import { nextSearchReqId } from "../search-req-id";
 
 import { ModelThinking } from "./ModelThinking";
+import { ClusterButton } from "./ClusterControls";
 import { DshPresetBar, type DshPresetInfo } from "./DshPresetBar";
 import { DshPermissionBar } from "./DshPermissionBar";
 import type { DshPermissionOption, UiAgentPreset } from "../types";
@@ -1483,6 +1484,8 @@ export const ChatInput = memo(function ChatInput({
 	const canSteer = Boolean(capabilities.steer !== false && !isDsh);
 	const renderActions = () => (
 		<div className="inputbox-actions">
+			{/* 连接集群：发送键左侧的小图标，角标点 = 连通状态（点击填 kubeconfig）。 */}
+			<ClusterButton />
 			{streaming ? (
 				canSubmit ? (
 					<div className={`split-send${!canSteer ? " single" : ""}`}>

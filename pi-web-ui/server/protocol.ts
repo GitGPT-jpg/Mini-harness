@@ -898,6 +898,10 @@ export type ClientMessage =
 			useReviewer?: boolean;
 			worktree?: boolean;
 			taskId?: string;
+			/** 用户写的验收条件（自然语言；无 validateCmd 时据此写 validate.py）。 */
+			criteria?: string;
+			/** 产物目录（取证/验收用，原样传给 loop_start）。 */
+			artifactRoots?: string[];
 	  }
 	/** 停止当前会话的活跃 Loop（不传 runId = 快照 loop 里的当前 run）。停止
 	 *  即递增 epoch：在途/迟到回调全部失效，不得把 stopped 翻成 done。 */

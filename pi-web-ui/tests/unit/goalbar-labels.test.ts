@@ -76,7 +76,7 @@ function render(uiGoalbarActions: UiSlotEntry[], expand = false) {
 describe("目标条内置条目改名落地", () => {
 	it("没置 labelExplicit：照旧画内置 i18n 文案（entry.label 不抢本地化）", () => {
 		const { container, root } = render(entries({ "host:goal-set": { label: "MY-GOAL" } }), true);
-		expect(container.textContent).toContain("提炼");
+		expect(container.textContent).toContain("帮我细化");
 		expect(container.textContent).not.toContain("MY-GOAL");
 		act(() => root.unmount());
 		container.remove();

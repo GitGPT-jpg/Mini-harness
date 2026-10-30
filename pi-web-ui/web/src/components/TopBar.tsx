@@ -15,6 +15,7 @@ import {
 	FiPlus,
 	FiSettings,
 	FiLayers,
+	FiList,
 	FiTerminal,
 } from "react-icons/fi";
 import { GoTriangleDown } from "react-icons/go";
@@ -58,6 +59,7 @@ import { focusComposer } from "../composer-bridge";
 import { useFloatingPanel } from "../use-floating-panel";
 import { BarItem } from "./BarItem";
 import { appUrl } from "../base-url";
+import { openTaskDesk } from "../loop-cockpit";
 
 /** 「安装全局引擎」按钮的目标（issue #321）：buildUpdateCommand 对 pi-core 生成
  *  `npm i -g <name>@latest`，装完重启服务即由 resolve-global-sdk 自动切到更新的那份。 */
@@ -386,6 +388,9 @@ export function TopBar({
 				return true;
 			case "host:search":
 				onOpenGlobalSearch();
+				return true;
+			case "host:task-desk":
+				openTaskDesk();
 				return true;
 			case "host:tasks":
 				onOpenBgTasks();
@@ -1040,6 +1045,12 @@ export function TopBar({
 		"host:browser": !(chat.settings?.disabledAgentTools?.includes(BROWSER_PAGE_TOOL_NAME) ?? false) ? (
 			<BrowserControl />
 		) : null,
+		"host:task-desk": (
+			<button type="button" className="chip task-desk-chip" data-tip={t("taskDeskTip")} onClick={openTaskDesk}>
+				<FiList />
+				<span className="chip-sub">{t("taskDesk")}</span>
+			</button>
+		),
 		"host:tasks": (
 			<button type="button" className="chip bg-task-chip" data-tip={t("bgTasksTip")} onClick={onOpenBgTasks}>
 				<FiLayers />

@@ -13340,6 +13340,444 @@
 		text-overflow: ellipsis;
 	}
 
+	/* ---- 驾驶舱 Loop 体验：LLM loop / 代码 loop 胶囊、连接集群、代码 loop 弹窗、任务台 ---- */
+
+	/* 输入框上沿的一对小胶囊（.goalbar-collapsed 行内居中）：半透明、毛玻璃、细描边，
+	   hover 才显出各自的色相，按下轻微缩放。尺寸比默认药丸再小一档。 */
+	.goalbar-collapsed .loop-capsule {
+		height: 22px;
+		padding: 0 10px;
+		gap: 5px;
+		font-size: 11.5px;
+		letter-spacing: 0.2px;
+		color: var(--text-dim);
+		background: color-mix(in srgb, var(--bg-elev2) 55%, transparent);
+		-webkit-backdrop-filter: blur(10px);
+		backdrop-filter: blur(10px);
+		border: 1px solid color-mix(in srgb, var(--text) 9%, transparent);
+		transition:
+			background 0.15s,
+			border-color 0.15s,
+			color 0.15s,
+			transform 0.12s,
+			opacity 0.12s;
+	}
+	.goalbar-collapsed .loop-capsule svg {
+		width: 12px;
+		height: 12px;
+	}
+	.goalbar-collapsed .loop-capsule.llm svg {
+		color: var(--plugin-purple);
+	}
+	.goalbar-collapsed .loop-capsule.code svg {
+		color: var(--info-blue);
+	}
+	.goalbar-collapsed .loop-capsule:hover {
+		color: var(--text);
+		border-style: solid;
+		background: color-mix(in srgb, var(--bg-elev2) 85%, transparent);
+	}
+	.goalbar-collapsed .loop-capsule.llm:hover {
+		border-color: color-mix(in srgb, var(--plugin-purple) 55%, transparent);
+	}
+	.goalbar-collapsed .loop-capsule.code:hover {
+		border-color: color-mix(in srgb, var(--info-blue) 55%, transparent);
+	}
+	.goalbar-collapsed .loop-capsule:active {
+		transform: scale(0.97);
+		opacity: 0.7;
+	}
+
+	/* 目标条编辑态下方的一行说明 / 自己审自己提醒。 */
+	.goalbar-loop-hint {
+		font-size: 11px;
+		line-height: 1.5;
+		color: var(--text-faint);
+		padding: 4px 2px 0;
+		overflow-wrap: anywhere;
+		word-break: break-word;
+	}
+	.goalbar-loop-hint.warn {
+		color: var(--amber);
+	}
+	.goalbar-codeloop svg {
+		color: var(--info-blue);
+	}
+
+	/* 调研进行中：目标条底缘一道扫光，提示「AI 在动」。 */
+	.goalbar-active.wizard {
+		position: relative;
+		overflow: hidden;
+	}
+	.goalbar-active.wizard::after {
+		content: "";
+		position: absolute;
+		left: -45%;
+		bottom: 0;
+		width: 45%;
+		height: 2px;
+		border-radius: 2px;
+		background: linear-gradient(90deg, transparent, var(--plugin-purple), transparent);
+		animation: goalbar-wizard-sweep 1.7s linear infinite;
+		pointer-events: none;
+	}
+	@keyframes goalbar-wizard-sweep {
+		0% {
+			left: -45%;
+		}
+		100% {
+			left: 100%;
+		}
+	}
+
+	/* 输入框里发送键左侧的「连接集群」图标：安静的描边圆，右下角状态点（红 = 未连通，绿 = 已连接）。 */
+	.inputbox .btn.cluster-btn {
+		position: relative;
+		border: none;
+		color: var(--text-faint);
+	}
+	.inputbox .btn.cluster-btn:hover {
+		background: var(--accent-soft);
+		color: var(--accent);
+	}
+	.inputbox .btn.cluster-btn::after {
+		content: "";
+		position: absolute;
+		right: 4px;
+		bottom: 4px;
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		background: var(--red);
+		box-shadow: 0 0 0 2px var(--bg-elev2);
+	}
+	.inputbox .btn.cluster-btn.ok {
+		color: var(--green);
+	}
+	.inputbox .btn.cluster-btn.ok::after {
+		background: var(--green);
+	}
+
+	/* 底栏集群指示：与连接状态同一套 .status-item 外观，本身是按钮（可点开弹窗）。 */
+	.status-cluster {
+		border: none;
+		background: transparent;
+		font: inherit;
+		color: inherit;
+		cursor: pointer;
+	}
+
+	/* 代码 loop / 连接集群弹窗（.modal 原语里的内容区）。 */
+	.modal.cockpit-modal {
+		max-width: 580px;
+	}
+	.cockpit-body {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		padding: 4px 16px 16px;
+		min-width: 0;
+	}
+	.cockpit-sub {
+		margin: 0 0 4px;
+		font-size: 12px;
+		line-height: 1.6;
+		color: var(--text-dim);
+	}
+	.cockpit-note {
+		font-size: 11.5px;
+		color: var(--text-dim);
+		background: var(--bg-elev);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		padding: 7px 10px;
+	}
+	.cockpit-presets {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+		margin: 4px 0;
+	}
+	.cockpit-preset {
+		font-size: 11.5px;
+		border-radius: 999px;
+		padding: 3px 10px;
+		cursor: pointer;
+		color: var(--text);
+		background: color-mix(in srgb, var(--accent) 12%, transparent);
+		border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+	}
+	.cockpit-preset:hover {
+		background: color-mix(in srgb, var(--accent) 22%, transparent);
+	}
+	.cockpit-label {
+		font-size: 12px;
+		color: var(--text-dim);
+		margin-top: 6px;
+	}
+	.cockpit-input {
+		width: 100%;
+		box-sizing: border-box;
+		background: var(--bg-elev);
+		border: 1px solid var(--border);
+		border-radius: 7px;
+		color: var(--text);
+		padding: 7px 10px;
+		font-size: 13px;
+		font-family: inherit;
+	}
+	textarea.cockpit-input {
+		resize: vertical;
+	}
+	.cockpit-code {
+		font-family: var(--mono);
+		font-size: 12px;
+	}
+	.cockpit-models {
+		display: flex;
+		gap: 10px;
+	}
+	.cockpit-models > div {
+		flex: 1;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+	.cockpit-model-note {
+		font-size: 11px;
+		line-height: 1.5;
+		color: var(--text-faint);
+	}
+	.cockpit-model-note.bad {
+		color: var(--red);
+	}
+	.cockpit-adv {
+		margin-top: 6px;
+		border-top: 1px dashed var(--border);
+		padding-top: 8px;
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+	.cockpit-adv summary {
+		cursor: pointer;
+		font-size: 12px;
+		color: var(--text-dim);
+		user-select: none;
+	}
+	.cockpit-state {
+		font-size: 12px;
+		line-height: 1.5;
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+		word-break: break-word;
+		max-height: 120px;
+		overflow: auto;
+		overscroll-behavior: contain;
+		color: var(--text-dim);
+	}
+	.cockpit-state.ok {
+		color: var(--green);
+	}
+	.cockpit-state.bad {
+		color: var(--red);
+	}
+	.cockpit-row {
+		display: flex;
+		gap: 10px;
+		justify-content: flex-end;
+		margin-top: 12px;
+	}
+	.cockpit-row-start {
+		margin-right: auto;
+	}
+
+	/* Loop 任务台：右侧抽屉（复用 .modal 原语的 Portal / Escape / 滚动锁）。 */
+	.modal-backdrop.task-desk-backdrop {
+		justify-content: flex-end;
+		align-items: stretch;
+		padding: 0;
+		background: rgba(4, 5, 8, 0.35);
+	}
+	.modal.task-desk {
+		width: min(460px, 92vw);
+		max-width: none;
+		height: 100%;
+		max-height: none;
+		gap: 0;
+		padding: 0;
+		border-radius: 0;
+		border-width: 0 0 0 1px;
+		overflow: hidden;
+	}
+	/* 关闭键是 sticky 流内元素，靠 margin-bottom 抵掉「自身 28px + .modal 的 14px gap」；
+	   抽屉把 gap 归零了，这里只抵自身高度，否则标题行会被顶出视口。 */
+	.modal.task-desk > .modal-close {
+		top: 10px;
+		margin: 10px 10px -38px 0;
+	}
+	.modal.task-desk > .modal-head {
+		padding: 14px 16px 10px;
+		border-bottom: 1px solid var(--border);
+	}
+	.task-desk-body {
+		flex: 1;
+		min-height: 0;
+		overflow-y: auto;
+		overscroll-behavior: contain;
+		padding: 4px 16px 14px;
+	}
+	.task-desk-sec {
+		display: flex;
+		justify-content: space-between;
+		font-size: 11.5px;
+		color: var(--text-faint);
+		margin: 14px 0 6px;
+	}
+	.task-desk-cat {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+	.task-desk-cat-item {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		min-width: 0;
+		font-size: 12px;
+		padding: 7px 10px;
+		border-radius: 8px;
+		background: var(--bg-elev);
+		border: 1px solid var(--border);
+		color: var(--text-dim);
+	}
+	.task-desk-cat-item b {
+		flex: none;
+		font-size: 11.5px;
+		color: var(--plugin-purple);
+	}
+	.task-desk-cat-item span {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.task-desk-cat-item[data-on="1"] {
+		border-color: color-mix(in srgb, var(--plugin-purple) 55%, transparent);
+		color: var(--text);
+	}
+	.task-desk-goal {
+		margin-top: 12px;
+		font-size: 13px;
+		line-height: 1.6;
+		background: var(--bg-elev);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		padding: 10px 12px;
+		overflow-wrap: anywhere;
+		word-break: break-word;
+	}
+	.task-desk-meta {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+		margin: 10px 0;
+		font-size: 11.5px;
+		color: var(--text-dim);
+	}
+	.task-desk-chip {
+		background: var(--bg-elev);
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		padding: 2px 9px;
+	}
+	.task-desk-steps {
+		display: flex;
+		gap: 4px;
+		margin: 12px 0 4px;
+	}
+	.task-desk-step {
+		flex: 1;
+		text-align: center;
+		font-size: 10.5px;
+		color: var(--text-faint);
+		padding-top: 7px;
+		border-top: 3px solid var(--border);
+	}
+	.task-desk-step.on {
+		color: var(--plugin-purple);
+		border-top-color: var(--plugin-purple);
+	}
+	.task-desk-step.done {
+		color: var(--green);
+		border-top-color: var(--green);
+	}
+	.task-desk-ev {
+		border-left: 2px solid var(--border);
+		padding: 4px 0 6px 10px;
+		margin-left: 2px;
+		font-size: 12px;
+		line-height: 1.5;
+		min-width: 0;
+	}
+	.task-desk-ev.run {
+		border-left-color: var(--plugin-purple);
+	}
+	.task-desk-ev.err {
+		border-left-color: var(--red);
+	}
+	.task-desk-ev.ok {
+		border-left-color: var(--green);
+	}
+	.task-desk-ev .nm {
+		color: var(--info-blue);
+		font-weight: 600;
+		overflow-wrap: anywhere;
+		word-break: break-word;
+	}
+	.task-desk-ev .ar {
+		color: var(--text-dim);
+		overflow-wrap: anywhere;
+		word-break: break-word;
+	}
+	.task-desk-ev .out {
+		color: var(--text-faint);
+		font-size: 11px;
+		overflow-wrap: anywhere;
+		word-break: break-word;
+	}
+	.task-desk-del {
+		float: right;
+		margin-left: 6px;
+		padding: 0 6px;
+		font-size: 10.5px;
+		border-radius: 6px;
+		border: 1px solid var(--border);
+		background: transparent;
+		color: var(--text-faint);
+		cursor: pointer;
+	}
+	.task-desk-del:hover {
+		border-color: var(--red);
+		color: var(--red);
+	}
+	.task-desk-empty {
+		color: var(--text-faint);
+		font-size: 12.5px;
+		line-height: 1.7;
+		padding: 6px 0;
+	}
+	.task-desk-acts {
+		display: flex;
+		gap: 8px;
+		padding: 12px 16px;
+		border-top: 1px solid var(--border);
+	}
+	.task-desk-acts .btn {
+		flex: 1;
+	}
+
 	/* The review-result card inserted into the message flow. */
 	.msg-goal-review {
 		border-left: 3px solid var(--amber);

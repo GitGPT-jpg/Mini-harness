@@ -11,6 +11,7 @@ import {
 	FiGithub,
 	FiGlobe,
 	FiLayers,
+	FiList,
 	FiMenu,
 	FiMessageSquare,
 	FiPlus,
@@ -33,6 +34,8 @@ import { Dropdown, DropdownItem } from "./Dropdown";
 import { BrowserControl } from "./BrowserControl";
 import { BROWSER_PAGE_TOOL_NAME } from "../../../server/tool-manager.js";
 import { appUrl } from "../base-url";
+import { openTaskDesk } from "../loop-cockpit";
+import { ClusterStatusItem } from "./ClusterControls";
 
 export type ViewName = "chat" | "terminal" | `plugin:${string}`;
 
@@ -396,7 +399,11 @@ export function BarItem({
 	// 2. 特殊条目：连接状态（已连接时附带实时网络延迟 ms）
 	if (id === "host:conn") {
 		const connClass = chat.ready ? "ok" : chat.status === "closed" ? "error" : "busy";
-		const connLabel = chat.ready ? t("connected") : chat.status === "closed" ? t("reconnecting") : t("connecting");
+		const connLabel = chat.ready
+			? t("apiConnected")
+			: chat.status === "closed"
+				? t("apiReconnecting")
+				: t("apiConnecting");
 		const hasLatency =
 			chat.ready && typeof chat.latencyMs === "number" && Number.isFinite(chat.latencyMs) && chat.latencyMs >= 0;
 		const latencyVal = hasLatency ? Math.round(chat.latencyMs as number) : null;
@@ -418,6 +425,11 @@ export function BarItem({
 				{latencyText && <span className={`status-latency ${latencyClass}`}>{latencyText}</span>}
 			</span>
 		);
+	}
+
+	// 3. 特殊条目：集群连通状态（与「API 已连接」并列）
+	if (id === "host:cluster") {
+		return <ClusterStatusItem name={custom || undefined} />;
 	}
 
 	// 4. 特殊条目：上下文进度环
@@ -912,6 +924,12 @@ export function BarItem({
 			labelText = named(t("searchGlobal"));
 			extraClasses = "chip";
 			onClick = () => onOpenGlobalSearch?.();
+			break;
+		case "host:task-desk":
+			iconNode = <FiList className="bar-item-icon" />;
+			labelText = named(t("taskDesk"));
+			extraClasses = "chip task-desk-chip";
+			onClick = () => openTaskDesk();
 			break;
 		case "host:tasks":
 			iconNode = <FiLayers className="bar-item-icon" />;

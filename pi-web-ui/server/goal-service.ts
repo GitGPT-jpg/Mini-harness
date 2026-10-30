@@ -861,8 +861,8 @@ export class GoalService {
 		});
 		wgoal.wizard.step = 0;
 		wgoal.wizard.maxSteps = maxSteps;
-		wgoal.wizard.status = "调研中…";
-		wgoal.wizard.statusEn = "Scoping…";
+		wgoal.wizard.status = "AI 正在调研，请稍候…";
+		wgoal.wizard.statusEn = "AI is scoping, please wait…";
 		wgoal.status = "目标调研中…";
 		wgoal.statusEn = "Scoping the goal…";
 		this.emitGoalStatus();
@@ -1014,8 +1014,8 @@ export class GoalService {
 					// Show the question in the main flow BEFORE blocking on the dialog, so
 					// the user sees the wizard working even before answering.
 					wgoal.wizard.step = qStep;
-					wgoal.wizard.status = `调研中：请回答第 ${qStep} 题`;
-					wgoal.wizard.statusEn = `Scoping: please answer question ${qStep}`;
+					wgoal.wizard.status = `等你选择第 ${qStep} 题`;
+					wgoal.wizard.statusEn = `Waiting for your answer to question ${qStep}`;
 					this.emitGoalStatus();
 					try {
 						armIdle();

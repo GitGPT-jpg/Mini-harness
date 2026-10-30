@@ -117,7 +117,7 @@ describe("FooterBar 连接状态", () => {
 		expect(latOk).toBeTruthy();
 		expect(latOk?.textContent).toBe("18ms");
 		expect(latOk?.classList.contains("ok")).toBe(true);
-		expect(c1.querySelector(".status-conn")?.getAttribute("title")).toBe("已连接 · 网络延迟: 18ms");
+		expect(c1.querySelector(".status-conn")?.getAttribute("title")).toBe("API 已连接 · 网络延迟: 18ms");
 
 		act(() => root!.unmount());
 		root = null;

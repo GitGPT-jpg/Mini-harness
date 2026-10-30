@@ -1,5 +1,5 @@
 import { Fragment, memo, useEffect, useState, type ReactNode } from "react";
-import { FiTarget, FiLock, FiUnlock, FiX, FiChevronUp, FiArrowUpRight, FiSquare } from "react-icons/fi";
+import { FiTarget, FiLock, FiUnlock, FiX, FiChevronUp, FiArrowUpRight, FiSquare, FiCode } from "react-icons/fi";
 import type { GoalStatus, ModelInfo } from "../types";
 import { isZhLocale, useT, useI18n } from "../i18n";
 import { appSend, useIsDsh, useEngineCapabilities } from "../app-globals";
@@ -7,6 +7,7 @@ import { Dropdown, DropdownItem } from "./Dropdown";
 import { UniversalModelPicker, matchesModelId } from "./UniversalModelPicker";
 import type { UiSlotEntry } from "../ui-slots";
 import { renderMergedToolbar } from "../slot-toolbar";
+import { openCodeLoop, useCockpitPopupOpen } from "../loop-cockpit";
 
 /** Props are deliberately NARROW (no whole-ChatState object): every field is
  *  stable while tokens stream in, so the shallow-compared memo() below skips
@@ -21,6 +22,13 @@ interface Props {
 	uiGoalbarActions?: UiSlotEntry[];
 	/** 点击一条目标条动作：交回 App 分发给贡献它的插件（与顶栏 onUiAction 同通道）。 */
 	onUiAction?: (item: UiSlotEntry) => void;
+	/** 主对话当前模型（LLM loop 的评审者就是主对话；快照里是稳定引用）。 */
+	mainModel?: { id: string; name: string; provider: string } | null;
+}
+
+/** 打开输入框下方的模型选择器（评审模型 = 主对话模型，改它就是改主对话模型）。 */
+function openComposerModelPicker(): void {
+	document.querySelector<HTMLElement>('[data-pi-anchor="composer"] .chip-model')?.closest("button")?.click();
 }
 
 export const GoalBar = memo(function GoalBar({
@@ -30,8 +38,11 @@ export const GoalBar = memo(function GoalBar({
 	activeConversationId,
 	uiGoalbarActions,
 	onUiAction,
+	mainModel,
 }: Props) {
 	const t = useT();
+	// 驾驶舱弹层（代码 loop / 连接集群 / 任务台）打开时收起底部两枚 loop 胶囊。
+	const popupOpen = useCockpitPopupOpen();
 	const { locale } = useI18n();
 	const goalDetail = !isZhLocale(locale) && goal.statusEn ? goal.statusEn : goal.status || "";
 	const wizardDetail = !isZhLocale(locale) && goal.wizard?.statusEn ? goal.wizard.statusEn : goal.wizard?.status || "";
@@ -187,8 +198,8 @@ export const GoalBar = memo(function GoalBar({
 		"host:goal-pill": (
 			<button
 				type="button"
-				className="goalbar-hint"
-				title={t("goalBarPlaceholder")}
+				className="goalbar-hint loop-capsule llm"
+				title={t("goalPillTip")}
 				onClick={() => setCollapsed(false)}
 			>
 				<FiTarget /> <span>{goalLabel("host:goal-pill", t("goalBarTitle"))}</span>
@@ -359,6 +370,11 @@ export const GoalBar = memo(function GoalBar({
 		),
 	};
 	const wizardActive = (goal.wizard?.active ?? false) && goalBelongsToActiveConversation;
+	// 执行模型跟随主对话（空）或就选了主对话那个 = 自己审自己，给个提醒。
+	const sameModel =
+		!isDsh &&
+		(!execModel ||
+			(!!mainModel && (execModel === mainModel.id || execModel === `${mainModel.provider}/${mainModel.id}`)));
 
 	if (wizardActive) {
 		return (
@@ -371,7 +387,7 @@ export const GoalBar = memo(function GoalBar({
 						{t("goalWizardRunning")}: {goal.wizard?.draft}
 					</span>
 					<span className="goalbar-chip reviewing">
-						{t("goalBarRound", { n: (goal.wizard?.step ?? 0) + 1 })} / {goal.wizard?.maxSteps ?? 6}
+						{t("goalWizardStep", { n: (goal.wizard?.step ?? 0) + 1 })} / {goal.wizard?.maxSteps ?? 6}
 					</span>
 					<span className="goalbar-detail">{wizardDetail || t("goalBarReviewing")}</span>
 					{renderMergedToolbar(
@@ -480,14 +496,27 @@ export const GoalBar = memo(function GoalBar({
 	// chat column (not a full-width panel). A discreet 🎯 chip; click to open the editor.
 	if (collapsed) {
 		// pill 藏掉且无插件条目时整条不占位（布局页「恢复」可找回）。
+		if (popupOpen) return null;
 		const pillBar = renderMergedToolbar(goalZone(["host:goal-pill"]), goalHostNodes, onUiAction);
-		if (!pillBar) return null;
 		// 折叠态**刻意不带 `.goalbar` 类**：那一套是「整条面板」的皮（边框/底色/
 		// 圆角/内边距），主题还可能用 `.goalbar { border-top: … }` 画一条通栏细线 ——
 		// 收起时它就是一条横跨整列的带子，正好横在最后一条消息上把它
 		// 切断（用户实报「折叠时一整行遮挡底部消息」）。折叠态只是消息区与输入框
 		// 之间的一枚小药丸：自带一个 flex 行、整行水平居中、不多占高度。
-		return <div className="goalbar-collapsed">{pillBar}</div>;
+		// LLM loop / 代码 loop 两枚胶囊成对，按对话框中轴居中贴在输入框上沿。
+		return (
+			<div className="goalbar-collapsed">
+				{pillBar}
+				<button
+					type="button"
+					className="goalbar-hint loop-capsule code"
+					title={t("codeLoopPillTip")}
+					onClick={() => openCodeLoop()}
+				>
+					<FiCode /> <span>{t("loopBarTitle")}</span>
+				</button>
+			</div>
+		);
 	}
 
 	return (
@@ -557,9 +586,35 @@ export const GoalBar = memo(function GoalBar({
 						))}
 					</Dropdown>
 				)}
+				{!isDsh && (
+					<button
+						type="button"
+						className="chip goalbar-reviewer"
+						title={t("goalReviewerChipTip")}
+						onClick={openComposerModelPicker}
+					>
+						<span className="goalbar-opt">
+							<span className="goalbar-opt-label">{`${t("goalReviewerChip")}:`}</span>
+							<b>{mainModel?.name ?? "—"}</b>
+						</span>
+					</button>
+				)}
+				<button
+					type="button"
+					className="chip goalbar-codeloop"
+					title={t("codeLoopPillTip")}
+					onClick={() => {
+						openCodeLoop(text.trim());
+						setCollapsed(true);
+					}}
+				>
+					<FiCode /> {t("loopBarTitle")}
+				</button>
 				<span className="goalbar-lock-hint">{locked ? t("goalBarLocked") : t("goalBarUnlocked")}</span>
 				{staleBackend && <span className="goalbar-stale">{t("goalBarStaleBackend")}</span>}
 			</div>
+			<div className="goalbar-loop-hint">{t("goalLlmHint")}</div>
+			{sameModel && <div className="goalbar-loop-hint warn">{t("goalSameModelWarn")}</div>}
 		</div>
 	);
 });

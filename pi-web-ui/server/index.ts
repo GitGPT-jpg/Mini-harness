@@ -1394,6 +1394,8 @@ export interface DispatchSession {
 		useReviewer?: boolean;
 		worktree?: boolean;
 		taskId?: string;
+		criteria?: string;
+		artifactRoots?: string[];
 	}): Promise<void>;
 	stopLoop?(runId?: string): Promise<void>;
 	resumeLoop?(runId: string): Promise<void>;

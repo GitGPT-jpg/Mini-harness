@@ -157,6 +157,7 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			"host:plugins",
 			"host:search",
 			"host:browser",
+			"host:task-desk",
 			"host:tasks",
 			"host:settings",
 			"host:language",
@@ -169,6 +170,7 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 		]);
 		expect(ids(slots.bottombar)).toEqual([
 			"host:conn",
+			"host:cluster",
 			"host:ctx",
 			"host:cost",
 			"host:cache",
@@ -226,6 +228,7 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			"host:terminal",
 			"host:plugins",
 			"host:search",
+			"host:task-desk",
 			"host:tasks",
 			"host:settings",
 			"host:new-chat",

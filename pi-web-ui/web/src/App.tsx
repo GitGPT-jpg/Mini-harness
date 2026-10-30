@@ -16,6 +16,9 @@ import { MessageList } from "./components/MessageList";
 import { ChatInput } from "./components/ChatInput";
 import { GoalBar } from "./components/GoalBar";
 import { LoopBar } from "./components/LoopBar";
+import { CodeLoopModal } from "./components/CodeLoopModal";
+import { ClusterModal } from "./components/ClusterControls";
+import { TaskDesk } from "./components/TaskDesk";
 import { SandboxModal } from "./components/SandboxModal";
 import { WorktreeBanner } from "./components/WorktreeBanner";
 import { FiRefreshCw, FiFeather } from "react-icons/fi";
@@ -2318,14 +2321,19 @@ export function App() {
 										activeConversationId={chat.activeConversationId}
 										uiGoalbarActions={uiGoalbarActions}
 										onUiAction={onUiAction}
+										mainModel={chat.state?.model ?? null}
 									/>
 								</div>
 							)}
 							{/* Loop 紧凑入口：与目标条同一带子（复用 .goalbar-slot/.goalbar 视觉语言），
 						    闲置是居中小药丸，运行中是「阶段·轮次·耗时+停止」状态条。 */}
 							<div className="goalbar-slot">
-								<LoopBar loop={chat.state?.loop ?? null} />
+								<LoopBar loop={chat.state?.loop ?? null} goalModeEnabled={chat.settings?.goalModeEnabled !== false} />
 							</div>
+							{/* 驾驶舱弹层（Portal 到 body）：代码 loop 启动表单 / 连接集群 / Loop 任务台。 */}
+							<CodeLoopModal />
+							<ClusterModal />
+							<TaskDesk goal={chat.goal} activeConversationId={chat.activeConversationId} />
 							{/* 扩展问卷：非模态内联面板，插在输入框上方，对话内容保持可见 */}
 							{/* 通用右键菜单（contextmenu.* 槽位）：各处的 onContextMenu 打开它。 */}
 							<ContextMenu onAction={(entry, target, value) => onUiAction(entry, value, target)} />

@@ -518,6 +518,8 @@ export function handlePlanAndGoalMessage(msg: ClientMessage, cs: DispatchSession
 				useReviewer: msg.useReviewer,
 				worktree: msg.worktree,
 				taskId: msg.taskId,
+				criteria: msg.criteria,
+				artifactRoots: msg.artifactRoots,
 			});
 			return true;
 		case "loop_stop":

@@ -13574,6 +13574,8 @@ export class ClientSession {
 		useReviewer?: boolean;
 		worktree?: boolean;
 		taskId?: string;
+		criteria?: string;
+		artifactRoots?: string[];
 	}): Promise<void> {
 		const goal = msg.goal?.trim();
 		if (!goal) {
@@ -13592,12 +13594,22 @@ export class ClientSession {
 			"用 loop_start 启动一个受控运行（不要用普通对话硬跑），然后 loop_plan 写出计划并直接完成工作，最后 loop_done。",
 			`goal: ${goal}`,
 		];
+		const criteria = msg.criteria?.trim();
+		if (criteria) lines.push(`验收标准：${criteria}`);
 		if (msg.validateCmd) lines.push(`validateCmd: ${msg.validateCmd}`);
+		else if (msg.mode !== "llm")
+			lines.push(
+				'验收方式：如果当前工作区没有真正可用的 validate.py，先根据目标和验收标准写一个 validate.py（必须真正检查，不能恒通过），再用 validateCmd: "python3 validate.py" 启动。',
+			);
 		if (msg.mode) lines.push(`mode: ${msg.mode}`);
 		if (msg.maxRounds) lines.push(`maxRounds: ${msg.maxRounds}`);
 		if (msg.plannerModel) lines.push(`plannerModel: ${msg.plannerModel}`);
 		if (msg.reviewerModel) lines.push(`reviewerModel: ${msg.reviewerModel}`);
 		if (msg.useReviewer === false) lines.push("useReviewer: false");
+		if (msg.plannerModel || msg.reviewerModel)
+			lines.push("若 loop_start 报模型家族冲突或无法解析模型，直接把报错原文告诉用户并停止，不要自行更换模型。");
+		const roots = (msg.artifactRoots ?? []).map((r) => String(r).trim()).filter(Boolean);
+		if (roots.length) lines.push(`artifactRoots: ${JSON.stringify(roots)}`);
 		if (msg.worktree) lines.push("worktree: true");
 		lines.push(`taskId: ${taskId}`);
 		lines.push("不要向用户提问；运行时会自动验证，失败自动进入下一轮。");
