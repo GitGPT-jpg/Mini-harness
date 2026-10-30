@@ -13734,7 +13734,7 @@ export class ClientSession {
 		}
 	}
 
-	/** 首装：会话是在填 API Key 之前建的，SDK 当时没有可用模型 → session.model 为空，填完 key
+	/** 首装：会话是在填 API Key 之前建的，SDK 当时没有可用模型 → session.model 是占位模型，填完 key
 	 *  后这一页发的第一句话没人接（换个标签页才正常）。这里给还没模型的当前对话补一个：
 	 *  设置里的默认模型可用就用它，否则取刚配好的服务商的第一个可用模型。已有模型的对话不动。 */
 	private async adoptModelAfterKey(provider: string): Promise<void> {
@@ -13744,7 +13744,10 @@ export class ClientSession {
 		} catch {
 			return;
 		}
-		if (!session || session.model) return;
+		if (!session) return;
+		// 没有可用模型时 agent-core 填的是占位模型（provider/id 都是 "unknown"），不是 undefined。
+		const cur = session.model;
+		if (cur && cur.provider !== "unknown") return;
 		const available = this.runtime.services.modelRuntime.getAvailableSnapshot();
 		const sm = session.settingsManager;
 		const defProvider = sm.getDefaultProvider();
