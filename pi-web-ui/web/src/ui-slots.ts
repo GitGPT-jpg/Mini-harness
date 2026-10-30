@@ -429,16 +429,6 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		group: "tools",
 		align: "end",
 	},
-	{
-		id: "host:zen-mode",
-		slot: "topbar.primary",
-		labelKey: "zenMode",
-		icon: "feather",
-		kind: "action",
-		order: 43,
-		group: "tools",
-		align: "end",
-	},
 	// 系统组：设置 → 声音/通知 → 语言 → 主题 → 版本（更新）→ GitHub。
 	//
 	// 缺省收起口径（hidden: true）：低频 / 有替代入口的条目缺省落进顶栏「⋯」溢出菜单。

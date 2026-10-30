@@ -203,24 +203,6 @@ function PresentRow({ item }: { item: PresentCardItem }) {
 					/>
 				</button>
 			)}
-			{media === "video" && (
-				<video
-					className="present-media-video"
-					src={downloadUrl(item.target, false)}
-					controls
-					preload="metadata"
-					onError={() => setMediaFailed(true)}
-				/>
-			)}
-			{media === "audio" && (
-				<audio
-					className="present-media-audio"
-					src={downloadUrl(item.target, false)}
-					controls
-					preload="metadata"
-					onError={() => setMediaFailed(true)}
-				/>
-			)}
 
 			{item.excerpt && (
 				<pre className="present-excerpt">

@@ -39,7 +39,18 @@ describe("SubagentTemplatesStore", () => {
 	it("首次加载以内置默认模板为种子（不落盘）", () => {
 		const store = tmpStore();
 		const names = store.list().map((t) => t.name);
-		expect(names).toEqual(expect.arrayContaining(["review", "implement", "research", "scout", "audit", "delegate"]));
+		expect(names).toEqual(
+			expect.arrayContaining([
+				"review",
+				"implement",
+				"explore",
+				"harness-runner",
+				"prefill-opt",
+				"cache-adapt",
+				"cache-loss",
+				"hitrate-debug",
+			]),
+		);
 		for (const t of store.list()) {
 			expect(t.enabled).toBe(true);
 			expect(t.promptMode).toMatch(/^(replace|append)$/);
@@ -53,8 +64,8 @@ describe("SubagentTemplatesStore", () => {
 		// 模拟发版前的旧文件：只有 review（无 sidecar 档）
 		writeFileSync(file, JSON.stringify([{ name: "review", systemPrompt: "old" }]));
 		const a = new SubagentTemplatesStore(file);
-		// 新内置模板（oracle 等）被补齐
-		expect(a.get("oracle")).toBeDefined();
+		// 新内置模板（harness-runner 等）被补齐
+		expect(a.get("harness-runner")).toBeDefined();
 		expect(a.get("review")!.systemPrompt).toBe("old");
 		// 旧文件没有 thinkingLevel：归一为空 = 跟随主对话（升级不改变已有模板行为）
 		expect(a.get("review")!.thinkingLevel).toBe("");
@@ -62,7 +73,7 @@ describe("SubagentTemplatesStore", () => {
 		a.remove("review");
 		const b = new SubagentTemplatesStore(file);
 		expect(b.get("review")).toBeUndefined();
-		expect(b.get("oracle")).toBeDefined();
+		expect(b.get("harness-runner")).toBeDefined();
 	});
 
 	it("upsert / get / list / remove 基础流程（默认之上增删）", () => {
@@ -260,10 +271,10 @@ describe("SubagentTemplatesStore", () => {
 	});
 });
 
-describe("oh-my-pi specialist 内置模板", () => {
-	const names = ["oracle", "librarian", "explore", "metis", "momus", "multimodal-looker", "sisyphus-junior"];
+describe("保留的 specialist 内置模板（explore）", () => {
+	const names = ["explore"];
 
-	it("7 个 specialist 齐全且为 replace 模式", () => {
+	it("specialist 齐全且为 replace 模式", () => {
 		for (const n of names) {
 			const t = DEFAULT_TEMPLATES.find((x) => x.name === n);
 			expect(t, n).toBeDefined();
@@ -286,6 +297,28 @@ describe("oh-my-pi specialist 内置模板", () => {
 			expect(t.descriptionEn?.trim().length, `${n}.descriptionEn`).toBeGreaterThan(0);
 			expect(t.systemPrompt.trim().length, `${n}.systemPrompt`).toBeGreaterThan(100);
 			expect(t.systemPromptEn?.trim().length, `${n}.systemPromptEn`).toBeGreaterThan(100);
+		}
+	});
+});
+
+describe("训推引擎组推理 workflow 内置模板", () => {
+	const skillOf: Record<string, string> = {
+		"harness-runner": "inference-harness",
+		"prefill-opt": "prefill-optimization",
+		"cache-adapt": "cache-adaptation",
+		"cache-loss": "cache-loss-optimization",
+		"hitrate-debug": "cache-hitrate-debug",
+	};
+
+	it("5 个模板齐全：replace 模式 + 白名单绑定对应 workflow skill 与 inference-harness", () => {
+		for (const [name, skill] of Object.entries(skillOf)) {
+			const t = DEFAULT_TEMPLATES.find((x) => x.name === name);
+			expect(t, name).toBeDefined();
+			expect(t!.promptMode).toBe("replace");
+			expect(t!.enabled).toBe(true);
+			expect(t!.enabledSkills).toContain(skill);
+			expect(t!.enabledSkills).toContain("inference-harness");
+			expect(t!.systemPrompt.trim().length, `${name}.systemPrompt`).toBeGreaterThan(100);
 		}
 	});
 });

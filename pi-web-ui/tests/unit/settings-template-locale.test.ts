@@ -132,12 +132,12 @@ describe("繁中界面保存模板：库里不被改写成繁体", () => {
 			templates,
 		);
 		svc.push();
-		const view = snapshotTemplate("oracle")!;
-		expect(view.systemPrompt).toBe(BUILTIN_TEMPLATES_HANT.oracle!.systemPrompt);
+		const view = snapshotTemplate("explore")!;
+		expect(view.systemPrompt).toBe(BUILTIN_TEMPLATES_HANT.explore!.systemPrompt);
 		await svc.saveTemplate({ ...view, enabled: false });
-		const saved = templates.get("oracle")!;
+		const saved = templates.get("explore")!;
 		expect(saved.enabled).toBe(false);
-		expect(saved.description).toBe(shipped("oracle").description);
-		expect(saved.systemPrompt).toBe(shipped("oracle").systemPrompt);
+		expect(saved.description).toBe(shipped("explore").description);
+		expect(saved.systemPrompt).toBe(shipped("explore").systemPrompt);
 	});
 });

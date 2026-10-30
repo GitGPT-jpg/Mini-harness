@@ -1,7 +1,7 @@
 /* 提示词模板 UI 测试：boots the compiled server, opens the built UI, and
  * exercises the new-conversation prompt-template cards:
  *
- *   1. empty state shows 6 built-in template cards + a "new template" card
+ *   1. empty state shows the 8 built-in inference templates + a "new template" card
  *   2. clicking a card opens a modal with a full prompt much longer than the
  *      card title (template ≠ button text)
  *   3. "填入输入框" fills the main input with the full prompt
@@ -104,10 +104,10 @@ async function main() {
 	// -- 1. built-in template cards render in the empty state ---------------
 	await page.waitForSelector(".empty-state", { timeout: 10000 });
 	const cardTexts = await page.locator(".empty-template").allTextContents();
-	check(`all 25 aihero skills + "new template" card shown (got ${cardTexts.length})`, cardTexts.length === 26);
+	check(`all 8 inference templates + "new template" card shown (got ${cardTexts.length})`, cardTexts.length === 9);
 	check(
-		`card titles are engineering workflows (has 需求拷问)`,
-		cardTexts.some((t) => t.includes("需求拷问")),
+		`card titles are inference workflows (has Prefill 性能优化)`,
+		cardTexts.some((t) => t.includes("Prefill 性能优化")),
 	);
 	check(
 		`has 新建模板 card`,
@@ -148,7 +148,7 @@ async function main() {
 	const afterSave = await page.locator(".empty-template").allTextContents();
 	check(
 		`custom template card appears (got ${afterSave.length} cards)`,
-		afterSave.length === 27 && afterSave.some((t) => t.includes("冒烟模板")),
+		afterSave.length === 10 && afterSave.some((t) => t.includes("冒烟模板")),
 	);
 	const stored = await page.evaluate(() => localStorage.getItem("pi-web-ui:prompt-templates"));
 	check(`custom template persisted to localStorage`, (stored ?? "").includes("冒烟模板"));
@@ -158,7 +158,7 @@ async function main() {
 	const afterReload = await page.locator(".empty-template").allTextContents();
 	check(
 		`custom template survives reload`,
-		afterReload.length === 27 && afterReload.some((t) => t.includes("冒烟模板")),
+		afterReload.length === 10 && afterReload.some((t) => t.includes("冒烟模板")),
 	);
 
 	// -- 5. input-toolbar button opens the template picker (usable mid-chat) --

@@ -8,14 +8,8 @@ import { HOST_ICON_NAMES } from "../../web/src/host-icon";
 const STYLES_PATH = fileURLToPath(new URL("../../web/src/styles.css", import.meta.url));
 
 describe("极简沉浸模式 (Zen / Focus Mode)", () => {
-	it("在 BUILTIN_UI_ITEMS 中登记了 host:zen-mode 顶栏条目", () => {
-		const entry = BUILTIN_UI_ITEMS.find((item) => item.id === "host:zen-mode");
-		expect(entry).toBeDefined();
-		expect(entry?.slot).toBe("topbar.primary");
-		expect(entry?.labelKey).toBe("zenMode");
-		expect(entry?.icon).toBe("feather");
-		expect(entry?.kind).toBe("action");
-		expect(entry?.group).toBe("tools");
+	it("Harness 发行版不在顶栏登记 host:zen-mode 入口（仍可用 Alt+Z / Ctrl+Shift+F 切换）", () => {
+		expect(BUILTIN_UI_ITEMS.find((item) => item.id === "host:zen-mode")).toBeUndefined();
 	});
 
 	it("i18n 中双语均包含极简模式相关文案", () => {

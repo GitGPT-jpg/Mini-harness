@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { FiEdit2, FiPlus, FiRotateCcw, FiSend, FiTrash2, FiX } from "react-icons/fi";
-import { useT, type Translate } from "../i18n";
+import { useT } from "../i18n";
 import { randomUuid } from "../uuid";
 import { appSend } from "../app-globals";
 import { recordModelUsage } from "../model-usage";
@@ -15,8 +15,7 @@ import { recordModelUsage } from "../model-usage";
 /*   - 点卡片打开编辑弹窗：改内容→保存修改；内置可移出、自定义可删除；        */
 /*   - 保存/删除后自动回到模板库列表，能看到变化。                           */
 /* 持久化在 localStorage（pi-web-ui:prompt-templates）。                  */
-/* 灵感来自 https://www.aihero.dev/skills（Matt Pocock 的工程纪律技能）：  */
-/* 需求澄清 → 拆解计划 → TDD → 排错 → 架构 → 代码审查。                    */
+/* 内置模板是训推引擎组推理 workflow 的启动提示词（见 BUILTIN_DEFS）。      */
 /* ------------------------------------------------------------------ */
 
 interface Template {
@@ -45,200 +44,81 @@ interface StoredTemplate {
 	hidden?: boolean;
 }
 
-type I18nKey = Parameters<Translate>[0];
-
 interface BuiltinDef {
 	id: string;
 	icon: string;
-	titleKey: I18nKey;
-	descKey: I18nKey;
-	promptKey: I18nKey;
+	title: string;
+	desc: string;
+	prompt: string;
 }
 
-/** 内置模板：覆盖 https://www.aihero.dev/skills 的全部 25 个 skill ——
- *  做真实工程而非「氛围编程」的常用工作流。每个模板是一段可复用的复杂
- *  提示词，模拟对应 skill 的流程（点卡片填入输入框，✏️ 可编辑/删除）。 */
+/** 内置模板：训推引擎组推理 workflow 的启动提示词（沉淀自 5 个 workflow skill 的 SKILL.md
+ *  与 Ku「AI Loop 异步化任务跟踪表」里的真实启动 prompt；task 级参数用 <尖括号> 占位，
+ *  发送前替换）。点卡片填入输入框，✏️ 可编辑/移出。 */
 const BUILTIN_DEFS: BuiltinDef[] = [
-	/* Getting Started */
 	{
-		id: "setup-matt-pocock-skills",
-		icon: "🛠",
-		titleKey: "tpl.sk.setup",
-		descKey: "tpl.sk.setup.desc",
-		promptKey: "tpl.sk.setup.prompt",
-	},
-	{
-		id: "ask-matt",
+		id: "inf-harness-start",
 		icon: "🧭",
-		titleKey: "tpl.sk.ask",
-		descKey: "tpl.sk.ask.desc",
-		promptKey: "tpl.sk.ask.prompt",
-	},
-	/* The Main Flow */
-	{
-		id: "grill-with-docs",
-		icon: "🗣",
-		titleKey: "tpl.sk.grilldocs",
-		descKey: "tpl.sk.grilldocs.desc",
-		promptKey: "tpl.sk.grilldocs.prompt",
+		title: "Harness 通用启动",
+		desc: "infer-forge-harness 通用 AI Loop：先读规范、复用原子任务、每步 verify、留证据",
+		prompt:
+			"使用 inference-harness skill 启动一次推理服务 AI Loop。先用 icode 拉取 baidu/hac-aiacc/infer-forge-harness 并进入仓库，按顺序先读 AGENTS.md、目标 workflow 定义、task 合约、tasks/REGISTRY.yaml、catalog/tool_catalog.yaml、SKILL.md 与 validator，再动手。明确本次 workflow 与目标模型（如 deepseek-v4.1-flash）。优先复用 REGISTRY 已有原子任务，没有合适的才新增、新增后更新 REGISTRY 并重新生成 CATALOG。每步都要有明确 verify，以 validator 判定为准（返回码/PASS 字样/manifest 都不算通过）。每步产出 run id、artifact root、节点状态、validator 结论、Journal 路径、证据路径，并与 baseline 对比。失败保留原始证据，不打补丁绕过、不静默重试。安全红线：删除实例/资源、缩减副本、杀进程、改端口拓扑/MODEL_ID/配置等高危操作一律先说明理由并等确认；只操作自己的 Pod，共享/线上实例变更必须人工确认。",
 	},
 	{
-		id: "to-spec",
-		icon: "📝",
-		titleKey: "tpl.sk.tospec",
-		descKey: "tpl.sk.tospec.desc",
-		promptKey: "tpl.sk.tospec.prompt",
+		id: "inf-prefill",
+		icon: "⚡",
+		title: "Prefill 性能优化",
+		desc: "sglang prefill/ttft 的 5 步 loop（base→profile→subagent→回归→循环）",
+		prompt:
+			"本项目是推理服务的 harness，里面有定义了 prefill 性能优化的工作流 prefill-optimization。请先进入本地 harness 代码库，再帮我运行这个工作流来优化 <目标模型，如 Deepseek v4.1-Flash>。\n步骤：1) 建立 base——指定 sglang 服务镜像，通过 perf-test-graph-prefill 部署并测试典型数据长度（如 60K）下的 prefill 性能与 ttft，保存 logits 作为精度标准；2) 性能 profile——用 torch profile 或 nsys 抓相同数据 trace，从算子/引擎/显存维度挖掘可优化点；3) subagent 优化——每个可优化点起一个 subagent 拉分支优化，保证优化后 logits 与基准在容差内且问题解决，再合并回主分支；4) 回归测试——集成后跑基准数据集，对比性能与 logits、解决冲突、保证正确并输出结果；5) 回到 2→3→4 循环，默认 3 次或无新优化点为止。每个 task 都要有明确 verify。\n环境（按实际替换）：集群 kubeconfig=<kubeconfig 路径>，prefill 启动 yaml=<prefill yaml 路径>，已启动实例=<pod 名>（内含 sglang 代码与模型权重）。请开始整个工作流并做好完整记录与回顾。",
 	},
 	{
-		id: "to-tickets",
-		icon: "🎫",
-		titleKey: "tpl.sk.totickets",
-		descKey: "tpl.sk.totickets.desc",
-		promptKey: "tpl.sk.totickets.prompt",
+		id: "inf-cache-adapt",
+		icon: "🧩",
+		title: "Cache 适配（AttentionStore）",
+		desc: "新模型从零接入 AS-Cache，跑通 MLA / MLA+SWA / MLA+KDA",
+		prompt:
+			"本项目是推理服务的 harness，里面定义了 attention-store 适配的 workflow。请从头开始完整运行这个工作流，实现 <目标模型，如 ds v4.1-flash> 的 as-cache 适配，跑通 MLA、MLA+SWA、MLA+KDA，并支持自动组合适配与自动进化。\n环境（按实际替换）：集群 kubeconfig=<kubeconfig 路径>；未适配的 P 侧 yaml=<prefill yaml 路径>，owner=<owner>；相关代码路径：sglang_root=<aiak_sglang 路径>，sdk_root=<attentionstore/sdk 路径>，agent_root=<attentionstore/agent 路径，只读参考，用于确认接口与参数>。\n请开始整个工作流并做好完整记录与回顾（每步 run id / artifact root / validator 结论 / Journal / 证据路径）。",
 	},
 	{
-		id: "implement",
-		icon: "🏗",
-		titleKey: "tpl.sk.implement",
-		descKey: "tpl.sk.implement.desc",
-		promptKey: "tpl.sk.implement.prompt",
+		id: "inf-cache-loss",
+		icon: "📉",
+		title: "Cache 损耗优化",
+		desc: "80k/96% 命中下把 cache 损耗降到 20% 以内（bench_ascache 两阶段压测）",
+		prompt:
+			'帮我创建一个优化 cache 性能损耗的任务，目标：<输入长度，如 80k(81920)> 输入、<命中率，如 96%> 命中率场景下 cache 损耗达到 20% 以下。\ncache 损耗定义：开启 ASCache 场景 uncache itps 相对 disable-radix-cache 场景 uncache itps 缩减的比例（1 - ascache uncache itps / disable-radix-cache uncache itps）。损耗分计算损耗、间隙损耗（通常高优关注）、以及有 PP 时的 bubble 损耗。\n环境（按实际替换）：引擎 sglang 代码=<sglang 路径>，模型路径=<模型 tokenizer/权重路径>，可用 pod=<pod 名>，SDK=<attentionstore/sdk 路径>，启动脚本=<start.sh 路径>，无基线 ITPS=<基线值>。\n压测用自研 bench_ascache.py（两阶段：先充 cache 再实际发压，抓 nsys/profile 只抓实际发压阶段，据引擎日志 hit_rate 判断是否真命中）：\npython3 benchmark/bench_ascache.py --host 127.0.0.1 --port 8000 --total-len 81920 --target-hit-rates "0.96" --batch-size 64 --num-rounds 1 --tokenizer <模型路径> --output-file ascache_80k.json\n允许优化引擎源码、重启/杀引擎、改引擎配置与 SDK（仅限自己的测试实例；共享/线上实例一律停下确认）。trace 与 loop 证据输出目录自定。可参考引擎历史 cache 损耗留档与 harness cache 损耗优化 loop 里的提示词。',
 	},
 	{
-		id: "code-review",
-		icon: "🧹",
-		titleKey: "tpl.sk.codeview",
-		descKey: "tpl.sk.codeview.desc",
-		promptKey: "tpl.sk.codeview.prompt",
-	},
-	/* Shaping */
-	{
-		id: "wayfinder",
-		icon: "🗺",
-		titleKey: "tpl.sk.wayfinder",
-		descKey: "tpl.sk.wayfinder.desc",
-		promptKey: "tpl.sk.wayfinder.prompt",
+		id: "inf-hitrate",
+		icon: "🎯",
+		title: "Cache 命中率定位修复",
+		desc: "线上命中率下跌定位与修复，validator 判定、留完整证据链",
+		prompt:
+			"使用 cache-hitrate-debug skill 定位并修复线上 cache 命中率下跌问题，目标解决 9 成以上命中率下跌并支持自动迭代。复用 harness 原子任务（tasks/REGISTRY.yaml），没有合适的才新增、新增后更新 REGISTRY 并重新生成 CATALOG。用 bench_ascache.py 两阶段压测复现，用 nsys/torch profile 抓 trace，据引擎日志 hit_rate 判断是否真正命中 cache。定位与修复都要有明确 verify、以 validator 判定为准，保留完整证据链（run id / artifact root / Journal / 证据路径），失败不静默重试。环境（按实际替换）：模型=<目标模型>，集群/实例=<kubeconfig 与 pod>。",
 	},
 	{
-		id: "prototype",
-		icon: "🔬",
-		titleKey: "tpl.sk.prototype",
-		descKey: "tpl.sk.prototype.desc",
-		promptKey: "tpl.sk.prototype.prompt",
+		id: "inf-cudaipc",
+		icon: "🔗",
+		title: "AS-SDK CudaIPC 传输改造验证",
+		desc: "KVCache 传输 PosixSHM→CudaIPC(as-mover)，优化 Prefill 启动时间、不劣化精度/吞吐",
+		prompt:
+			"基于 infer-forge-harness 设计并执行一个验证工作流：attention-store-sdk 的 KVCache 传输从 PosixSHM 改为独立进程 as-mover 用 CudaIPC（共享显存）。核心目标是优化 Prefill 启动时间，同时保证功能、精度与 Cache 吞吐损耗不劣化。采用最小可用版本、分步推进，每步跟我确认后再进入下一步。\n工作方式：先读 AGENTS.md、目标 workflow、task 合约、SKILL.md 与 validator 再动手；优先复用 REGISTRY 原子任务。代码改动落在 Pod 内代码库（本地写→kubectl cp 进 Pod→Pod 内编译测试），改动通过 PYTHONPATH 注入不改镜像（AS_SDK_ROOT=<sdk 路径>，SGLANG_ROOT=<sglang 路径>）。先不提交代码，留给我 review。\n环境（按实际替换）：kubeconfig=<kubeconfig>，引擎版本=<版本>，线上配置（权威只读不 apply）=<线上 yaml>，线下测试配置=<线下 yaml>，专用实例=<prefill/decode pod>。\n阶段：0 环境证明+部署注册（端口与线上一致，引擎 HTTP_PORT=8000、PD router 30000）→1 Baseline（吞吐损耗 + Prefill 启动时间，bench_ascache.py 重复≥3 次）→2 as-mover 单测（先给方案我 review）→3 Prefill 单点（先起 as-mover 再起引擎，对比 baseline）→4 完整 PD 回归（迁到 Decode，千帆网关打通完整推理，功能+OpenCompass 精度回归）→5 压测（aiakperf 经网关，QPS 1.0）。\n每步交付：run id、artifact root、节点状态、validator 结论、Journal 路径、证据路径、与 baseline 对比（损耗% / Prefill 启动时间）。以 validator 判定为准，失败保留证据不静默重试。\n安全红线：删除实例/资源、缩副本一律停下由我执行（kubectl delete 与缩副本外其他 kubectl 已授权）；只操作自己的 Pod；不擅改端口/拓扑/MODEL_ID，一切以线上 yaml 为准、要改先确认。",
 	},
 	{
-		id: "research",
-		icon: "📚",
-		titleKey: "tpl.sk.research",
-		descKey: "tpl.sk.research.desc",
-		promptKey: "tpl.sk.research.prompt",
-	},
-	/* Upkeep */
-	{
-		id: "improve-codebase-architecture",
-		icon: "🏛",
-		titleKey: "tpl.sk.arch",
-		descKey: "tpl.sk.arch.desc",
-		promptKey: "tpl.sk.arch.prompt",
-	},
-	{
-		id: "diagnosing-bugs",
-		icon: "🐛",
-		titleKey: "tpl.sk.debug",
-		descKey: "tpl.sk.debug.desc",
-		promptKey: "tpl.sk.debug.prompt",
-	},
-	{
-		id: "resolving-merge-conflicts",
-		icon: "🔀",
-		titleKey: "tpl.sk.merge",
-		descKey: "tpl.sk.merge.desc",
-		promptKey: "tpl.sk.merge.prompt",
-	},
-	{
-		id: "triage",
-		icon: "🗂",
-		titleKey: "tpl.sk.triage",
-		descKey: "tpl.sk.triage.desc",
-		promptKey: "tpl.sk.triage.prompt",
-	},
-	{
-		id: "wizard",
-		icon: "✨",
-		titleKey: "tpl.sk.wizard",
-		descKey: "tpl.sk.wizard.desc",
-		promptKey: "tpl.sk.wizard.prompt",
-	},
-	/* Productivity */
-	{
-		id: "grill-me",
-		icon: "🔍",
-		titleKey: "tpl.sk.grillme",
-		descKey: "tpl.sk.grillme.desc",
-		promptKey: "tpl.sk.grillme.prompt",
-	},
-	{
-		id: "handoff",
-		icon: "🤝",
-		titleKey: "tpl.sk.handoff",
-		descKey: "tpl.sk.handoff.desc",
-		promptKey: "tpl.sk.handoff.prompt",
-	},
-	{
-		id: "to-questionnaire",
-		icon: "📋",
-		titleKey: "tpl.sk.questionnaire",
-		descKey: "tpl.sk.questionnaire.desc",
-		promptKey: "tpl.sk.questionnaire.prompt",
-	},
-	{
-		id: "teach",
-		icon: "🎓",
-		titleKey: "tpl.sk.teach",
-		descKey: "tpl.sk.teach.desc",
-		promptKey: "tpl.sk.teach.prompt",
-	},
-	{
-		id: "wait-what",
-		icon: "💬",
-		titleKey: "tpl.sk.ww",
-		descKey: "tpl.sk.ww.desc",
-		promptKey: "tpl.sk.ww.prompt",
-	},
-	{
-		id: "writing-for-agents",
-		icon: "📄",
-		titleKey: "tpl.sk.wfa",
-		descKey: "tpl.sk.wfa.desc",
-		promptKey: "tpl.sk.wfa.prompt",
-	},
-	/* Reference */
-	{
-		id: "codebase-design",
+		id: "inf-kvcache-nextgen",
 		icon: "🧱",
-		titleKey: "tpl.sk.codesign",
-		descKey: "tpl.sk.codesign.desc",
-		promptKey: "tpl.sk.codesign.prompt",
+		title: "下一代 KV Cache 架构（radix/allocator/overlap）",
+		desc: "harness 跑通 radix tree 拆分 / allocator 拆分 / cache 操作与 forward overlap",
+		prompt:
+			"基于 infer-forge-harness 推进下一代 KV Cache 架构改造，里程碑：1) 与方案对齐关键路径和实现；2) Harness 平台初步跑通流程；3) 基于 Harness 跑通业务结果——完成 radix tree 拆分并验收通过、完成 allocator 拆分并验收通过、完成 cache 操作与 forward 并行 overlap 并验收通过。\n工作方式：先读 AGENTS.md / 目标 workflow / task 合约 / SKILL.md / validator 再动手，优先复用 REGISTRY 原子任务，产物与 Journal 放仓库外，每步有明确 verify、以 validator 判定为准。环境（按实际替换）：kubeconfig=<kubeconfig>，实例=<pod>，代码路径=<sglang/sdk 路径>。每步产出 run id / artifact root / validator 结论 / Journal / 证据路径并与 baseline 对比。安全红线同 harness 总纲（高危操作先确认、只动自己的 Pod）。",
 	},
 	{
-		id: "domain-modeling",
-		icon: "🏷",
-		titleKey: "tpl.sk.domain",
-		descKey: "tpl.sk.domain.desc",
-		promptKey: "tpl.sk.domain.prompt",
-	},
-	{
-		id: "grilling",
-		icon: "🔥",
-		titleKey: "tpl.sk.grilling",
-		descKey: "tpl.sk.grilling.desc",
-		promptKey: "tpl.sk.grilling.prompt",
-	},
-	{
-		id: "tdd",
-		icon: "🧪",
-		titleKey: "tpl.sk.tdd",
-		descKey: "tpl.sk.tdd.desc",
-		promptKey: "tpl.sk.tdd.prompt",
+		id: "inf-runtime-loop",
+		icon: "🛡️",
+		title: "受控 Loop（validator 门禁 + 自动迭代）",
+		desc: "用运行时启动任务：validator 不通过自动带证据进入下一轮，通过才算完成，可断点续跑",
+		prompt:
+			"用 mini-harness 运行时启动一个受 validator 约束的任务（不要用普通对话硬跑）。\n\n调用 loop_start：\n- goal：<要达成的目标，写清可验证的完成条件>\n- validateCmd：<validator 命令，例如 python3 validate.py 或 infer-forge-harness 的 validate.py 路径>\n- harnessRoot：<可选，harness 仓库根目录>\n- maxRounds：<默认 5>\n\n然后 loop_plan 写出计划并直接修改工作区；完成每轮时调用 loop_done(summary)。\n规则：运行时会自动执行 validator；不通过会带着证据自动进入下一轮，直到通过或达到最大轮数。不要自行宣布完成，不要向用户提问，不要重复已完成的步骤。",
 	},
 ];
 
@@ -308,7 +188,6 @@ export function TemplateProvider({
 	/** 当前模型的 "provider/id" 复合键（模板编辑弹窗直接发送时记一次使用次数）。 */
 	currentModelId: string | null;
 }) {
-	const t = useT();
 	/** 持久化的自定义 / 内置覆盖 / 内置移出标记。 */
 	const [stored, setStored] = useState<StoredTemplate[]>(loadStored);
 	/** 模板库（选择器）弹窗是否打开。 */
@@ -345,9 +224,9 @@ export function TemplateProvider({
 			return {
 				id: d.id,
 				icon: o?.icon ?? d.icon,
-				title: o?.title ?? t(d.titleKey),
-				desc: o?.desc ?? t(d.descKey),
-				prompt: o?.prompt ?? t(d.promptKey),
+				title: o?.title ?? d.title,
+				desc: o?.desc ?? d.desc,
+				prompt: o?.prompt ?? d.prompt,
 				builtin: true,
 			};
 		});
@@ -361,7 +240,7 @@ export function TemplateProvider({
 				prompt: s.prompt ?? "",
 			}));
 		return [...builtins, ...extras];
-	}, [stored, t]);
+	}, [stored]);
 
 	const openPicker = useCallback(() => setPickerOpen(true), []);
 	const fill = useCallback((text: string) => {

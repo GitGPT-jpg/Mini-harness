@@ -1914,8 +1914,6 @@ export function App() {
 				uiOverflow={uiOverflow}
 				uiContextTopbar={uiSlots["contextmenu.topbar"]}
 				onUiAction={onUiAction}
-				zenMode={zenMode}
-				onToggleZenMode={toggleZenMode}
 				onViewChange={(v: ViewName) => {
 					// The terminal panel stays mounted while hidden. Create the first
 					// shell on the user's terminal-view click, not on initial mount.
@@ -2084,8 +2082,6 @@ export function App() {
 						onUiAction={onUiAction}
 						uiContextTopbar={uiSlots["contextmenu.topbar"]}
 						onThemeToggle={() => switchTheme(theme === "light" ? null : "light")}
-						zenMode={zenMode}
-						onToggleZenMode={toggleZenMode}
 					/>
 					<div className={`view-pane ${view === "chat" ? "" : "hidden"}`}>
 						{!isMobile && leftCollapsed && <PanelRail side="left" onClick={toggleLeft} />}
@@ -2670,8 +2666,6 @@ export function App() {
 						onUiAction={onUiAction}
 						uiContextTopbar={uiSlots["contextmenu.topbar"]}
 						onThemeToggle={() => switchTheme(theme === "light" ? null : "light")}
-						zenMode={zenMode}
-						onToggleZenMode={toggleZenMode}
 					/>
 				</div>
 			</TemplateProvider>

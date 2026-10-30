@@ -400,19 +400,29 @@ describe("TopBar「打开项目」入口（host:open-project）", () => {
 });
 
 describe("TopBar 溢出菜单里的 GitHub 行", () => {
-	it("图标 + GitHub 文字的 chip 行（与其他行同外观），完整仓库地址在 hover 提示里", () => {
+	it("Harness 发行版移除了上游 GitHub 外链：即便条目流里出现 host:github 也不渲染外链", () => {
 		setAppSend(() => true);
 		const { container } = mount("chat", [hostEntry("host:chat")], [hostEntry("host:github")]);
 		act(() => container.querySelector<HTMLButtonElement>(".plugin-topbar-more > button")!.click());
-		const link = document.querySelector<HTMLAnchorElement>(".plugin-topbar-menu > a.chip.github");
-		expect(link).toBeTruthy();
-		// 图标 + 文字（svg 不贡献文本，行内读出来就是 GitHub）
-		expect(link!.querySelector("svg")).toBeTruthy();
-		expect(link!.textContent?.trim()).toBe("GitHub");
-		expect(link!.title).toContain("xing-shuyin/pi-web-ui");
-		expect(link!.getAttribute("role")).toBe("menuitem");
-		// 与其它菜单项同为菜单的直接子节点（同一套外观规则命中）
-		expect(link!.parentElement?.classList.contains("plugin-topbar-menu")).toBe(true);
+		expect(document.querySelector("a.chip.github")).toBeNull();
+		expect(document.querySelector('a[href*="github.com"]')).toBeNull();
+	});
+});
+
+describe("TopBar 能力门控（Harness 发行版：sandboxes / ephemeralChat 默认关）", () => {
+	it("沙盒 / 临时对话条目在顶栏直流与「⋯」溢出菜单里都不渲染", () => {
+		setAppSend(() => true);
+		const { container } = mount(
+			"chat",
+			[hostEntry("host:chat"), hostEntry("host:new-sandbox"), hostEntry("host:new-ephemeral-chat")],
+			[hostEntry("host:new-sandbox", true), hostEntry("host:new-ephemeral-chat", true)],
+		);
+		expect(container.querySelector(".topbar-flow .sandbox-chip")).toBeNull();
+		expect(container.querySelector(".topbar-flow .ephemeral-chat-btn")).toBeNull();
+		act(() => container.querySelector<HTMLButtonElement>(".plugin-topbar-more > button")!.click());
+		const menuText = document.querySelector(".plugin-topbar-menu")?.textContent ?? "";
+		expect(menuText).not.toContain("host:new-sandbox");
+		expect(menuText).not.toContain("host:new-ephemeral-chat");
 	});
 });
 

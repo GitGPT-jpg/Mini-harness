@@ -1026,7 +1026,7 @@ export const LeftPanel = memo(function LeftPanel({
 						toggleProjects,
 						projects.length,
 						<>
-							{onOpenSandboxModal && (
+							{onOpenSandboxModal && capabilities.sandboxes && (
 								<button
 									type="button"
 									className="lp-section-action lp-project-action lp-sandbox-action"

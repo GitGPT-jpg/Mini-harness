@@ -5,7 +5,6 @@ import {
 	FiCpu,
 	FiDatabase,
 	FiDownload,
-	FiFeather,
 	FiFolder,
 	FiFolderPlus,
 	FiGitBranch,
@@ -91,8 +90,6 @@ export interface BarItemProps {
 	isProjectPickerOpen?: boolean;
 	onUiAction?: (item: UiSlotEntry, value?: string) => void;
 	uiContextEntries?: UiSlotEntry[];
-	zenMode?: boolean;
-	onToggleZenMode?: () => void;
 	onOpenSandboxModal?: () => void;
 	dropdownProps?: {
 		theme?: string | null;
@@ -152,8 +149,6 @@ export function BarItem({
 	onUiAction,
 	uiContextEntries,
 	dropdownProps,
-	zenMode,
-	onToggleZenMode,
 	onOpenSandboxModal,
 }: BarItemProps) {
 	const t = useT();
@@ -926,14 +921,6 @@ export function BarItem({
 				badgeNode = <span className="bg-task-badge bar-item-badge">{chat.bgServers.length}</span>;
 			}
 			onClick = () => onOpenBgTasks?.();
-			break;
-		case "host:zen-mode":
-			iconNode = <FiFeather className="bar-item-icon" />;
-			labelText = named(t("zenMode"));
-			extraClasses = "chip chip-zen";
-			isActive = Boolean(zenMode);
-			tipOverride = t("zenModeTip");
-			onClick = () => onToggleZenMode?.();
 			break;
 		case "host:settings":
 			iconNode = <FiSettings className="bar-item-icon" />;

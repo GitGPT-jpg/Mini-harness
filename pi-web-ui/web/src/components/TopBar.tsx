@@ -4,11 +4,9 @@ import {
 	FiBox,
 	FiDownload,
 	FiEdit2,
-	FiFeather,
 	FiFolder,
 	FiFolderPlus,
 	FiGitBranch,
-	FiGithub,
 	FiGlobe,
 	FiMenu,
 	FiMessageSquare,
@@ -209,8 +207,6 @@ interface TopBarProps {
 	/** 打开「图标编辑」模式（直接拖图标改顶栏/底栏/侧边停靠栏的位置）。 */
 	onOpenIconEdit: () => void;
 	/** 极简沉浸模式状态与切换回调 */
-	zenMode?: boolean;
-	onToggleZenMode?: () => void;
 	/** 打开启动沙盒项目弹窗 */
 	onOpenSandboxModal?: () => void;
 }
@@ -235,8 +231,6 @@ export function TopBar({
 	onThemeChange,
 	reloadThemes,
 	onOpenIconEdit,
-	zenMode,
-	onToggleZenMode,
 	onOpenSandboxModal,
 }: TopBarProps) {
 	const { locale, setLocale, t, packs } = useI18n();
@@ -259,6 +253,10 @@ export function TopBar({
 	const isDsh = useIsDsh();
 	const capabilities = useEngineCapabilities();
 	const supportsEphemeral = Boolean(capabilities.ephemeralChat !== false && !isDsh);
+	/* 能力关闭的宿主入口（沙盒 / 临时对话）：顶栏直流与「⋯」溢出菜单都不画，
+	   被布局页隐藏或本断点放不下时也不会以扁平菜单行的形式漏回来。 */
+	const isCapabilityGatedOff = (id: string) =>
+		(id === "host:new-sandbox" && !capabilities.sandboxes) || (id === "host:new-ephemeral-chat" && !supportsEphemeral);
 	const cwdClickTimerRef = useRef<number | null>(null);
 	useEffect(() => {
 		return () => {
@@ -278,7 +276,7 @@ export function TopBar({
 	 *  品牌（host:brand）没有动作，进菜单会变成死按钮 —— 直接过滤（布局页仍可勾回来）。
 	 *  另外还有「本断点放不下」的条目，那是实测出来的（见下面的 fitTopbar），不在这里。 */
 	const pinnedOverflowItems = [...(uiOverflow ?? [])].filter(
-		(it) => !(it.source === "host" && it.id === "host:brand") && !isPluginViewItem(it),
+		(it) => !(it.source === "host" && (it.id === "host:brand" || isCapabilityGatedOff(it.id))) && !isPluginViewItem(it),
 	);
 	/** 已钉在顶栏上的插件 id：直接看槽位结果 —— 钉住 = 条目在 uiPrimary（非 hidden），
 	 *  没钉 = 条目在 uiOverflow（hidden）。合成条目（默认 hidden）与插件自声明的 __view
@@ -320,7 +318,6 @@ export function TopBar({
 		"host:search",
 		"host:browser",
 		"host:tasks",
-		"host:zen-mode",
 		"host:settings",
 		"host:language",
 		"host:theme",
@@ -392,9 +389,6 @@ export function TopBar({
 				return true;
 			case "host:tasks":
 				onOpenBgTasks();
-				return true;
-			case "host:zen-mode":
-				onToggleZenMode?.();
 				return true;
 			case "host:settings":
 				onOpenSettings();
@@ -1053,19 +1047,6 @@ export function TopBar({
 				{chat.bgServers.length > 0 && <span className="bg-task-badge">{chat.bgServers.length}</span>}
 			</button>
 		),
-		"host:zen-mode": (
-			<button
-				type="button"
-				className={`chip chip-zen${zenMode ? " active" : ""}`}
-				data-tip={t("zenModeTip")}
-				onClick={onToggleZenMode}
-				aria-label={t("zenMode")}
-				aria-pressed={zenMode}
-			>
-				<FiFeather />
-				<span className="chip-sub">{t("zenMode")}</span>
-			</button>
-		),
 		"host:settings": (
 			<button type="button" className="chip" data-tip={t("settingsTitle")} onClick={onOpenSettings}>
 				<FiSettings />
@@ -1222,17 +1203,6 @@ export function TopBar({
 				{renderAllUpdatesBody()}
 			</Dropdown>
 		),
-		"host:github": (
-			<a
-				className="chip github"
-				href="https://github.com/xing-shuyin/pi-web-ui"
-				target="_blank"
-				rel="noreferrer noopener"
-				data-tip={t("githubRepo")}
-			>
-				<FiGithub />
-			</a>
-		),
 		"host:conn": (
 			<span className="chip" data-tip={chat.status}>
 				<span className={`status-dot ${chat.status === "open" ? "ok" : "busy"}`} />
@@ -1370,7 +1340,7 @@ export function TopBar({
 	const flowItems: { id: string; entry: UiSlotEntry | null; node: ReactNode }[] = [];
 	for (const it of topEntries) {
 		if (it.entry?.hidden) continue; // uiPrimary 已滤过 hidden；这里只防脏数据（插件 arrange 会改）
-		if (isTabGatedOff(it.id)) continue;
+		if (isTabGatedOff(it.id) || isCapabilityGatedOff(it.id)) continue;
 		let node: ReactNode = null;
 		if (it.entry) {
 			node = (
@@ -1394,8 +1364,6 @@ export function TopBar({
 					isPluginMenuOpen={pluginMenuAnchor !== null}
 					onUiAction={onUiAction}
 					uiContextEntries={uiContextTopbar}
-					zenMode={zenMode}
-					onToggleZenMode={onToggleZenMode}
 					onOpenSandboxModal={onOpenSandboxModal}
 					dropdownProps={{
 						theme,
@@ -1599,25 +1567,6 @@ export function TopBar({
 							const asNode = it.source === "host" && OVERFLOW_AS_NODE_IDS.has(it.id) ? hostNodes[it.id] : undefined;
 							if (asNode !== undefined) {
 								return <Fragment key={it.id}>{asNode}</Fragment>;
-							}
-							// GitHub 在菜单里同样是 chip 行（图标 + 文字，与其他行同外观）：
-							// 顶栏本体是圆形图标按钮（.chip.github），这里另起一行保证有文字可读。
-							if (it.source === "host" && it.id === "host:github") {
-								return (
-									<a
-										key={it.id}
-										role="menuitem"
-										className="chip github"
-										href="https://github.com/xing-shuyin/pi-web-ui"
-										target="_blank"
-										rel="noreferrer noopener"
-										title={t("githubRepo")}
-										onClick={() => setTopbarMenuOpen(false)}
-									>
-										<FiGithub />
-										<span>GitHub</span>
-									</a>
-								);
 							}
 							// 折叠按钮保持折叠前样式（只统一宽度顶满菜单，不重绘成扁平行）：
 							// 宿主走 hostNodes（与顶栏同一套 chip/tab/panel-toggle），插件走通用渲染。

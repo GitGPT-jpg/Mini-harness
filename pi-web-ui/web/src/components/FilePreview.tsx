@@ -551,7 +551,9 @@ export function FilePreview({
 
 				{loading && !loaded && <div className="fp-empty">{t("loading")}</div>}
 
-				{!loading && kind === "none" && !isBinary && <div className="fp-empty">{t("previewNotSupported")}</div>}
+				{!loading && (kind === "none" || kind === "video" || kind === "audio") && !isBinary && (
+					<div className="fp-empty">{t("previewNotSupported")}</div>
+				)}
 
 				{!loading && kind === "image" && (
 					<div className="fp-media-wrap clickable" onClick={handleClose} title={t("clickToCloseImage")}>
@@ -562,29 +564,6 @@ export function FilePreview({
 							onClick={handleClose}
 							title={t("clickToCloseImage")}
 						/>
-					</div>
-				)}
-
-				{!loading && kind === "video" && (
-					<div className="fp-media-wrap">
-						<video className="fp-media" src={mediaUrl(file.path)} controls preload="metadata" />
-					</div>
-				)}
-
-				{!loading && kind === "audio" && (
-					<div className="fp-media-wrap fp-audio-wrap">
-						<div className="fp-audio-card">
-							<div className="fp-audio-icon" aria-hidden="true">
-								🎵
-							</div>
-							<div className="fp-audio-info">
-								<div className="fp-audio-name" title={file.name}>
-									{file.name}
-								</div>
-								{loaded?.size ? <div className="fp-audio-size">{formatSize(loaded.size)}</div> : null}
-							</div>
-							<audio className="fp-audio-element" src={mediaUrl(file.path)} controls autoPlay preload="metadata" />
-						</div>
 					</div>
 				)}
 
