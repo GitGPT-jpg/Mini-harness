@@ -58,7 +58,8 @@ Key 仅保存在本机 `~/.pi/agent/auth.json`，**不会提交到代码库，�
 
 - `setup.sh` — 可移植一键安装脚本
 - `pi-web-ui/` — 驾驶舱源码（pi-web-ui v0.111.0 裁剪定制版，定制清单见 `pi-web-ui/DELIVERABLES.md`）
-- `pi-web-cockpit/start-hardened.sh` — 启动脚本（跑 `pi-web-ui/dist`，口令 / 代理 / kubeconfig 环境）
+- `pi-web-cockpit/start-hardened.sh` — 启动脚本（跑 `pi-web-ui/dist`，口令 / 代理 / kubeconfig 环境；`PI_WEB_PORT` 可改端口）
+- `pi-web-cockpit/verify-cockpit.mjs` — 浏览器 E2E 验证（品牌 / 首次配置 / Loop / 任务台 / 集群 / 对话 / 终端 / Skills）
 - `pi-web-cockpit/config/models.oneapi.json` — One API 服务商与模型目录种子（无密钥）
 - `pi-web-cockpit/assets/brand-logo.png` — 左上角 logo（icon1111）
 - `pi-web-cockpit/assets/brand-favicon.png` — 页签 favicon（紫色 C）
@@ -92,7 +93,7 @@ bash build/package.sh
 ## 维护
 
 - 改完 `pi-web-ui/` 源码后：`cd pi-web-ui && npm run build`，再重启服务（或重跑 `./setup.sh`）。
-- 校验：`cd pi-web-ui && npm run typecheck && npx vitest run`。
+- 校验：`cd pi-web-ui && npm run typecheck && npx vitest run`；服务起来后 `node pi-web-cockpit/verify-cockpit.mjs`（对话一步会真实调用一次模型）。
 - 升级 pi 版本：改 `setup.sh` 顶部 `PI_PIN` 后重跑。
 
 ## 安全说明
