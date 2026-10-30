@@ -231,3 +231,18 @@ describe.skipIf(isWin)("models.json credential permissions", () => {
 		expect(modeOf(join(agentDir, "models.json"))).toBe(0o600);
 	});
 });
+
+describe("首装填 key 后给没模型的对话补模型", () => {
+	it("setProviderApiKey 在刷新模型列表后调用 adoptModelAfterKey(provider)", async () => {
+		const { host } = makeHost(agentDir);
+		const adopted: string[] = [];
+		const svc = new ModelAdminService({
+			...host,
+			adoptModelAfterKey: async (p: string) => {
+				adopted.push(p);
+			},
+		});
+		await svc.setProviderApiKey(" oneapi ", "sk-A");
+		expect(adopted).toEqual(["oneapi"]);
+	});
+});

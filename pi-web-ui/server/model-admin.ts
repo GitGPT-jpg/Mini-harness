@@ -38,6 +38,8 @@ export interface ModelAdminHost {
 	invalidatePiConfig?: () => void;
 	/** 变更后重推顶栏模型下拉。 */
 	pushModels: () => Promise<void>;
+	/** 新密钥生效后：当前对话若还没有模型（首装时会话建在填 key 之前），给它挑一个能用的。 */
+	adoptModelAfterKey?: (provider: string) => Promise<void>;
 	/** OAuth becomes authoritative, so project-scoped API-key choices must not restore over it. */
 	onOAuthActivated?: (provider: string) => void;
 }
@@ -652,6 +654,7 @@ export class ModelAdminService {
 				textEn: `✅ Saved key "${name}" for ${pid} and refreshed the model list`,
 			});
 			await this.host.pushModels();
+			await this.host.adoptModelAfterKey?.(pid);
 			await this.listProviders();
 			this.listProviderKeys();
 		} catch (err) {

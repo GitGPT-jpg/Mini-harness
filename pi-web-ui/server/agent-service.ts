@@ -2701,6 +2701,7 @@ export class ClientSession {
 				this.piCheckCache = null;
 			},
 			pushModels: async () => this.listModels(),
+			adoptModelAfterKey: (provider) => this.adoptModelAfterKey(provider),
 			onOAuthActivated: (provider) => this.stateStore.deleteProviderEverywhere(provider),
 		});
 		// mini-harness Loop 事件上报（server/loop/extension.ts 的全局单上报器）：
@@ -13731,6 +13732,28 @@ export class ClientSession {
 		} catch {
 			return "";
 		}
+	}
+
+	/** 首装：会话是在填 API Key 之前建的，SDK 当时没有可用模型 → session.model 为空，填完 key
+	 *  后这一页发的第一句话没人接（换个标签页才正常）。这里给还没模型的当前对话补一个：
+	 *  设置里的默认模型可用就用它，否则取刚配好的服务商的第一个可用模型。已有模型的对话不动。 */
+	private async adoptModelAfterKey(provider: string): Promise<void> {
+		let session: AgentSession;
+		try {
+			session = this.session;
+		} catch {
+			return;
+		}
+		if (!session || session.model) return;
+		const available = this.runtime.services.modelRuntime.getAvailableSnapshot();
+		const sm = session.settingsManager;
+		const defProvider = sm.getDefaultProvider();
+		const defModel = sm.getDefaultModel();
+		const pick =
+			available.find((m) => m.provider === defProvider && m.id === defModel) ??
+			available.find((m) => m.provider === provider) ??
+			available[0];
+		if (pick) await this.setModel(`${pick.provider}/${pick.id}`);
 	}
 
 	/** Switch to a specific model by "provider/id" (e.g. "anthropic/claude-sonnet-5").
