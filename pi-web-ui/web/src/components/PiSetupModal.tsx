@@ -5,6 +5,9 @@ import { useT } from "../i18n";
 import { appSend, useIsManaged } from "../app-globals";
 import { ProviderOAuthControls, type ProviderOAuthResultView } from "./ProviderOAuthControls";
 
+/** Team gateway provider id (Baidu One API), preselected in the setup dialog. */
+const PREFERRED_PROVIDER = "oneapi";
+
 interface PiSetupModalProps {
 	/** Fetched from the latest snapshot; true once auth.json has credentials. */
 	piConfigured: boolean;
@@ -58,10 +61,15 @@ export function PiSetupModal({
 		if (installResult) setInstalling(false);
 	}, [installResult]);
 
-	// Default to the first unconfigured provider once the list arrives.
+	// Default to the One API provider (setup.sh seeds it into ~/.pi/agent/models.json
+	// with its Base URL), else the first unconfigured provider once the list arrives.
 	useEffect(() => {
 		if (!provider && providers.length > 0) {
-			setProvider(providers.find((p) => !p.configured)?.id ?? providers[0].id);
+			setProvider(
+				providers.find((p) => p.id === PREFERRED_PROVIDER)?.id ??
+					providers.find((p) => !p.configured)?.id ??
+					providers[0].id,
+			);
 		}
 	}, [providers, provider]);
 

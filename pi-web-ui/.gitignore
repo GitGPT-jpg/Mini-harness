@@ -62,6 +62,9 @@ dev/wechat-shot*.png
 *.jpg
 *.jpeg
 !assets/**
+# 品牌图标（左上角 logo / PWA / 页签 favicon）是源码资产，必须入库
+!web/public/icons/*.png
+!web/public/favicon.png
 preview-*.html
 .tmp-verify-data/
 test-screenshots/

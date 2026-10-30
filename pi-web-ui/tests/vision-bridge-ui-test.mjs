@@ -187,7 +187,7 @@ async function run() {
 			const sections = [...document.querySelectorAll(".set-section")];
 			const sys = sections.find((el) => el.textContent.includes("系统提示词"));
 			const ta = sys?.querySelector(".set-prompt-input");
-			return ta instanceof HTMLTextAreaElement && ta.value.includes("You are an expert coding assistant");
+			return ta instanceof HTMLTextAreaElement && ta.value.includes("inference-serving optimization agent");
 		},
 		{ timeout: 10000 },
 	);

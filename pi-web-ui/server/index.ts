@@ -935,6 +935,7 @@ if (existsSync(webDist)) {
 			p.startsWith("/assets/") ||
 			p.startsWith("/icons/") ||
 			p === "/favicon.svg" ||
+			p === "/favicon.png" ||
 			p === "/icon.ico" ||
 			p === "/manifest.webmanifest"
 		) {

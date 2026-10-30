@@ -1,6 +1,6 @@
 {
-	"name": "pi-web-ui — pi coding agent",
-	"short_name": "pi-web-ui",
+	"name": "训推引擎组 Harness",
+	"short_name": "训推引擎组 Harness",
 	"description": "The polished browser cockpit for the pi coding agent. Stream conversations, inspect tool calls, manage files and run your workspace.",
 	"start_url": "./",
 	"scope": "./",

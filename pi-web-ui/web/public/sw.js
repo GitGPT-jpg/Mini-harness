@@ -122,6 +122,7 @@ self.addEventListener("fetch", (event) => {
 		(path.startsWith("/assets/") ||
 			path.startsWith("/icons/") ||
 			path === "/favicon.svg" ||
+			path === "/favicon.png" ||
 			path === "/icon.ico" ||
 			path === "/manifest.webmanifest");
 

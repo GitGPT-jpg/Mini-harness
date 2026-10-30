@@ -910,12 +910,12 @@ export function TopBar({
 				<img
 					className="brand-logo"
 					src={appUrl("/icons/icon-192.png")}
-					alt="pi-web-ui"
+					alt="训推引擎组 Harness"
 					width={26}
 					height={26}
 					draggable={false}
 				/>
-				<span className="brand-name">pi-web-ui</span>
+				<span className="brand-name">训推引擎组 Harness</span>
 			</span>
 		),
 		// 打开项目：切整个工作区（set_cwd），与视图无关 —— 终端 / Git / 插件视图里同样常驻可点。

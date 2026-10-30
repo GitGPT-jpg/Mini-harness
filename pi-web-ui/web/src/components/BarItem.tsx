@@ -388,12 +388,12 @@ export function BarItem({
 				<img
 					className="brand-logo bar-item-brand-logo bar-item-icon"
 					src={appUrl("/icons/icon-192.png")}
-					alt="pi-web-ui"
+					alt="训推引擎组 Harness"
 					width={26}
 					height={26}
 					draggable={false}
 				/>
-				<span className="brand-name bar-item-text">{named("pi-web-ui")}</span>
+				<span className="brand-name bar-item-text">{named("训推引擎组 Harness")}</span>
 			</span>
 		);
 	}

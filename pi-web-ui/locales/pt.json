@@ -2232,7 +2232,6 @@
 		"prompt.skills.intro.specialized": "As seguintes habilidades fornecem instruções especializadas para tarefas específicas.",
 		"prompt.skills.intro.use.read": "Use a ferramenta de leitura (read) para carregar um arquivo de habilidade quando a tarefa corresponder à sua descrição.",
 		"prompt.skills.intro.use.skill": "Quando a tarefa corresponder à descrição de uma habilidade, use a ferramenta skill para carregar o texto completo dela pelo nome.",
-		"prompt.soul": "Você é um assistente de codificação especializado operando dentro do pi, um harness de agente de codificação. Você ajuda usuários lendo arquivos, executando comandos, editando código e escrevendo novos arquivos.",
 		"prompt.tools.lazy": "Algumas ferramentas acima ainda NÃO têm o esquema de parâmetros anexado. Antes de chamar alguma, passe o nome dela para `load_tools` para anexar o esquema completo pelo resto desta conversa. O que não estiver na sua lista de funções precisa ser carregado primeiro.",
 		"read.dir.header": "[Diretório: {path}]",
 		"sched.action.missing": "A ferramenta schedule exige o parâmetro action (um de: create, list, cancel).",

@@ -17,7 +17,7 @@ const STORAGE_KEY = "pi-web-ui:lang";
 
 export const zh = {
 	/* common */
-	docTitle: "pi-web-ui — pi 编码智能体",
+	docTitle: "训推引擎组 Harness",
 	cancel: "取消",
 	ok: "确定",
 	save: "保存",
@@ -712,9 +712,9 @@ export const zh = {
 	settingsNotifyTab: "通知",
 
 	/* pi setup modal */
-	setupTitle: "未检测到 pi agent 配置",
+	setupTitle: "训推引擎组 Harness · 首次配置",
 	setupDesc:
-		"pi-web-ui 需要 pi 的配置目录（~/.pi/agent）和至少一个 API 密钥才能运行智能体。pi 内置了 openai、anthropic、deepseek 等服务商——选一个填密钥即可，全程无需打开终端。",
+		"使用前只需填入你自己的 One API Key：服务商已默认选中 Baidu One API（oneapi），Base URL 已预填为 https://oneapi-comate.baidu-int.com/v1，无需修改。Key 仅保存在本机，不会提交到代码库，也不会外传。",
 	installFailed: "✖ pi agent 安装失败：",
 	retryInstall: "重试安装",
 	skip: "跳过",
@@ -2195,7 +2195,7 @@ export const zh = {
 
 export const en: Record<keyof typeof zh, string> = {
 	/* common */
-	docTitle: "pi-web-ui — pi coding agent",
+	docTitle: "训推引擎组 Harness",
 	cancel: "Cancel",
 	ok: "OK",
 	save: "Save",
@@ -2913,9 +2913,9 @@ export const en: Record<keyof typeof zh, string> = {
 	settingsNotifyTab: "Notifications",
 
 	/* pi setup modal */
-	setupTitle: "pi agent config not detected",
+	setupTitle: "Harness · First-time setup",
 	setupDesc:
-		"pi-web-ui needs pi's config directory (~/.pi/agent) and at least one API key to run the agent. pi has built-in providers such as openai, anthropic, and deepseek — just pick one and enter a key, no terminal needed.",
+		"Just enter your own One API key: the Baidu One API provider (oneapi) is preselected and its Base URL is prefilled as https://oneapi-comate.baidu-int.com/v1, no change needed. The key stays on this machine; it is never committed or sent elsewhere.",
 	installFailed: "✖ pi agent installation failed:",
 	retryInstall: "Retry install",
 	skip: "Skip",
