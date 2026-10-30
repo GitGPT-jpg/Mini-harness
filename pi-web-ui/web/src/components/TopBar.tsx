@@ -371,9 +371,6 @@ export function TopBar({
 			case "host:history":
 				onOpenPanel("left");
 				return true;
-			case "host:files":
-				onOpenPanel("right");
-				return true;
 			case "host:new-chat":
 				onViewChange("chat");
 				appSend({ type: "new_chat" });
@@ -949,23 +946,6 @@ export function TopBar({
 					onClick={() => onOpenPanel("left")}
 				>
 					<FiMenu />
-				</button>
-			) : null,
-		"host:files":
-			view === "chat" && tabOn("files") ? (
-				// 桌面与手机同一节点（带文字）：文字显隐统一走顶栏文字总开关
-				// （.topbar.no-labels），不再有手机端独立的纯图标分支；手机端钉在
-				// ⋯ 右边最右（见 mobileAsideItems），放不下由实测溢出接管。
-				<button
-					type="button"
-					className="panel-toggle has-label"
-					data-tip={t("openFiles")}
-					// 文字总开关关掉后 span 会 display:none，可访问名称不能只靠可见文字。
-					aria-label={t("openFiles")}
-					onClick={() => onOpenPanel("right")}
-				>
-					<FiFolder />
-					<span>{t("openFiles")}</span>
 				</button>
 			) : null,
 		"host:new-chat": tabOn("new-chat") ? (

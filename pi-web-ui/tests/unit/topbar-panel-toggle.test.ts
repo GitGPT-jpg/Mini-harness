@@ -188,21 +188,12 @@ describe("TopBar 是单一扁直流（无按种类包裹的容器、无贴边例
 		expect(kids[3].classList.contains("tb-spacer")).toBe(true);
 	});
 
-	it("☰/📁 不再是贴边例外：位置只由 slot 顺序决定，点击仍开对侧抽屉", () => {
-		// files 排在 chat 之前 → 它就是第一个条目（旧版无论如何都钉在顶栏最右）
-		const { container, opened } = mount("chat", [
-			hostEntry("host:files"),
-			hostEntry("host:chat"),
-			hostEntry("host:history"),
-		]);
+	it("☰ 不再是贴边例外：位置只由 slot 顺序决定，点击开左抽屉", () => {
+		const { container, opened } = mount("chat", [hostEntry("host:chat"), hostEntry("host:history")]);
 		const items = flowItems(container);
-		expect(items[0].classList.contains("panel-toggle")).toBe(true);
-		act(() => (items[0] as HTMLButtonElement).click());
-		expect(opened).toEqual(["right"]);
-		const last = items[items.length - 1] as HTMLButtonElement;
-		expect(last.classList.contains("panel-toggle")).toBe(true);
-		act(() => last.click());
-		expect(opened).toEqual(["right", "left"]);
+		expect(items[items.length - 1].classList.contains("panel-toggle")).toBe(true);
+		act(() => (items[items.length - 1] as HTMLButtonElement).click());
+		expect(opened).toEqual(["left"]);
 	});
 
 	it("align 对 ☰ 同样生效（不再被贴边规则吃掉）", () => {
@@ -218,10 +209,8 @@ describe("TopBar 是单一扁直流（无按种类包裹的容器、无贴边例
 			settings: { uiLayout: { topbarText: false } },
 		});
 		expect(container.querySelector("header.topbar.no-labels")).toBeTruthy();
-		// 文字节点仍在 DOM（藏是 CSS 的事）；📁 按钮带文字 span（不再有纯图标分支）。
+		// 文字节点仍在 DOM（藏是 CSS 的事）。
 		expect(container.querySelector(".brand-name")).toBeTruthy();
-		const files = container.querySelector(".topbar-flow .panel-toggle.has-label");
-		expect(files?.querySelector("span")).toBeTruthy();
 	});
 
 	it("用 emoji 当图标的顶栏按钮带 .chip-emoji（免被「只显示图标」的 span 隐藏规则误杀）", () => {
@@ -284,21 +273,18 @@ describe("TopBar 是单一扁直流（无按种类包裹的容器、无贴边例
 });
 
 describe("TopBar 面板抽屉按钮的视图门禁", () => {
-	it("chat 视图：保留左右两个按钮，点击按对应侧打开抽屉", () => {
+	it("chat 视图：保留左抽屉按钮，点击打开左栏", () => {
 		const { container, opened } = mount("chat");
 		const toggles = Array.from(container.querySelectorAll<HTMLButtonElement>("button.panel-toggle"));
-		expect(toggles.length).toBe(2);
+		expect(toggles.length).toBe(1);
 		// 可访问名称 = aria-label / title / 可见文字（顶栏直流内用 data-tip 即时气泡，
 		// 不用原生 title，文案随语言包变，只验证「有名字且两键不同」）。
 		const accName = (b: HTMLButtonElement) => b.getAttribute("aria-label") || b.title || (b.textContent ?? "").trim();
 		expect(accName(toggles[0])).toBeTruthy();
-		expect(accName(toggles[1])).toBeTruthy();
-		expect(accName(toggles[1])).not.toBe(accName(toggles[0]));
 		// 纯图标的 ☰ 按钮没有可见文字：名字必须挂在 aria-label 上，否则读屏器无名。
 		expect(toggles[0].getAttribute("aria-label")).toBeTruthy();
 		act(() => toggles[0].click());
-		act(() => toggles[1].click());
-		expect(opened).toEqual(["left", "right"]);
+		expect(opened).toEqual(["left"]);
 	});
 
 	// 这三个视图里抽屉节点都是 display:none 的（App.tsx 的 .view-pane.hidden）→
@@ -314,18 +300,14 @@ describe("TopBar 面板抽屉按钮的视图门禁", () => {
 	// 布局页/插件 arrange 把内置入口藏了 → 主栏按钮消失，但它必须能从「⋯」溢出菜单点回来
 	// （issue #146：隐藏 ≠ 失去入口；否则用户一旦手滑藏了就会得到一个点了没反应的按钮，
 	//  这与设置面板「界面布局」页的承诺不符）。
-	it("隐藏 host:files / host:history 时不渲染对应按钮", () => {
+	it("隐藏 host:history 时不渲染对应按钮", () => {
 		const { container, opened } = mount("chat", [hostEntry("host:chat", false)]);
 		expect(container.querySelectorAll("button.panel-toggle").length).toBe(0);
 		expect(opened).toEqual([]);
 	});
 
 	it("隐藏的内置入口出现在溢出菜单里，点它仍能打开对应面板", () => {
-		const { container, opened } = mount(
-			"chat",
-			[hostEntry("host:chat")],
-			[hostEntry("host:files"), hostEntry("host:history")],
-		);
+		const { container, opened } = mount("chat", [hostEntry("host:chat")], [hostEntry("host:history")]);
 		const more = container.querySelector<HTMLButtonElement>(".plugin-topbar-more > button");
 		expect(more).toBeTruthy();
 		act(() => more!.click());
@@ -340,18 +322,9 @@ describe("TopBar 面板抽屉按钮的视图门禁", () => {
 				".plugin-topbar-menu .plugin-topbar-menu-keep > button.panel-toggle",
 			),
 		);
-		expect(items.length).toBe(2);
+		expect(items.length).toBe(1);
 		act(() => items[0]!.click());
-		expect(opened).toEqual(["right"]);
-		// 菜单点完即关；再开一次点另一条 → 打开左栏
-		act(() => more!.click());
-		const items2 = Array.from(
-			document.querySelectorAll<HTMLButtonElement>(
-				".plugin-topbar-menu .plugin-topbar-menu-keep > button.panel-toggle",
-			),
-		);
-		act(() => items2[1]!.click());
-		expect(opened).toEqual(["right", "left"]);
+		expect(opened).toEqual(["left"]);
 	});
 });
 

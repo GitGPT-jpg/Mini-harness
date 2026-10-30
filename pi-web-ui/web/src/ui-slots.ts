@@ -328,17 +328,6 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 	},
 
 	{
-		id: "host:files",
-		slot: "topbar.primary",
-		labelKey: "openFiles",
-		icon: "folder",
-		kind: "action",
-		order: 97,
-		group: "panels",
-		// 缺省落右区之尾（end）：手机端 📁 是顶栏最右一个按钮（⋯ 之前）。
-		align: "end",
-	},
-	{
 		id: "host:new-chat",
 		slot: "topbar.primary",
 		labelKey: "newChat",
@@ -849,17 +838,6 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		order: 30,
 	},
 
-	// ---- 右栏 tab（今天只有文件树） ----
-	{
-		id: "host:right-files",
-		slot: "rightpanel.tabs",
-		labelKey: "openFiles",
-		icon: "folder",
-		kind: "view",
-		view: "files",
-		order: 10,
-	},
-
 	// ---- 左栏会话右键菜单 ----
 	// 重命名：运行中对话行（rename_conversation）与历史行（rename_session）都有；
 	// 区域空白处与「另一处」行隐藏。点后由 LeftPanel 切出该行内嵌的重命名输入框
@@ -1341,10 +1319,10 @@ export const PLUGIN_VIEW_ITEM_ID = "__view";
 /** 宿主必须常驻顶栏的入口：不能被插件 arrange 或用户布局偏好隐藏。
  *  - host:settings：用户找回其它入口与布局的最后通道；
  *  - host:history / host:files：手机端左侧历史与右侧文件抽屉的唯一入口，不能被隐藏。 */
-export const REQUIRED_TOPBAR_ITEM_IDS: ReadonlySet<string> = new Set(["host:settings", "host:history", "host:files"]);
+export const REQUIRED_TOPBAR_ITEM_IDS: ReadonlySet<string> = new Set(["host:settings", "host:history"]);
 
 /** 不在设置「界面布局」页中供用户管理的顶栏入口（手机端两侧列表唯一入口，直接去掉其设置）。 */
-export const HIDDEN_FROM_LAYOUT_ITEM_IDS: ReadonlySet<string> = new Set(["host:history", "host:files"]);
+export const HIDDEN_FROM_LAYOUT_ITEM_IDS: ReadonlySet<string> = new Set(["host:history"]);
 
 /** 某个插件的视图条目全局 id（`<pluginId>:__view`）—— 顶栏与布局偏好的 key。 */
 export function pluginViewItemId(pluginId: string): string {

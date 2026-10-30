@@ -166,7 +166,6 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			"host:new-chat",
 			"host:new-ephemeral-chat",
 			"host:new-sandbox",
-			"host:files",
 			// order 200：尾部条目 = 实测溢出的第一顺位被收起者（见 BUILTIN_UI_ITEMS 注释）
 		]);
 		expect(ids(slots.bottombar)).toEqual([
@@ -234,7 +233,6 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			"host:new-chat",
 			"host:new-ephemeral-chat",
 			"host:new-sandbox",
-			"host:files",
 		]);
 		// 缺省收起是「内置默认」，不写成用户覆盖 —— 否则布局页会把它们标成「已自定义」，
 		// 「恢复」按钮还会把它们恢复成同一个值
@@ -281,7 +279,6 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 
 	it("kind=view 的条目带 view 目标（宿主据此切视图）", () => {
 		const slots = build([]);
-		expect(slots["rightpanel.tabs"].map((e) => [e.id, e.view])).toEqual([["host:right-files", "files"]]);
 	});
 
 	it("同 order 时保持声明顺序（稳定排序）", () => {
@@ -484,24 +481,19 @@ describe("buildUiSlots / 第 3 层：插件 arrange", () => {
 		expect(settings?.slot).toBe("topbar.primary");
 	});
 
-	it("手机端抽屉入口（host:history / host:files）不能被插件或偏好移走或隐藏", () => {
+	it("手机端抽屉入口（host:history）不能被插件或偏好移走或隐藏", () => {
 		const p = plugin("p", {
 			items: [],
-			arrange: [
-				{ id: "host:history", slot: "topbar.overflow", hide: true },
-				{ id: "host:files", slot: "topbar.overflow", hide: true },
-			],
+			arrange: [{ id: "host:history", slot: "topbar.overflow", hide: true }],
 		});
-		const slots = build([p], { layout: { hidden: ["host:history", "host:files"] } });
-		for (const id of ["host:history", "host:files"]) {
-			const entry = slots["topbar.primary"].find((e) => e.id === id);
-			expect(entry?.hidden).toBe(false);
-			expect(entry?.slot).toBe("topbar.primary");
-		}
+		const slots = build([p], { layout: { hidden: ["host:history"] } });
+		const entry = slots["topbar.primary"].find((e) => e.id === "host:history");
+		expect(entry?.hidden).toBe(false);
+		expect(entry?.slot).toBe("topbar.primary");
 	});
 
 	it("HIDDEN_FROM_LAYOUT_ITEM_IDS 锁定手机端抽屉按钮不进入布局设置", () => {
-		expect([...HIDDEN_FROM_LAYOUT_ITEM_IDS].sort()).toEqual(["host:files", "host:history"]);
+		expect([...HIDDEN_FROM_LAYOUT_ITEM_IDS].sort()).toEqual(["host:history"]);
 	});
 
 	it("undefined 的字段 = 不动（hide 缺省不会把条目藏起来）", () => {
