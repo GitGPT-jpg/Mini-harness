@@ -225,16 +225,15 @@ export function applyUiSlotCardinality<T extends { id: string; hidden: boolean }
  *                    工作中这几条另带运行时条件，条件不满足时连分隔符一起不画。
  *   message.actions  web/src/components/Message.tsx 的 `.msg-actions`（编辑重问）与
  *                    卡片内复制按钮（复制消息）。
- *   rightpanel.tabs  web/src/components/RightPanel.tsx：今天只有文件树一个 tab
- *                    （tab 列表按本表顺序渲染：隐藏 / 调序都生效）。
+ *   rightpanel.tabs  已无宿主渲染层（右栏已删除），只为插件 manifest 兼容保留槽位定义。
  *   contextmenu.session  LeftPanel.tsx 的 `.ctx-menu`：重命名 / 关闭已结束子代理 / 强行关闭对话。
  *   leftpanel.projects.actions / leftpanel.running.actions / leftpanel.history.actions  左栏三个分区
  *                    标题栏的纯插件按钮位（追加在宿主自带按钮之后；无条目不渲染）。
  *   leftpanel.project  左栏项目行内嵌区（项目名旁的徽标 / 快捷按钮；target=项目路径）。
  *   contextmenu.project  左栏项目行右键菜单（target.kind="project"，id=项目路径）；
  *                    无可见条目时不抢浏览器右键。纯插件位，无宿主内置条目。
- *   contextmenu.file     RightPanel.tsx 的 `.ctx-menu`：上传到文件夹 / 以项目打开 /
- *                    添加为工作区根（宿主侧多根，见 protocol 的 set_workspace_roots）。
+ *   contextmenu.file     文件右键菜单：右栏文件树已删除，现在只由插件经宿主 API
+ *                    `openFileContextMenu` 打开（App.tsx 负责分派宿主条目）。
  *   contextmenu.message 与 contextmenu.topbar：右键菜单（Message.tsx 整条消息右键 /
  *                    TopBar.tsx 顶栏条目右键，经 ContextMenu.tsx 渲染；无插件贡献时只画宿主项）。
  *   contextmenu.toolcall 工具调用卡片的**工具名**右键菜单（ToolCallBlock.tsx 的卡头：
@@ -379,20 +378,6 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		kind: "view",
 		view: "terminal",
 		order: 21,
-		group: "views",
-		align: "end",
-	},
-	// 插件面板（Chrome 扩展图标那个位置）：一个 🧩 入口列出全部已装插件，每行带「钉到顶栏」
-	// 开关。插件视图 tab 默认不钉（合成条目 hidden，见 withPluginViewItems），钉住的才回到
-	// 这里当 tab（order 23，紧跟本条目之前）。图标用 emoji 而不是词表名：词表名会被布局页
-	// 原样当文字画出来（见 ui-slots 末尾的图标词表注释）。
-	{
-		id: "host:plugins",
-		slot: "topbar.primary",
-		labelKey: "pluginMenuTitle",
-		icon: "🧩",
-		kind: "action",
-		order: 24,
 		group: "views",
 		align: "end",
 	},
@@ -953,7 +938,7 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		order: 50,
 	},
 
-	// ---- 文件树右键菜单（contextmenu.file，渲染与分派见 RightPanel.tsx）----
+	// ---- 文件右键菜单（contextmenu.file，插件经 openFileContextMenu 打开，分派见 App.tsx）----
 	// 按 group 分段：open（打开类）/ new（新建类，目录行与空白处）/ chat（发对话）/
 	// edit（改名/副本/剪切）/ clipboard（复制路径等文本类）/ danger（删除）。
 	// 哪些 kind（file/dir/list）可见由 RightPanel 按 target.kind 置 hidden ——
@@ -1329,7 +1314,7 @@ export const PLUGIN_VIEW_ITEM_ID = "__view";
 
 /** 宿主必须常驻顶栏的入口：不能被插件 arrange 或用户布局偏好隐藏。
  *  - host:settings：用户找回其它入口与布局的最后通道；
- *  - host:history / host:files：手机端左侧历史与右侧文件抽屉的唯一入口，不能被隐藏。 */
+ *  - host:history：手机端左侧历史抽屉的唯一入口，不能被隐藏。 */
 export const REQUIRED_TOPBAR_ITEM_IDS: ReadonlySet<string> = new Set(["host:settings", "host:history"]);
 
 /** 不在设置「界面布局」页中供用户管理的顶栏入口（手机端两侧列表唯一入口，直接去掉其设置）。 */
@@ -1730,7 +1715,7 @@ function sortEntries(entries: WorkingEntry[], rank: RankMap): WorkingEntry[] {
 	});
 }
 
-/** 顶栏的插件视图区段：未被用户显式自定义排序的固定插件默认从 Git 后开始排。
+/** 顶栏的插件视图区段：未被用户显式自定义排序的固定插件默认紧跟在视图 tab（终端 / 对话）后面。
  *  如果用户已经在布局偏好（layout.order）中显式对该视图排过序，则严格遵循用户的排序位置。 */
 function placeTopbarPluginViews(entries: WorkingEntry[], rank: RankMap): WorkingEntry[] {
 	const unrankedViews = entries.filter((entry) => isPluginViewItem(entry) && !rank.has(entry.id));
@@ -1740,10 +1725,7 @@ function placeTopbarPluginViews(entries: WorkingEntry[], rank: RankMap): Working
 		["host:terminal", "host:chat"]
 			.map((id) => rest.findIndex((entry) => entry.id === id))
 			.find((index) => index >= 0) ?? -1;
-	const panel = rest.findIndex((entry) => entry.id === "host:plugins");
-	let insertAt = anchor + 1;
-	if (panel >= insertAt) insertAt = panel;
-	insertAt = Math.max(0, Math.min(insertAt, rest.length));
+	const insertAt = Math.max(0, Math.min(anchor + 1, rest.length));
 	return [...rest.slice(0, insertAt), ...unrankedViews, ...rest.slice(insertAt)];
 }
 

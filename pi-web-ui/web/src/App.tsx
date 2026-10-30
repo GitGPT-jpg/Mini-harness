@@ -11,7 +11,6 @@ import {
 } from "react";
 import { TopBar } from "./components/TopBar";
 import { LeftPanel } from "./components/LeftPanel";
-import { RightPanel } from "./components/RightPanel";
 import { MessageList } from "./components/MessageList";
 import { ChatInput } from "./components/ChatInput";
 import { GoalBar } from "./components/GoalBar";
@@ -80,7 +79,7 @@ import { ModelConfigModal } from "./components/ModelConfigModal";
 import { DirectoryBrowser } from "./components/DirectoryBrowser";
 import { ModelPickerModal } from "./components/ModelPickerModal";
 
-import { SettingsModal } from "./components/SettingsModal";
+import { SettingsModal, type SettingsTab } from "./components/SettingsModal";
 import { BgTasksModal } from "./components/BgTasksModal";
 import { PluginPage } from "./components/PluginPage";
 import { RollbackDialog } from "./components/RollbackDialog";
@@ -890,29 +889,16 @@ export function App() {
 		);
 		return () => installPluginHostApi(null);
 	}, [send]);
-	// 左右面板可拖拽宽度（桌面端）：localStorage 持久化，双击手柄复位。
+	// 左栏可拖拽宽度（桌面端）：localStorage 持久化，双击手柄复位。
 	const [leftWidth, setLeftWidth] = useState(() => readPanelWidth("left"));
-	const [rightWidth, setRightWidth] = useState(() => readPanelWidth("right"));
 	const resizeLeft = useCallback((w: number) => setLeftWidth(w), []);
-	const resizeRight = useCallback((w: number) => setRightWidth(w), []);
-	// 左右面板折叠状态（桌面端）：localStorage 持久化，点击面板内收起按钮折叠，
+	// 左栏折叠状态（桌面端）：localStorage 持久化，点击面板内收起按钮折叠，
 	// 靠边缘的展开条恢复；移动端抽屉不受影响（始终由顶栏按钮开关）。
 	const [leftCollapsed, setLeftCollapsed] = useState(() => readPanelCollapsed("left"));
-	const [rightCollapsed, setRightCollapsed] = useState(() => readPanelCollapsed("right"));
 	const toggleLeft = useCallback(() => {
 		setLeftCollapsed((v) => {
 			try {
 				localStorage.setItem(panelCollapsedKey("left"), v ? "0" : "1");
-			} catch {
-				/* storage 不可用（隐私模式等）：折叠照常，只是不持久化 */
-			}
-			return !v;
-		});
-	}, []);
-	const toggleRight = useCallback(() => {
-		setRightCollapsed((v) => {
-			try {
-				localStorage.setItem(panelCollapsedKey("right"), v ? "0" : "1");
 			} catch {
 				/* storage 不可用（隐私模式等）：折叠照常，只是不持久化 */
 			}
@@ -965,7 +951,7 @@ export function App() {
 	const [manageModelsOpen, setManageModelsOpen] = useState(false);
 	// Settings panel (system prompt / skills / extensions / presets).
 	const [settingsOpen, setSettingsOpen] = useState(false);
-	const [settingsInitialSection, setSettingsInitialSection] = useState<"plugins" | undefined>();
+	const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsTab | undefined>();
 	const [sandboxModalMode, setSandboxModalMode] = useState<"create" | "promote" | "apply" | null>(null);
 	// 插件请求目录授权时的确认（host.openSession，issue #146）——非模态 inline 面板。
 	const [pluginPathConfirm, setPluginPathConfirm] = useState<{ path: string; resolve: (ok: boolean) => void } | null>(
@@ -1932,10 +1918,6 @@ export function App() {
 					setSettingsInitialSection(undefined);
 					setSettingsOpen(true);
 				}}
-				onManagePlugins={() => {
-					setSettingsInitialSection("plugins");
-					setSettingsOpen(true);
-				}}
 				onOpenBgTasks={() => setBgTasksOpen(true)}
 				onOpenGlobalSearch={() => setGlobalSearchOpen(true)}
 				onOpenIconEdit={() => setIconEditOpen(true)}
@@ -2040,11 +2022,7 @@ export function App() {
 				)}
 			</div>
 			<TemplateProvider currentModelId={model ? `${model.provider}/${model.id}` : null}>
-				<div
-					ref={layoutRef}
-					className="layout"
-					style={{ "--left-w": `${leftWidth}px`, "--right-w": `${rightWidth}px` } as CSSProperties}
-				>
+				<div ref={layoutRef} className="layout" style={{ "--left-w": `${leftWidth}px` } as CSSProperties}>
 					{/* 遮罩：移动端**常驻**（否则关着的抽屉被手势拉出来时没有可渐变的遮罩，见
 					    `use-swipe-drawer.ts`），靠 `.on` 类控制显隐与可点；桌面端仍按需挂载。 */}
 					{isMobile ? (
@@ -2584,38 +2562,6 @@ export function App() {
 								preserveDraftAcrossConversations={chat.settings?.preserveDraftAcrossConversations ?? false}
 							/>
 						</main>
-						{!isMobile && !rightCollapsed && <ResizeHandle side="right" width={rightWidth} onResize={resizeRight} />}
-						<div
-							className={`panel-drawer drawer-right ${drawer === "right" ? "open" : ""}${
-								isMobile ? "" : rightCollapsed ? " hidden" : ""
-							}`}
-						>
-							<RightPanel
-								collapsible={!isMobile}
-								onToggleCollapse={toggleRight}
-								panelSend={panelSend}
-								files={chat.files}
-								fileChanged={chat.fileChanged}
-								widgets={chat.widgets}
-								onAttach={(path, name, mode, isDir) => {
-									setDrawer(null);
-									attach(path, name, mode, isDir);
-								}}
-								onPreview={(path, name) => {
-									setDrawer(null);
-									openFile(path, name);
-								}}
-								onNotice={(level, text) => pushNotice(level, text)}
-								/* 宿主 UI 扩展点（issue #146）：右栏 tab 条（插件 tab）、文件右键菜单条目
-								   （contextmenu.file：host 内置条目由右栏自己分派）与插件配置。 */
-								uiRightPanelTabs={uiSlots["rightpanel.tabs"]}
-								uiContextFile={uiSlots["contextmenu.file"]}
-								plugins={enabledPlugins}
-								pluginsEpoch={chat.pluginsEpoch}
-								send={send}
-							/>
-						</div>
-						{!isMobile && rightCollapsed && <PanelRail side="right" onClick={toggleRight} />}
 					</div>
 					<div className={`view-pane ${view === "terminal" ? "" : "hidden"}`}>
 						<Suspense fallback={null}>
@@ -2995,31 +2941,6 @@ export function App() {
 							</div>
 						</div>
 					)}
-				</div>
-			)}
-			{/* 当设置面板关闭但在后台有插件正在安装/更新/卸载时，在界面右上角提示轻量进度条，点击可重新打开设置面板 */}
-			{!settingsOpen && Object.values(chat.pluginJobs ?? {}).some((j) => j.phase !== "done") && (
-				<div
-					className="active-plugin-jobs-bar"
-					onClick={() => {
-						setSettingsInitialSection("plugins");
-						setSettingsOpen(true);
-					}}
-					title={t("pluginJobRunning")}
-				>
-					<FiRefreshCw className="spin" />
-					<span className="active-plugin-jobs-title">
-						{t("pluginJobRunning")}:{" "}
-						{Object.values(chat.pluginJobs ?? {})
-							.filter((j) => j.phase !== "done")
-							.map((j) => j.pluginId)
-							.join(", ")}
-					</span>
-					{(() => {
-						const firstRunning = Object.values(chat.pluginJobs ?? {}).find((j) => j.phase !== "done");
-						const lastLine = firstRunning?.lines[firstRunning.lines.length - 1];
-						return lastLine ? <span className="active-plugin-jobs-line">{lastLine}</span> : null;
-					})()}
 				</div>
 			)}
 			{sandboxModalMode && (

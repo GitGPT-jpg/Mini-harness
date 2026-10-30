@@ -4,7 +4,7 @@
  * 双击复位到默认权重。
  *
  * 这里只放可单测的数学与解析；量高度、挂 pointer 事件留在组件里
- * （见 `components/RightPanel.tsx`；左栏的等价逻辑目前内联在 `LeftPanel.tsx`）。
+ * （左栏的等价逻辑目前内联在 `LeftPanel.tsx`）。
  */
 
 /** 相邻两段的权重（above = 上方/前一段，below = 下方/后一段）。 */

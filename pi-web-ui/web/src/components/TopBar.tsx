@@ -1,7 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
-	FiBox,
 	FiDownload,
 	FiEdit2,
 	FiFolder,
@@ -35,8 +34,6 @@ import {
 	isPluginViewItem,
 	REQUIRED_TOPBAR_ITEM_IDS,
 	restoreUiItem,
-	setPluginViewOrder,
-	setPluginViewPinned,
 	type UiSlotEntry,
 	type UiSlotId,
 } from "../ui-slots";
@@ -52,8 +49,6 @@ import {
 	useServiceInfo,
 } from "../app-globals";
 import { ProjectPicker } from "./ProjectPicker";
-import { PluginMenu } from "./PluginMenu";
-import { PluginManagerModal } from "./PluginManagerModal";
 import { LocaleModal } from "./LocaleModal";
 import { focusComposer } from "../composer-bridge";
 import { useFloatingPanel } from "../use-floating-panel";
@@ -183,12 +178,10 @@ interface TopBarProps {
 	onUiAction?: (item: UiSlotEntry, value?: string) => void;
 	/** 顶栏右键菜单的条目（contextmenu.topbar 槽位；插件可往里加项）。 */
 	uiContextTopbar?: UiSlotEntry[];
-	/** Open a side panel as a mobile drawer ("left" = history, "right" = files). */
+	/** Open a side panel as a mobile drawer ("left" = history). */
 	onOpenPanel: (side: "left" | "right") => void;
 	/** Open the settings panel (system prompt / skills / extensions / presets). */
 	onOpenSettings: () => void;
-	/** Open settings directly at UI plugins → marketplace. */
-	onManagePlugins: () => void;
 	/** Open the background-task panel (AI-started servers — stop individually or all). */
 	onOpenBgTasks: () => void;
 	/** Open the global search panel (sessions / projects / workspace files). */
@@ -225,7 +218,6 @@ export function TopBar({
 	onViewChange,
 	onOpenPanel,
 	onOpenSettings,
-	onManagePlugins,
 	onOpenBgTasks,
 	onOpenGlobalSearch,
 	themes,
@@ -242,13 +234,6 @@ export function TopBar({
 	   （浏览磁盘目录 / 选当前目录 / ＋新建项目后切过去）。cwd 与额外工作区根走全局 store
 	   （整棵树都要的值，不再从 App 传参）。 */
 	const [projectPickerOpen, setProjectPickerOpen] = useState(false);
-	/* 插件面板（host:plugins 插件入口）：锚点是**点击那一刻**的矩形快照 —— 触发器常从「⋯」
-	   溢出菜单里被点，那里的 .plugin-topbar-menu-keep 点完即卸载，ref 当场就指不到东西了。
-	   面板本身渲染在 header 根上（不在 keep 包装里），否则会跟着 ⋯ 菜单一起被卸载。
-	   el 只用来认「再点一次同一个触发器 = 关」（且已被卸载的 el 不影响判断）。 */
-	const [pluginMenuAnchor, setPluginMenuAnchor] = useState<{ rect: DOMRect; el: HTMLElement } | null>(null);
-	const [pluginManagerOpen, setPluginManagerOpen] = useState(false);
-	const [pluginManagerFocusId, setPluginManagerFocusId] = useState<string | null>(null);
 	const cwd = useAppField("cwd");
 	const workspaceRoots = useAppField("workspaceRoots");
 	/* 临时会话能力由引擎底座 capabilities.ephemeralChat 事实源驱动（DSH 不提供，Pi 与 Universal 提供）。 */
@@ -280,25 +265,6 @@ export function TopBar({
 	const pinnedOverflowItems = [...(uiOverflow ?? [])].filter(
 		(it) => !(it.source === "host" && (it.id === "host:brand" || isCapabilityGatedOff(it.id))) && !isPluginViewItem(it),
 	);
-	/** 已钉在顶栏上的插件 id：直接看槽位结果 —— 钉住 = 条目在 uiPrimary（非 hidden），
-	 *  没钉 = 条目在 uiOverflow（hidden）。合成条目（默认 hidden）与插件自声明的 __view
-	 *  条目（默认可见）在同一套口径下都读得出来，不需要额外的存储层。 */
-	const pinnedPluginIds = new Set(
-		[...(uiPrimary ?? []), ...(uiOverflow ?? [])]
-			.filter((e) => isPluginViewItem(e) && !e.hidden)
-			.map((e) => e.source.slice("plugin:".length)),
-	);
-	// 面板里的排序不能从「主栏 + 溢出栏」倒推：窗口变窄时，已固定条目会在两栏间移动，
-	// 拼接两栏会把刚固定的项误排到最前。只读用户显式保存的顺序，其他保持插件列表原序。
-	const pluginOrderRank = new Map((chat.settings?.uiLayout?.order ?? []).map((id, index) => [id, index]));
-	const orderedPluginIds = plugins
-		.map((plugin, index) => ({ id: plugin.id, index }))
-		.sort(
-			(a, b) =>
-				(pluginOrderRank.get(`${a.id}:__view`) ?? 1_000_000 + a.index) -
-				(pluginOrderRank.get(`${b.id}:__view`) ?? 1_000_000 + b.index),
-		)
-		.map((plugin) => plugin.id);
 	/**
 	 * 顶栏统一渲染（方案 A：**完全扁平**，桌面与手机同一份 slot 数据）——
 	 * 所有条目都是 `.topbar-flow` 的直接子节点，**没有任何按种类包裹的容器**
@@ -316,7 +282,6 @@ export function TopBar({
 		"host:open-project",
 		"host:chat",
 		"host:terminal",
-		"host:plugins",
 		"host:search",
 		"host:browser",
 		"host:tasks",
@@ -327,7 +292,6 @@ export function TopBar({
 		"host:new-chat",
 		"host:new-ephemeral-chat",
 		"host:new-sandbox",
-		"host:files",
 	];
 	const topEntries: { id: string; entry: UiSlotEntry | null }[] =
 		uiPrimary !== undefined
@@ -397,13 +361,6 @@ export function TopBar({
 				return true;
 			case "host:settings":
 				onOpenSettings();
-				return true;
-			case "host:plugins":
-				// 扁平行后备（hostNodes 那条路点不到时，例如插件 tab 被白名单关掉）：
-				// 锚到「⋯」按钮自己 —— 至少面板开在用户点的地方。
-				setPluginMenuAnchor(
-					moreBtnRef.current ? { rect: moreBtnRef.current.getBoundingClientRect(), el: moreBtnRef.current } : null,
-				);
 				return true;
 			default:
 				// 视图条目（chat/terminal/git/插件视图）与插件动作交给 App 的 onUiAction
@@ -1015,27 +972,6 @@ export function TopBar({
 				<span>{t("terminal")}</span>
 			</button>
 		) : null,
-		// 插件面板入口（Chrome 扩展图标那个位置）：列出全部已装插件，每行带「钉到顶栏」
-		// 开关。钉住的插件视图 tab 才回到直流里（合成条目默认 hidden，见 withPluginViewItems）。
-		// 图标用矢量 FiBox 而不用 🧩 emoji：🧩 是 Unicode 11（2018）的字，旧 Windows 的
-		// Segoe UI Emoji 没有它，顶栏又是全站唯一用 emoji 的按钮，缺字就直接显示成空框
-		// （DOM 在、但看不见）。FiBox 与设置页「界面插件」tab 同图标。
-		"host:plugins": (
-			<button
-				type="button"
-				className="chip"
-				data-tip={t("pluginMenuTitle")}
-				aria-haspopup="menu"
-				aria-expanded={pluginMenuAnchor !== null}
-				onClick={(e) => {
-					const el = e.currentTarget;
-					setPluginMenuAnchor((prev) => (prev?.el === el ? null : { rect: el.getBoundingClientRect(), el }));
-				}}
-			>
-				<FiBox aria-hidden />
-				<span className="chip-sub">{t("pluginMenuTitle")}</span>
-			</button>
-		),
 		"host:search": (
 			<button type="button" className="chip" data-tip={t("searchGlobalTip")} onClick={onOpenGlobalSearch}>
 				<FiSearch />
@@ -1275,7 +1211,7 @@ export function TopBar({
 
 	/** 桌面工具 chips 的可见性历史口径（不扩大）：只有 search / tasks / settings 这几个成员
 	 *  的显隐还受 PI_WEB_TABS 白名单管（服务端会拒绝对应的消息，画出来只会给一个点了没反应用的按钮）。 */
-	const TABS_GATED_IDS = new Set(["host:search", "host:tasks", "host:settings", "host:plugins"]);
+	const TABS_GATED_IDS = new Set(["host:search", "host:tasks", "host:settings"]);
 	/** 溢出菜单里**整块搬进来**的宿主条目（菜单型：下拉/外链/自带面板）。
 	 *  其余宿主条目（history / files / new-chat / search / tasks / settings）在菜单里是一条扁平
 	 *  菜单项，由 dispatchHostOverflow 分派到本地处理器 —— 扁平的更像菜单，整块的才需要搬组件。 */
@@ -1369,10 +1305,6 @@ export function TopBar({
 					onOpenBgTasks={onOpenBgTasks}
 					onOpenProjectPicker={() => setProjectPickerOpen(true)}
 					isProjectPickerOpen={projectPickerOpen}
-					onOpenPluginMenu={(el) =>
-						setPluginMenuAnchor((prev) => (prev?.el === el ? null : { rect: el.getBoundingClientRect(), el }))
-					}
-					isPluginMenuOpen={pluginMenuAnchor !== null}
 					onUiAction={onUiAction}
 					uiContextEntries={uiContextTopbar}
 					onOpenSandboxModal={onOpenSandboxModal}
@@ -1669,65 +1601,6 @@ export function TopBar({
 			))}
 
 			{localeModalOpen && <LocaleModal onClose={() => setLocaleModalOpen(false)} />}
-			{pluginMenuAnchor && (
-				<PluginMenu
-					anchorRect={pluginMenuAnchor.rect}
-					anchorEl={pluginMenuAnchor.el}
-					plugins={plugins.map((p) => {
-						const full = (chat.plugins ?? []).find((cp) => cp.id === p.id);
-						return {
-							...p,
-							hasSettings: Boolean(full?.settingsSchema && full.settingsSchema.length > 0),
-						};
-					})}
-					pinnedIds={pinnedPluginIds}
-					orderedPluginIds={orderedPluginIds}
-					onTogglePin={(id, pinned) =>
-						// 固定只改变显隐；顺序只能由用户拖拽写入，不能因固定动作被重排。
-						appSend({ type: "set_settings", uiLayout: setPluginViewPinned(chat.settings?.uiLayout, id, pinned) })
-					}
-					onReorder={(ids) =>
-						appSend({ type: "set_settings", uiLayout: setPluginViewOrder(chat.settings?.uiLayout, ids) })
-					}
-					onOpenView={(id) => {
-						setPluginMenuAnchor(null);
-						onViewChange(`plugin:${id}`);
-					}}
-					onOpenPluginSettings={(focusId) => {
-						setPluginManagerFocusId(focusId ?? null);
-						setPluginManagerOpen(true);
-					}}
-					onManagePlugins={onManagePlugins}
-					onClose={() => setPluginMenuAnchor(null)}
-				/>
-			)}
-			{pluginManagerOpen && (
-				<PluginManagerModal
-					open={pluginManagerOpen}
-					onClose={() => {
-						setPluginManagerOpen(false);
-						setPluginManagerFocusId(null);
-					}}
-					focusPluginId={pluginManagerFocusId}
-					plugins={chat.plugins ?? []}
-					disabledPlugins={chat.settings?.disabledPlugins ?? []}
-					models={chat.settings?.subagentModels ?? []}
-					onTogglePlugin={(p) => {
-						const disabled = new Set(chat.settings?.disabledPlugins ?? []);
-						if (disabled.has(p.id)) disabled.delete(p.id);
-						else disabled.add(p.id);
-						appSend({ type: "set_settings", disabledPlugins: [...disabled] });
-					}}
-					onOpenView={(id) => {
-						setPluginManagerOpen(false);
-						onViewChange(`plugin:${id}`);
-					}}
-					onOpenMarketplace={() => {
-						setPluginManagerOpen(false);
-						onManagePlugins();
-					}}
-				/>
-			)}
 			{projectPickerOpen && (
 				<ProjectPicker
 					open

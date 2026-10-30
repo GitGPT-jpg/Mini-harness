@@ -22,8 +22,6 @@ interface SideDockProps {
 	onThemeToggle?: () => void;
 	dropdownProps?: BarItemProps["dropdownProps"];
 	plugins?: BarItemProps["plugins"];
-	onOpenPluginMenu?: (el: HTMLElement) => void;
-	isPluginMenuOpen?: boolean;
 }
 
 /**
@@ -53,8 +51,6 @@ export function SideDock({
 	onThemeToggle: _onThemeToggle,
 	dropdownProps,
 	plugins,
-	onOpenPluginMenu,
-	isPluginMenuOpen,
 }: SideDockProps) {
 	const { t } = useI18n();
 	const [collapsed, setCollapsed] = useState(false);
@@ -111,8 +107,6 @@ export function SideDock({
 			onOpenGlobalSearch={onOpenGlobalSearch}
 			onOpenBgTasks={onOpenBgTasks}
 			onOpenProjectPicker={onOpenProjectPicker}
-			onOpenPluginMenu={onOpenPluginMenu}
-			isPluginMenuOpen={isPluginMenuOpen}
 			onUiAction={onUiAction}
 			uiContextEntries={uiContextTopbar}
 			dropdownProps={dropdownProps}

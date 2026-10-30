@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode, type MouseEvent as ReactMouseEvent } from "react";
 import {
 	FiActivity,
-	FiBox,
 	FiCpu,
 	FiDatabase,
 	FiDownload,
@@ -88,8 +87,6 @@ export interface BarItemProps {
 	onOpenGlobalSearch?: () => void;
 	onOpenBgTasks?: () => void;
 	onOpenProjectPicker?: () => void;
-	onOpenPluginMenu?: (el: HTMLElement) => void;
-	isPluginMenuOpen?: boolean;
 	isProjectPickerOpen?: boolean;
 	onUiAction?: (item: UiSlotEntry, value?: string) => void;
 	uiContextEntries?: UiSlotEntry[];
@@ -146,8 +143,6 @@ export function BarItem({
 	onOpenGlobalSearch,
 	onOpenBgTasks,
 	onOpenProjectPicker,
-	onOpenPluginMenu,
-	isPluginMenuOpen,
 	isProjectPickerOpen,
 	onUiAction,
 	uiContextEntries,
@@ -905,13 +900,6 @@ export function BarItem({
 			extraClasses = "panel-toggle";
 			onClick = () => onOpenPanel?.("left");
 			break;
-		case "host:files":
-			if (view && view !== "chat") return null;
-			iconNode = <FiFolder className="bar-item-icon" />;
-			labelText = named(t("openFiles"));
-			extraClasses = "panel-toggle has-label";
-			onClick = () => onOpenPanel?.("right");
-			break;
 		case "host:open-project":
 			iconNode = <FiFolderPlus className="bar-item-icon" />;
 			labelText = named(t("openProject"));
@@ -945,15 +933,6 @@ export function BarItem({
 			labelText = named(t("settings"));
 			extraClasses = "chip";
 			onClick = () => onOpenSettings?.();
-			break;
-		case "host:plugins":
-			iconNode = <FiBox className="bar-item-icon" />;
-			labelText = named(t("pluginMenuTitle"));
-			extraClasses = "chip";
-			onClick = (e) => {
-				if (onOpenPluginMenu) onOpenPluginMenu(e.currentTarget);
-				else onOpenSettings?.("plugins");
-			};
 			break;
 		case "host:cwd":
 			iconNode = <FiFolder className="bar-item-icon" />;
@@ -1037,8 +1016,6 @@ export function BarItem({
 			type="button"
 			role={isTab ? "tab" : undefined}
 			aria-selected={isTab ? isActive : undefined}
-			aria-haspopup={id === "host:plugins" ? "menu" : undefined}
-			aria-expanded={id === "host:plugins" ? Boolean(isPluginMenuOpen) : undefined}
 			className={combinedClass}
 			title={tip}
 			data-tip={tip}

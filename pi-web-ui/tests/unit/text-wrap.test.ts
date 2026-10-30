@@ -106,7 +106,6 @@ const TEXT_CONTAINERS = [
 	".attachcard-content",
 	".attachcard-refnote", // 内插文件名
 	".attachcard-bridgenote", // 内插文件名
-	".widget-lines",
 	".tool-info-text",
 	".delegate-sec-text",
 	".present-note",

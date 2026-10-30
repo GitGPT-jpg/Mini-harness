@@ -154,7 +154,6 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			"host:open-project",
 			"host:chat",
 			"host:terminal",
-			"host:plugins",
 			"host:search",
 			"host:browser",
 			"host:task-desk",
@@ -209,7 +208,7 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 	/** 缺省收起 = 低频 / 有替代入口的条目落进顶栏「⋯」（App.tsx 把 hidden 的 primary 条目
 	 *  塞进 uiOverflow → 菜单里能点，菜单型条目在菜单里是整块组件，功能不少）。
 	 *  这条断言是「顶栏默认长什么样」的唯一入口 —— 想改默认口径就改这里与 BUILTIN_UI_ITEMS。 */
-	it("缺省收进「⋯」的 5 条 + 常驻的 14 条", () => {
+	it("缺省收进「⋯」的 4 条 + 常驻的 12 条", () => {
 		const slots = build([]);
 		const top = slots["topbar.primary"];
 		expect(top.filter((e) => e.hidden).map((e) => e.id)).toEqual([
@@ -226,7 +225,6 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			"host:open-project",
 			"host:chat",
 			"host:terminal",
-			"host:plugins",
 			"host:search",
 			"host:task-desk",
 			"host:tasks",
@@ -554,7 +552,7 @@ describe("buildUiSlots / 第 3 层：插件 arrange", () => {
 });
 
 describe("顶栏插件视图区段", () => {
-	it("未显式排序的固定插件默认从 Git 后开始，旧布局顺序中未列出的插件不会乱跑", () => {
+	it("未显式排序的固定插件默认紧跟视图 tab，旧布局顺序中未列出的插件不会乱跑", () => {
 		const slots = build(
 			withPluginViewItems([
 				plugin("run-trace", { items: [], arrange: [] }),
@@ -570,7 +568,7 @@ describe("顶栏插件视图区段", () => {
 		);
 		const ids = slots["topbar.primary"].filter((entry) => !entry.hidden).map((entry) => entry.id);
 		expect(ids.indexOf("host:terminal")).toBeLessThan(ids.indexOf("run-trace:__view"));
-		expect(ids.indexOf("run-trace:__view")).toBeLessThan(ids.indexOf("host:plugins"));
+		expect(ids.indexOf("run-trace:__view")).toBeLessThan(ids.indexOf("host:search"));
 		expect(ids.indexOf("run-trace:__view")).toBeLessThan(ids.indexOf("editor:__view"));
 	});
 
