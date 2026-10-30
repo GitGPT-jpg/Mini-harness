@@ -26,12 +26,13 @@
 | D-6b | 文件树（RightPanel 常驻文件树 tab + host:files/host:right-files 入口） | 58b37af |
 | D-7 | 多引擎（DSH/Claude/Durable + 引擎切换/探测/更新全链路） | 5c62fdc |
 | D-8 | Plan/Delegate 入口（GoalBar 计划按钮 + PlanBoard + 审查者委派开关/徽标） | 2be7a90 |
+| D-10 | 插件 UI 入口（顶栏「插件」+ 插件面板/管理弹窗 + 设置页「界面插件」页）与右侧空栏（RightPanel 及 D-6b 残留的文件树代码、FileTransferDialog、SlotTabs、对应 CSS），清理 106 个无引用 i18n key；插件运行时与 MCP 保留 | 7f8a39f |
 
 **净删除 325,784 行源码**（`git diff --stat 30902c1..HEAD`），`server/` 3.7M、`web/src/` 3.5M。
 
 ## 三、验证证据位置
 
-- **单元测试**：`npx vitest run` → 373 个文件全过（4391 过 / 0 失败 / 9 跳过，2026-10-30，D-9 收尾后）。
+- **单元测试**：`npx vitest run` → 372 个文件全过（4376 过 / 0 失败 / 9 跳过，2026-10-30，D-10 后；删掉了只测已删插件面板的 `plugin-menu.test.ts`）。
 - **零 token 冒烟套件**：`node tests/run-smoke.mjs --no-build` → **74/74 全绿**（含恢复的 `token-auth-test`、适配 D-9 默认值的 `lazy-tools-test`/`vision-bridge-test`/`subagent-template-test`/`takeover-test`/`plugin-test`/`elsewhere-lifecycle-test`，并清理了 D-4/D-4b/D-5 已删插件的过期用例）。
 - **Loop 正确性**：`tests/unit/loop-extension.test.ts`（13 用例，mock 零 token）。
 - **Loop 前端渲染**：`tests/loop-bar-test.mjs`（14/14，Playwright：成对胶囊 `LLM loop` + `代码 loop`、LLM loop 展开/折叠、`CodeLoopModal` 弹窗开启时隐藏底部胶囊、预设/字段/高级折叠项与启动按钮门控）。

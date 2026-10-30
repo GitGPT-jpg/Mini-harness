@@ -1,6 +1,6 @@
 # 训推引擎组 Harness 交接文档
 
-> 更新于 2026-10-30。分支 `harness-cockpit` @ `9cc13c9`，已推到 GitHub，本地与远端一致。
+> 更新于 2026-10-30。分支 `harness-cockpit`：GitHub 上是 `812bb9d`；本地多一个 D-10 提交 `7f8a39f`（未推送）。
 > 读法：先看第 0 节「现状」和第 11 节「待办」；要改代码再看第 3–10 节。
 
 ## 0. 现状
@@ -8,7 +8,7 @@
 - **产品**：「训推引擎组 Harness」是上游 pi-web-ui v0.111.0 的源码裁剪定制版，跑 pi 1.4.0，接 Baidu One API 网关，服务推理侧（sglang / AttentionStore / prefill / cache）的 AI Loop 工作流。
 - **D-9 已完成**：旧做法是 npm 装 pi-web-ui 包，再由 `harden.mjs` 改写 `dist/`、往 `index.html` 注入脚本。现在所有定制都在 `pi-web-ui/` 源码里；`harden.mjs`、`verify-hardened.mjs`、`harness-server/` 已删除。
 - **能用**：`./setup.sh` 一键安装 → `pi-web-cockpit/start-hardened.sh` 启动 → 首次配置弹窗填 One API Key → 直接对话。干净 HOME 实测通过，setup 可重复跑。
-- **测试**：typecheck 0 错误、build 通过、vitest 373/373 个文件通过、首装浏览器 E2E 14/14、`verify-cockpit.mjs` 15/15、**零 token 冒烟套件 `run-smoke.mjs` 74/74 全绿**、`tests/loop-bar-test.mjs` 14/14 全绿（含 `token-auth-test.mjs` 恢复与 `.gitignore` 例外规则）。
+- **测试**：typecheck 0 错误、build 通过、vitest 372/372 个文件通过（D-10 后）、首装浏览器 E2E 14/14、`verify-cockpit.mjs` 15/15、**零 token 冒烟套件 `run-smoke.mjs` 74/74 全绿**、`tests/loop-bar-test.mjs` 14/14 全绿（含 `token-auth-test.mjs` 恢复与 `.gitignore` 例外规则）。
 - **刻意没动**：GitHub 默认分支（用户要求先不动）；icode 上的版本（仍是旧 harden 版）。
 
 ## 1. 仓库与分支
@@ -17,7 +17,7 @@
 |---|---|
 | 本工作树 | `/Users/zhangteng14/ComateProjects/mini-harness-cockpit`，分支 `harness-cockpit` |
 | 主工作树 | `/Users/zhangteng14/ComateProjects/pi agent 的定制化`，分支 `1`：旧 harden 版驾驶舱，另一个窗口在维护，**不要改** |
-| GitHub | remote `github` = `https://github.com/GitGPT-jpg/Mini-harness`，分支 `harness-cockpit` 已推到 `9cc13c9` |
+| GitHub | remote `github` = `https://github.com/GitGPT-jpg/Mini-harness`，分支 `harness-cockpit` 已推到 `812bb9d` |
 | icode | remote `origin` = `icode.baidu.com/baidu/ai/mini-harness`。禁止直推 master，要用 `icode push` 提 CR，commit 需绑 iCafe 卡（luno-5578）。最新 CR #123037970 是旧 harden 版，待他人 +2，不含本分支 |
 | 本机在跑的驾驶舱 | `127.0.0.1:8787`，来自主工作树的旧版。**测试别占这个端口，也别杀这个进程** |
 | 上游来源 | 见 `pi-web-ui/PROVENANCE.md`：xing-shuyin/pi-web-ui v0.111.0（tag commit `7c40b44`，MIT），vendor 基线提交 `30902c1` |
@@ -37,6 +37,8 @@
 | D-9d | Loop 自主化，服务端 + 前端（见 4.3） | 6875645、a5f9a05 |
 | D-9e | 统一启动/安装入口；`PI_WEB_TOKEN=auto`；删除 harden.mjs、verify-hardened.mjs、harness-server/ | fc74f04、7412e68 |
 | D-9f | 测试全绿；干净 HOME 实测发现并修复两处首装问题；`verify-cockpit.mjs`；交付文档 | 04a695d、eee6e64、b787b1f、c67b634、9cc13c9 |
+
+- **D-10**（提交 `7f8a39f`，本地未推）：删掉顶栏「插件」入口（插件面板、插件管理弹窗、设置页「界面插件」页、插件任务进度条）和右侧空栏（`RightPanel` 连同 D-6b 后残留的文件树代码、`FileTransferDialog`、`SlotTabs` 和对应 CSS）；清理 106 个已无引用的 i18n key 并同步 12 个语言包；设置页里 pi 扩展那一页改名「扩展」（列的是 pi-llm-wiki 这类 pi 扩展包，不是界面插件）。插件运行时、MCP、page-picker 浏览器扩展保留。
 
 ## 3. 仓库地图
 
@@ -188,7 +190,7 @@ npx vitest run <相关测试>          # 全量：npx vitest run
 | `npm run typecheck` | 0 错误 |
 | `npm run build` | 通过 |
 | `npm run lint` | 0 error，98 条既有 warning |
-| `npx vitest run` | 373/373 个文件通过（4391 过，9 跳过） |
+| `npx vitest run` | 372/372 个文件通过（4376 过，9 跳过；D-10 删了只测插件面板的 `plugin-menu.test.ts`） |
 | 干净 HOME 跑 `./setup.sh` | 退出码 0，重跑仍为 0 |
 | 首装浏览器 E2E | 14/14，含首次配置填 key 后同一页的真实对话往返 |
 | `verify-cockpit.mjs`（隔离实例） | 15/15 |
