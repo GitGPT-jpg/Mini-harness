@@ -24,4 +24,5 @@ export PATH
 command -v node >/dev/null 2>&1 || { echo "错误：未找到 node（需要 Node.js 22.19+）。" >&2; exit 1; }
 SERVER="$BASE/pi-web-ui/dist/server/index.js"
 [ -f "$SERVER" ] || { echo "错误：未找到 $SERVER，请先在仓库根目录运行 ./setup.sh。" >&2; exit 1; }
-exec node "$SERVER" --host 127.0.0.1 --port 8787 --cwd "$BASE" --no-browser "$@"
+# 端口默认 8787（桌面启动器按它打开页面）；PI_WEB_PORT 可改（例如本机已有一份在跑时做隔离验证）
+exec node "$SERVER" --host 127.0.0.1 --port "${PI_WEB_PORT:-8787}" --cwd "$BASE" --no-browser "$@"
