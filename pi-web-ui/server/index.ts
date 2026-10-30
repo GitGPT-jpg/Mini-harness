@@ -19,13 +19,13 @@
 // MUST be imported before the SDK is loaded so on-disk patches apply cleanly.
 import "./patch-remote-catalog.js";
 import "./patch-turn-end-boundary.js";
-import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { createServer, request as proxyRequest, type IncomingMessage } from "node:http";
 import { createConnection } from "node:net";
 import { basename, delimiter, join, resolve, sep } from "node:path";
 import { homedir, tmpdir } from "node:os";
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import express from "express";
 import compression from "compression";
 import { WebSocket, WebSocketServer } from "ws";
@@ -212,8 +212,25 @@ const ALLOW_ORIGINS = (process.env.PI_WEB_ALLOW_ORIGINS ?? "")
 	.filter(Boolean);
 /** 可选共享口令（PI_WEB_TOKEN）：设置后所有 HTTP/WS 请求必须携带——
  *  Authorization: Bearer / X-PI-Token 头、?token= 查询参数或 pi_web_token cookie
- *  任一匹配即可；供 0.0.0.0 / 反代等暴露场景兜底，未设置则行为不变。 */
-const AUTH_TOKEN = process.env.PI_WEB_TOKEN?.trim() ?? "";
+ *  任一匹配即可；供 0.0.0.0 / 反代等暴露场景兜底，未设置则行为不变。
+ *  PI_WEB_TOKEN=auto：口令落在 <DATA_DIR>/pi-web-token（没有就生成 24 字节随机 hex，权限
+ *  0600），桌面启动器读同一个文件拼 ?token= 打开页面（驾驶舱 start-hardened.sh 默认用它）。 */
+function resolveAuthToken(): string {
+	const raw = process.env.PI_WEB_TOKEN?.trim() ?? "";
+	if (raw.toLowerCase() !== "auto") return raw;
+	const file = join(DATA_DIR, "pi-web-token");
+	try {
+		const existing = readFileSync(file, "utf8").trim();
+		if (existing) return existing;
+	} catch {
+		// 首次启动：没有口令文件，下面生成
+	}
+	const token = randomBytes(24).toString("hex");
+	mkdirSync(DATA_DIR, { recursive: true });
+	writeFileSync(file, token, { mode: 0o600 });
+	return token;
+}
+const AUTH_TOKEN = resolveAuthToken();
 /** 语言包下载根（语言包仓库的 raw 文件地址；版本 tag 优先、main 兜底，见 locales.ts）。 */
 const LOCALE_BASE_URL =
 	process.env.PI_WEB_LOCALE_BASE_URL?.trim() || "https://raw.githubusercontent.com/xing-shuyin/pi-web-ui";

@@ -80,26 +80,65 @@ if(!m.providers.oneapi){
 }
 NODE
 
-# ---- 5) 安装驾驶舱依赖并自动加固（postinstall 跑 harden.mjs）----
-say "安装驾驶舱依赖并自动加固（首次较慢，会连带装 pi-llm-wiki 与登记扩展）…"
-( cd "$COCKPIT" && npm install )
-say "驾驶舱加固完成。"
+# ---- 5) 构建驾驶舱（pi-web-ui 源码：定制已全部在源码里，不再有 npm 包 + 补丁脚本）----
+UI="$HERE/pi-web-ui"
+[ -f "$UI/package.json" ] || die "缺少 $UI（仓库不完整？）"
+if [ -d "$UI/node_modules" ]; then
+  say "更新驾驶舱依赖…"
+  ( cd "$UI" && npm install --no-audit --no-fund ) || die "驾驶舱依赖安装失败（网络 / npm 源？）"
+else
+  say "安装驾驶舱依赖（按 package-lock.json，首次较慢）…"
+  ( cd "$UI" && npm ci --no-audit --no-fund ) || die "驾驶舱依赖安装失败（网络 / npm 源？）"
+fi
+say "构建驾驶舱…"
+( cd "$UI" && npm run build >/tmp/pi-web-ui-build.log 2>&1 ) || die "驾驶舱构建失败，详见 /tmp/pi-web-ui-build.log"
+[ -f "$UI/dist/server/index.js" ] || die "构建后仍缺少 $UI/dist/server/index.js"
+say "驾驶舱构建完成。"
 
-# ---- 5b) 预热生成 client-state 并二次加固 ----
-# 首装时 ~/.pi-web/client-state.json 由驾驶舱运行时才生成，而上面的 postinstall(harden)
-# 跑在首次启动之前，拿不到该文件 => 客户端态开关与领域身份(soul)那部分会被跳过。
-# 这里先无头启动一次让它落盘，停服，再重放一次 harden 把这部分补齐。
-if [ ! -f "$HOME/.pi-web/client-state.json" ]; then
-  say "首次安装：预热驾驶舱以生成运行时配置…"
-  ( cd "$COCKPIT" && nohup ./start-hardened.sh >/tmp/pi-web-warmup.log 2>&1 & )
-  for i in $(seq 1 40); do lsof -nP -iTCP:8787 -sTCP:LISTEN -t >/dev/null 2>&1 && break; sleep 0.5; done
-  for i in $(seq 1 30); do [ -f "$HOME/.pi-web/client-state.json" ] && break; sleep 0.5; done
-  sleep 1
-  pids="$(lsof -nP -iTCP:8787 -sTCP:LISTEN -t 2>/dev/null || true)"; [ -n "$pids" ] && kill $pids 2>/dev/null || true
-  sleep 1
-  say "重放加固（应用客户端态开关与领域身份）…"
-  ( cd "$COCKPIT" && node harden.mjs >/dev/null 2>&1 ) || warn "二次加固失败，请手动在 pi-web-cockpit 跑 node harden.mjs"
-  say "预热与二次加固完成。"
+# ---- 5b) 停用推理场景用不到的风险 skill（移出 pi 技能发现目录，可逆：移回即恢复）----
+# 驾驶舱服务端另有硬禁名单兜底；这里把它们挪走，让命令行 pi 也看不到。
+SK_SRC="$HOME/.pi/agent/skills/pi-skills"
+SK_OFF="$HOME/.pi/agent/skills.disabled"
+for s in browser-tools transcribe brave-search gccli gdcli gmcli youtube-transcript; do
+  if [ -d "$SK_SRC/$s" ]; then
+    mkdir -p "$SK_OFF"
+    rm -rf "${SK_OFF:?}/$s"
+    mv "$SK_SRC/$s" "$SK_OFF/$s"
+    say "已停用 skill: $s（移到 $SK_OFF）"
+  fi
+done
+
+# ---- 5c) 知识库扩展 pi-llm-wiki：装 vendor 依赖（禁脚本）、删高危可选依赖、登记到 pi、写静默配置 ----
+WIKI="$COCKPIT/vendor/pi-llm-wiki"
+if [ -f "$WIKI/package.json" ]; then
+  if [ ! -d "$WIKI/node_modules/node-html-markdown" ]; then
+    say "安装 pi-llm-wiki 依赖（--omit=dev --ignore-scripts）…"
+    ( cd "$WIKI" && npm install --omit=dev --ignore-scripts --legacy-peer-deps --no-audit --no-fund ) \
+      || warn "pi-llm-wiki 依赖安装失败，可稍后在 $WIKI 手动 npm install"
+  fi
+  WIKI="$WIKI" node <<'NODE'
+const fs=require("fs"),os=require("os"),path=require("path");
+const wiki=process.env.WIKI, nm=path.join(wiki,"node_modules");
+// 高危可选依赖子树（@tobilu/qmd → node-llama-cpp → simple-git 的命令执行 CVE 等），知识库不需要
+let removed=0;
+const risky=["@tobilu","node-llama-cpp","simple-git","@simple-git","better-sqlite3","sqlite-vec","web-tree-sitter"];
+for(const r of risky){const p=path.join(nm,r); if(fs.existsSync(p)){fs.rmSync(p,{recursive:true,force:true}); removed++;}}
+if(fs.existsSync(nm)) for(const d of fs.readdirSync(nm)) if(d.startsWith("tree-sitter-")){fs.rmSync(path.join(nm,d),{recursive:true,force:true}); removed++;}
+if(removed) console.log("[setup] pi-llm-wiki：已移除 "+removed+" 个高危可选依赖目录");
+// 登记到 pi 全局 settings.json（绝对路径，去重；清掉 /tmp 与旧位置的登记），静默自动配置、不配 embedding = 纯本地
+const sf=path.join(os.homedir(),".pi/agent/settings.json");
+let st={}; try{ st=JSON.parse(fs.readFileSync(sf,"utf8")); }catch{}
+const pkgs=new Set(st.packages||[]);
+for(const p of [...pkgs]) if(p.includes("/tmp/")||(p.includes("pi-llm-wiki")&&p!==wiki)) pkgs.delete(p);
+pkgs.add(wiki);
+st.packages=[...pkgs];
+st["llm-wiki"]={notices:false,autoRecall:true,trajectories:true,ambientPersonalVault:true,wikilinkValidation:"warn"};
+fs.mkdirSync(path.dirname(sf),{recursive:true});
+fs.writeFileSync(sf,JSON.stringify(st,null,2));
+console.log("[setup] pi-llm-wiki：已登记扩展并写入静默配置（无 embedding，不外联）");
+NODE
+else
+  warn "缺少 $WIKI，跳过知识库扩展。"
 fi
 
 # ---- 6) 生成 Mac 启动器 .app（放桌面；决策3：用 assets/icon.jpg）----
@@ -164,7 +203,7 @@ cat <<DONE
    • Mac：双击桌面「${APP_NAME}」图标
    • 或命令行： "$COCKPIT/start-hardened.sh"  然后浏览器开 http://localhost:8787
  首次使用：
-   页面会弹出「首次配置」门禁 —— 到 设置 → 模型服务商，
+   页面会弹出「首次配置」对话框，已预选 Baidu One API，
    Base URL 已预填 https://oneapi-comate.baidu-int.com/v1，
    填入你自己的 One API Key 并保存即可。Key 仅存本机，不入库。
  连接内网（K8s）：

@@ -4,8 +4,12 @@ Changelog
 
 [Unreleased]
 ---
-### Added
-- 待记录
+### Changed
+- 定制全部并入 `pi-web-ui/` 源码：`setup.sh` 直接构建源码，`start-hardened.sh` 运行 `pi-web-ui/dist`，访问口令由服务端生成（`PI_WEB_TOKEN=auto`）
+- Loop 自主化：调研向导先提问 + 计划确认门禁、目标暂停/继续、Loop 任务台、代码 loop 启动弹窗、连接集群（kubeconfig 实测）
+
+### Removed
+- `harden.mjs`（npm 包补丁脚本）、`verify-hardened.mjs`、旧 `harness-server/`
 
 0.1.0 - 2026-10-26
 ---

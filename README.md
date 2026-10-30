@@ -17,9 +17,10 @@ cd mini-harness
 2. 安装固定版本 `pi@1.4.0`（与验证机一致）；
 3. 安装 7 个领域 skill 到 `~/.pi/agent/skills`；
 4. 种入「Baidu One API」模型服务商与模型目录（**不含密钥**，不覆盖你已有配置）；
-5. 安装驾驶舱依赖，`postinstall` 自动执行 `harden.mjs` 完成全部加固与定制
-   （含首装 client-state 播种，保证客户端开关与领域身份在干净机器上同样生效）；
-6. 在 **桌面** 生成启动器 `训推引擎组 Harness.app`（macOS）。
+5. 构建驾驶舱：在 `pi-web-ui/` 里按 lockfile 安装依赖并 `npm run build`（全部定制都在源码里，没有补丁脚本）；
+6. 停用推理场景用不到的 7 个风险 skill（移到 `~/.pi/agent/skills.disabled`，移回即恢复）；
+7. 配好知识库扩展 `pi-llm-wiki`（禁脚本装依赖、删高危可选依赖、登记到 pi、静默配置）；
+8. 在 **桌面** 生成启动器 `训推引擎组 Harness.app`（macOS）。
 
 > 前置条件：macOS / Linux、Node ≥22.19、可访问 npm 与 One API 网关。
 > macOS 若终端组件 node-pty 需要编译，建议先安装 Xcode Command Line Tools（`xcode-select --install`）。
@@ -30,38 +31,39 @@ cd mini-harness
 - **macOS**：双击桌面「训推引擎组 Harness」图标（无终端黑窗，自动拉起服务并打开浏览器）。
 - **命令行**：`pi-web-cockpit/start-hardened.sh`，然后浏览器打开 `http://localhost:8787`。
 
-首次打开会弹出「首次配置」门禁：进入 **设置 → 模型服务商**，Base URL 已预填
+首次打开会弹出「首次配置」对话框（已预选 Baidu One API）：Base URL 已预填
 `https://oneapi-comate.baidu-int.com/v1`，在 API Key 处填入**你自己的 One API Key** 并保存。
 Key 仅保存在本机 `~/.pi/agent/auth.json`，**不会提交到代码库，也不外传**。
 
 > **全新状态**：首次安装是干净的——不包含任何会话/聊天记录、最近项目、任务运行状态或知识库内容。
 > 这些数据只存在于各自机器的 `~/.pi/agent/` 与 `~/.pi-web/` 下，且已在 `.gitignore` 中排除。
 
-## 做了哪些定制（全部可逆，集中在 `pi-web-cockpit/harden.mjs`）
+## 做了哪些定制（全部在 `pi-web-ui/` 源码里，见 `pi-web-ui/DELIVERABLES.md`）
 
 - **只保留 pi 引擎**：前端引擎清单裁为 pi-only；底栏引擎切换器隐藏；模型服务商留给用户自填 One API。
 - **推理场景精简**：关闭沙盒 / Delegate / Plan / 子代理原生入口、多模态音视频、Page Picker、codemode 扩展；工具懒加载开启（省 token、稳 prompt cache 前缀）；仅保留 `present_files` 成果卡片。
 - **安全加固**：关 remoteSsh、封禁 `__abs__` 任意文件读、禁 `eval`/`browser_page`、关插件市场与自更新（`PI_WEB_MANAGED=1`）。
-- **品牌**：左上角为 icon1111 图标 + 「训推引擎组 Harness」；浏览器页签标题同名、favicon 为紫色 C；并停用 PWA Service Worker（避免旧缓存导致界面不更新）。
+- **品牌**：左上角为 icon1111 图标 + 「训推引擎组 Harness」；浏览器页签标题同名、favicon 为紫色 C；PWA 图标同源。
 - **领域身份**：覆盖组合模板的 `{{soul}}` token，注入推理服务 agent 身份、工作准则与安全红线（其余脚手架 token 不动）。
 - **提示词模板**：隐藏 25 个 pi 内置模板，灌入 8 个从 harness + Ku 沉淀、可直接用的推理模板。
 - **子代理**：保留 explore/review/implement，新增 5 个推理 workflow 子代理。
 - **知识库**：内置 `pi-llm-wiki` 扩展（已做安全审查、移除高危可选依赖子树），后台自动召回/沉淀、无感维护，纯本地不外联。
-- **薄运行时（`mini-harness-runtime`）**：任务状态机 `intake→plan→run→validate`，**以 validate.py 为唯一准入门禁**，失败自动带证据进入下一轮，达到最大轮数停止，状态落盘可断点续跑。可选 **跨家族 planner / reviewer**：planner 产出可验证的验收条件；reviewer 只能否决、不能放行（validator 通过才算完成）。配套 **watcher 任务队列**（投递 JSON 任务即可无人值守执行）。对应"公共运行时"那一块，**不依赖模型自觉**。
-- **双 Loop 入口**：顶栏「LLM loop」（AI 自评，适合开放式任务）+「代码 loop」（validator 门禁，自动验证 / 迭代 / 续跑）。
-- **One API Key 门禁**：首次打开弹窗引导配置（见上）。
+- **薄运行时（Loop 运行时，`pi-web-ui/server/loop/`）**：任务状态机 `intake→plan→run→validate`，**以 validate.py 为唯一准入门禁**，失败自动带证据进入下一轮，达到最大轮数停止，状态落盘可断点续跑。可选 **跨家族 planner / reviewer**：planner 产出可验证的验收条件；reviewer 只能否决、不能放行（validator 通过才算完成）。配套 **watcher 任务队列**（投递 JSON 任务即可无人值守执行）。对应"公共运行时"那一块，**不依赖模型自觉**。
+- **双 Loop 入口**：输入框上沿成对居中的「LLM loop」（AI 自评，适合开放式任务；调研向导先提问、计划经你确认才开跑）+「代码 loop」（validator 门禁，自动验证 / 迭代 / 续跑）。
+- **Loop 任务台**：顶栏「任务台」抽屉——当前目标的进度、执行者工具调用时间线、暂停 / 继续 / 停止，以及 LLM loop 永久目录与代码 loop 运行列表。
+- **连接集群**：输入框发送键左侧的集群图标，粘贴 kubeconfig 即用 `kubectl cluster-info` 实测（存 `~/.pi-web/kubeconfig`，权限 600）；底栏分别显示「API 已连接」「集群已连接」。
+- **One API Key 首次配置**：首次打开弹窗引导配置（见上）。
 
 ## 仓库结构
 
 - `setup.sh` — 可移植一键安装脚本
-- `pi-web-cockpit/harden.mjs` — 幂等、可逆的加固+定制脚本（`npm install` 时经 `postinstall` 自动重放）
+- `pi-web-ui/` — 驾驶舱源码（pi-web-ui v0.111.0 裁剪定制版，定制清单见 `pi-web-ui/DELIVERABLES.md`）
+- `pi-web-cockpit/start-hardened.sh` — 启动脚本（跑 `pi-web-ui/dist`，口令 / 代理 / kubeconfig 环境）
 - `pi-web-cockpit/config/models.oneapi.json` — One API 服务商与模型目录种子（无密钥）
-- `pi-web-cockpit/config/client-state.seed.json` — 首装驾驶舱设置种子（开关/领域身份，无用户路径）
 - `pi-web-cockpit/assets/brand-logo.png` — 左上角 logo（icon1111）
 - `pi-web-cockpit/assets/brand-favicon.png` — 页签 favicon（紫色 C）
-- `pi-web-cockpit/verify-hardened.mjs` — Playwright E2E 验证（对话/文件/终端/Git 四件套 + 门禁）
 - `pi-web-cockpit/vendor/pi-llm-wiki/` — 审查过的知识库扩展源码
-- `pi-web-cockpit/vendor/mini-harness-runtime/` — 薄运行时扩展（状态机 + validator 门禁 + 自动迭代 + 续跑）
+- `pi-web-cockpit/vendor/mini-harness-runtime/` — 旧版运行时扩展（已并入 `pi-web-ui/server/loop/`，仅留作参考，驾驶舱不加载它）
 - `skills/` — 7 个领域 skill（安装到 `~/.pi/agent/skills`）
 - `assets/icon.jpg` — 桌面启动器图标源
 - `资产清单.md` — 推理底座可利用资产清单
@@ -89,12 +91,12 @@ bash build/package.sh
 
 ## 维护
 
-- 改完定制后在 `pi-web-cockpit/` 跑 `node harden.mjs` 即可重放（幂等）。
-- 校验：`cd pi-web-cockpit && node verify-hardened.mjs`（需服务已启动）。
+- 改完 `pi-web-ui/` 源码后：`cd pi-web-ui && npm run build`，再重启服务（或重跑 `./setup.sh`）。
+- 校验：`cd pi-web-ui && npm run typecheck && npx vitest run`。
 - 升级 pi 版本：改 `setup.sh` 顶部 `PI_PIN` 后重跑。
 
 ## 安全说明
 
-- 服务仅绑定 `127.0.0.1`，并需 URL token；不要把端口暴露到公网。
+- 服务仅绑定 `127.0.0.1`，并需 URL token（首次启动时生成在 `~/.pi-web/pi-web-token`，权限 600）；不要把端口暴露到公网。
 - `~/.pi/agent/auth.json`、`~/.pi-web/` 下的口令均在仓库外，`.gitignore` 已排除一切密钥/口令。
 - 编辑 `~/.pi-web/client-state.json` 前需先停服务（运行中会把内存态写回覆盖磁盘）。

@@ -81,7 +81,7 @@ node vendor/mini-harness-runtime/watcher.mjs
 
 ## 安装
 
-由 `pi-web-cockpit/harden.mjs` 自动 `pi install` 并登记到 `~/.pi/agent/settings.json`。
+已并入驾驶舱源码（`pi-web-ui/server/loop/extension.ts`）；本目录仅留作参考，驾驶舱会忽略 `~/.pi/agent/settings.json` 里登记的这个包。
 
 ## 已验证
 

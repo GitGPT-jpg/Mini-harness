@@ -82,7 +82,8 @@ cat > "$MACOS/harness" <<'LAUNCH'
 #!/bin/bash
 RES="$(cd "$(dirname "$0")/../Resources" && pwd)"
 DEST="$HOME/mini-harness"
-if [ ! -f "$DEST/pi-web-cockpit/start-hardened.sh" ]; then
+# 构建产物在 = 已装好（start-hardened.sh 本身随源码入库，解压即在，不能拿它判断）
+if [ ! -f "$DEST/pi-web-ui/dist/server/index.js" ]; then
   open -a Terminal "$RES/install.command"
   exit 0
 fi

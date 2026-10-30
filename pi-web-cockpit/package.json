@@ -2,12 +2,8 @@
   "name": "pi-web-cockpit",
   "private": true,
   "type": "module",
-  "scripts": {
-    "postinstall": "node harden.mjs"
-  },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "1.4.0",
-    "pi-web-ui": "^0.111.0",
     "typebox": "^1.4.3"
   },
   "devDependencies": {

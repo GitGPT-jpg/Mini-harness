@@ -3,8 +3,6 @@ node_modules/
 **/node_modules/
 
 # ---- 生成物 / 本地运行态 ----
-# start-hardened.sh 由 postinstall(harden.mjs) 自动生成
-pi-web-cockpit/start-hardened.sh
 # web-demo 为早期独立探索 demo，不随底座入库
 web-demo/
 *.log
