@@ -1,19 +1,31 @@
 import { memo, useEffect, useState } from "react";
-import { FiCode, FiRepeat, FiSquare } from "react-icons/fi";
+import { FiRepeat, FiSquare } from "react-icons/fi";
 import type { LoopUiState } from "../types";
 import { useT } from "../i18n";
 import { appSend } from "../app-globals";
-import { formatLoopElapsed, loopStageText } from "./BarItem";
-import { openCodeLoop, useCockpitPopupOpen } from "../loop-cockpit";
+import { formatLoopElapsed } from "./BarItem";
+import { openRunDetail, openTaskModal, useCockpitPopupOpen } from "../loop-cockpit";
+import { canAcceptValidatorOnly, loopRoundText, loopStatus, retryPrefillOf, type LoopStatusKind } from "../loop-status";
+import { TaskCapsule } from "./TaskModal";
 
-/** 代码 loop 的状态条：运行中是「阶段 · 轮次 · 耗时 + 停止」（epoch 停止 = 在途与迟到回调
- *  全部失效），终态一行结果 + 重试（重开启动弹窗并带回 goal）。启动表单是 CodeLoopModal。
+/** 代码 loop 的状态条：运行中是「人话状态 · 轮次 · 耗时 + 停止」（epoch 停止 = 在途与迟到回调
+ *  全部失效），终态一行结果 + 动作（评审掉线：重试评审 / 按代码验证收下；其余：重试 = 重开新任务
+ *  弹窗并带回目标、验收标准与验收方式）。状态文字可点，打开任务详情（RunDetailModal）。
+ *  人话状态统一由 loop-status.ts 产出。启动表单是 TaskModal。
  *  Props 刻意收窄，token 流式期间浅比较直接跳过重渲染。 */
 
 interface Props {
 	loop: LoopUiState | null;
-	/** 目标模式开着时入口胶囊画在目标条折叠行里，这里不再重复画。 */
+	/** 目标模式开着时「新任务」胶囊画在目标条折叠行里，这里不再重复画。 */
 	goalModeEnabled: boolean;
+}
+
+/** 终态行首的小符号：交卷 ✓ / 裁判掉线 ⚠ / 用户停的 ⏹ / 其余没过或出错 ✗。 */
+function terminalMark(kind: LoopStatusKind): string {
+	if (kind === "done" || kind === "done-validator-only" || kind === "done-self-declared") return "✓";
+	if (kind === "reviewer-error") return "⚠";
+	if (kind === "user-stop" || kind === "stopped-other") return "⏹";
+	return "✗";
 }
 
 export const LoopBar = memo(function LoopBar({ loop, goalModeEnabled }: Props) {
@@ -30,28 +42,39 @@ export const LoopBar = memo(function LoopBar({ loop, goalModeEnabled }: Props) {
 	}, [active]);
 
 	const elapsed = loop ? formatLoopElapsed(now - new Date(loop.createdAt).getTime()) : "";
-	const roundLabel =
-		loop?.round !== undefined ? (loop.maxRounds ? `${loop.round}/${loop.maxRounds}` : `${loop.round}`) : "";
+	const runId = loop?.kind === "run" ? loop.runId : undefined;
+	const detailTip = loop ? `${t("loopOpenDetail")}\n${loop.goal}` : "";
 
-	// —— 运行中：紧凑状态条（阶段 · 轮次 · 耗时 + 停止）——
-	if (active) {
+	// —— 运行中：紧凑状态条（人话状态 · 轮次 · 耗时 + 停止）——
+	if (loop && active) {
+		const st = loopStatus(loop, t);
+		const text = `${st.text} · ${elapsed}`;
 		return (
 			<div className="goalbar">
 				<div className="goalbar-row">
 					<span className="goalbar-icon">
 						<FiRepeat />
 					</span>
-					<span className="goalbar-detail" title={loop?.goal ?? ""}>
-						{loop?.kind === "pending"
-							? t("loopStatusStarting")
-							: `${loopStageText(t, loop?.stage)}${roundLabel ? ` · ${roundLabel}` : ""} · ${elapsed}`}
-					</span>
-					<span className="goalbar-detail">· {loop?.mode === "llm" ? t("loopBarModeLlm") : t("loopBarModeCode")}</span>
+					{runId ? (
+						<button
+							type="button"
+							className={`loopbar-status tone-${st.tone}`}
+							title={detailTip}
+							onClick={() => openRunDetail(runId)}
+						>
+							{text}
+						</button>
+					) : (
+						<span className={`loopbar-status tone-${st.tone}`} title={loop.goal}>
+							{text}
+						</span>
+					)}
+					<span className="goalbar-detail">· {loop.mode === "llm" ? t("loopBarModeLlm") : t("loopBarModeCode")}</span>
 					<button
 						type="button"
 						className="goalbar-x stopping"
 						title={t("loopStop")}
-						onClick={() => appSend({ type: "loop_stop", runId: loop?.runId })}
+						onClick={() => appSend({ type: "loop_stop", runId })}
 					>
 						<FiSquare />
 					</button>
@@ -60,54 +83,78 @@ export const LoopBar = memo(function LoopBar({ loop, goalModeEnabled }: Props) {
 		);
 	}
 
-	// —— 终态（done/stopped/request-failed）：一行结果 + 一键重试 ——
+	// —— 终态（done/stopped/request-failed）：一行结果（可点开详情）+ 动作 ——
 	if (
 		loop &&
 		(loop.kind === "request-failed" || (loop.kind === "run" && (loop.status === "done" || loop.status === "stopped")))
 	) {
-		const failed = loop.kind === "request-failed";
-		const done = !failed && loop.status === "done";
-		const tail = failed
-			? `${t("loopStatusFailed")}${loop.reason ? `：${loop.reason}` : ""}`
-			: done
-				? `${t("loopStatusDone")}${loop.lastVerdict ? ` · ${loop.lastVerdict === "pass" ? t("loopVerdictPass") : t("loopVerdictFail")}` : ""} · ${roundLabel} · ${elapsed}`
-				: `${t("loopStatusStopped")}${loop.stopReason ? `：${loop.stopReason}` : ""} · ${roundLabel} · ${elapsed}`;
+		const st = loopStatus(loop, t);
+		const label = `${terminalMark(st.kind)} ${st.text}`;
+		const suffix = loop.kind === "request-failed" ? "" : [loopRoundText(t, loop), elapsed].filter(Boolean).join(" · ");
+		const reviewerDown = st.kind === "reviewer-error" && !!runId;
 		return (
 			<div className="goalbar">
 				<div className="goalbar-row">
 					<span className="goalbar-icon">
 						<FiRepeat />
 					</span>
-					<span className="goalbar-detail" title={loop.goal}>
-						{failed ? "✗ " : done ? "✓ " : "⏹ "}
-						{tail}
-					</span>
-					<button
-						type="button"
-						className="goalbar-btn action"
-						title={t("loopRetry")}
-						onClick={() => openCodeLoop(loop.goal)}
-					>
-						{t("loopRetry")}
-					</button>
+					{runId ? (
+						<button
+							type="button"
+							className={`loopbar-status tone-${st.tone}`}
+							title={detailTip}
+							onClick={() => openRunDetail(runId)}
+						>
+							{label}
+						</button>
+					) : (
+						<span className={`loopbar-status tone-${st.tone}`} title={loop.goal}>
+							{label}
+						</span>
+					)}
+					{suffix && <span className="goalbar-detail">· {suffix}</span>}
+					{reviewerDown ? (
+						<>
+							<button
+								type="button"
+								className="goalbar-btn action"
+								title={t("loopRetryReviewTip")}
+								onClick={() => appSend({ type: "loop_resume", runId })}
+							>
+								{t("loopRetryReview")}
+							</button>
+							{canAcceptValidatorOnly(loop) && (
+								<button
+									type="button"
+									className="goalbar-btn subtle"
+									title={t("loopAcceptCodeTip")}
+									onClick={() => appSend({ type: "loop_accept", runId })}
+								>
+									{t("loopAcceptCode")}
+								</button>
+							)}
+						</>
+					) : (
+						<button
+							type="button"
+							className="goalbar-btn action"
+							title={t("loopRetry")}
+							onClick={() => openTaskModal(retryPrefillOf(loop))}
+						>
+							{t("loopRetry")}
+						</button>
+					)}
 				</div>
 			</div>
 		);
 	}
 
-	// —— 闲置：代码 loop 入口胶囊与 LLM loop 胶囊成对居中，画在目标条折叠行里（GoalBar）；
-	//    目标模式关掉时目标条不渲染，这里补一枚同款胶囊，入口不丢。弹窗打开时隐藏。 ——
+	// —— 闲置：「新任务」胶囊画在目标条折叠行里（GoalBar）；目标模式关掉时目标条不渲染，
+	//    这里补一枚同款胶囊，入口不丢。弹窗打开时隐藏。 ——
 	if (goalModeEnabled || popupOpen) return null;
 	return (
 		<div className="goalbar-collapsed loopbar-collapsed-solo">
-			<button
-				type="button"
-				className="goalbar-hint loop-capsule code"
-				title={t("codeLoopPillTip")}
-				onClick={() => openCodeLoop()}
-			>
-				<FiCode /> <span>{t("loopBarTitle")}</span>
-			</button>
+			<TaskCapsule />
 		</div>
 	);
 });

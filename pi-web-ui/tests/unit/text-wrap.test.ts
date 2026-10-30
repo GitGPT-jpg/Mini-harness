@@ -115,7 +115,6 @@ const TEXT_CONTAINERS = [
 	".dialog-option",
 	".msg-error", // 长报错（URL / 报错码）
 	".goalbar-stale", // 旧后端告警（整句，能断行）
-	".goalbar-round > span", // 「最大轮数」标签（窄屏可压）
 	".notice-text", // 顶部通知/提示条文本（可断行）
 ];
 
@@ -130,7 +129,6 @@ const SINGLE_LINE_IN_ROW = [
 	".bashblock-command code",
 	// 目标条（goal bar）：每个渲染长文案 / 无空格 token 的元素都得自己收，
 	// 否则一行长文案就把整条目标条顶宽、消息区冒出横向滚动条（窄屏实报）。
-	".goalbar-lock-hint", // 「锁定：应用到后续所有回合」这类长句
 	".goalbar-chip", // 「第 12/50 轮」/ 判决胶囊
 	".goalbar-hint span", // 收起态药丸里的标题
 	// 工具调用 / 折叠行：命令、路径、超时徽标、文件徽标

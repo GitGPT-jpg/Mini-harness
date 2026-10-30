@@ -270,11 +270,11 @@ kill %1; rm -rf "$H"                                       # 首次配置弹窗�
 
 > 2026-10-30 开始。依据用户贴出的评估（对照最初架构基调）分四步做，每步做完在这里打勾并写提交号。中途断了就按这里接着做。
 
-- [ ] **D-12-1 完成态可信度**：代码 loop 里 validator 过了但 reviewer 出错（404/超时/非 JSON）时，现在仍是 `status=done` + `lastVerdict=pass`，界面显示「已完成·通过」。改成区分「代码验证 + 模型评审都过」「只有代码验证（没开评审）」「评审掉线」三种；`LoopUiState` / `LoopRunBrief` 带上 `lastReview`（verdict + reasons）和 `stopReason`；LoopBar / TaskDesk 按新语义显示。
-- [ ] **D-12-2 服务端结构化启动**：用户点启动时服务端直接建 runId、落盘 `state.json`（绑定 sessionId）、立刻推给前端，再让模型干活、干完调 `loop_done`；不再靠模型第一轮自觉调 `loop_start`。
-- [ ] **D-12-3 成果与证据查看器**：`GET /api/mini-harness/runs/:runId/detail` 返回 state、journal 时间线、各轮 review 报告、validator 证据、diff；任务台/状态条点开 run 看详情（目标、各轮结论、失败原因/否决理由、diff、validator 输出、继续/重试/停止）；状态文案改成「正在干活·第 N/M 轮」「还没过关·查看证据」「裁判掉线·等待重试」「交卷了·查看成果」。
-- [ ] **D-12-4 统一任务入口**：一个「新任务」入口（保留模板），填「做什么」「怎么算完成」，选验收方式（代码验证 + 模型评审 / 仅代码验证 / 仅模型评审），不用先选 LLM loop 还是代码 loop。
-- [ ] **D-12-5 收尾**：删掉已不引用的 `pi-web-cockpit/vendor/mini-harness-runtime/`、`pi-web-cockpit/config/client-state.seed.json`；三连验 + vitest + 冒烟 + 新页面浏览器 E2E（无报错）；更新本文件与 `pi-web-ui/DELIVERABLES.md`；本地提交，不推送。
+- [x] **D-12-1 完成态可信度**（b4ca3dd）：代码 loop 里 validator 过了但 reviewer 出错（404/超时/非 JSON）时，现在仍是 `status=done` + `lastVerdict=pass`，界面显示「已完成·通过」。改成区分「代码验证 + 模型评审都过」「只有代码验证（没开评审）」「评审掉线」三种；`LoopUiState` / `LoopRunBrief` 带上 `lastReview`（verdict + reasons）和 `stopReason`；LoopBar / TaskDesk 按新语义显示。
+- [x] **D-12-2 服务端结构化启动**（b4ca3dd）：用户点启动时服务端直接建 runId、落盘 `state.json`（绑定 sessionId）、立刻推给前端，再让模型干活、干完调 `loop_done`；不再靠模型第一轮自觉调 `loop_start`。
+- [x] **D-12-3 成果与证据查看器**（b4ca3dd + 0187103）：`GET /api/mini-harness/runs/:runId/detail` 返回 state、journal 时间线、各轮 review 报告、validator 证据、diff；任务台/状态条点开 run 看详情（目标、各轮结论、失败原因/否决理由、diff、validator 输出、继续/重试/停止）；状态文案改成「正在干活·第 N/M 轮」「还没过关·查看证据」「裁判掉线·等待重试」「交卷了·查看成果」。
+- [x] **D-12-4 统一任务入口**（0187103：`TaskModal.tsx` 取代 `CodeLoopModal.tsx`，一枚「新任务」胶囊）：一个「新任务」入口（保留模板），填「做什么」「怎么算完成」，选验收方式（代码验证 + 模型评审 / 仅代码验证 / 仅模型评审），不用先选 LLM loop 还是代码 loop。
+- [x] **D-12-5 收尾**（b4ca3dd + 0187103）：删掉已不引用的 `pi-web-cockpit/vendor/mini-harness-runtime/`、`pi-web-cockpit/config/client-state.seed.json`；三连验 + vitest + 冒烟 + 新页面浏览器 E2E（无报错）；更新本文件与 `pi-web-ui/DELIVERABLES.md`；本地提交，不推送。
 
 预览：`PI_WEB_PORT=8788 PI_WEB_DATA_DIR=/tmp/mini-harness-cockpit-preview PI_WEB_TOKEN=auto node pi-web-ui/dist/server/index.js --host 127.0.0.1 --port 8788 --cwd <worktree> --no-browser`（独立数据目录，不碰 8787 旧舱）。
 

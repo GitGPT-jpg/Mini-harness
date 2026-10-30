@@ -659,56 +659,16 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 	},
 	{ id: "host:fp-close", slot: "file.preview.toolbar", labelKey: "close", icon: "x", kind: "action", order: 90 },
 
-	// ---- 目标条（GoalBar.tsx：编辑行 / 选项行 / 活跃行 / 收起 pill 四处按簇分别排序） ----
-	{ id: "host:goal-pill", slot: "goalbar.actions", labelKey: "goalBarTitle", icon: "target", kind: "action", order: 5 },
-	{ id: "host:goal-set", slot: "goalbar.actions", labelKey: "goalBarSet", icon: "check", kind: "action", order: 10 },
-	{
-		id: "host:goal-wizard",
-		slot: "goalbar.actions",
-		labelKey: "goalWizardBtn",
-		icon: "search",
-		kind: "action",
-		order: 20,
-	},
-	{ id: "host:goal-lock", slot: "goalbar.actions", labelKey: "goalBarLocked", icon: "lock", kind: "action", order: 30 },
+	// ---- 目标条（GoalBar.tsx：闲置时的「新任务」胶囊 / LLM loop 活跃行两处按簇分别排序） ----
+	// 统一任务入口（D-12-4）：两枚 loop 胶囊合成一枚「新任务」，打开 TaskModal。新 id 不继承旧
+	// host:goal-pill（「LLM loop」）的改名 / 隐藏偏好。
+	{ id: "host:task-new", slot: "goalbar.actions", labelKey: "taskNew", icon: "plus", kind: "action", order: 5 },
 	// 计划模式（会话级「只规划不实施」）：从输入框工具条搬进目标条 —— 它是
 	// 「拿用户输入去规划」的前置开关，与目标同属一条语义线，所以只挂在**展开行**
 	// （编辑行），不进折叠药丸。目标模式被关掉（goalModeEnabled=false）时整条
 	// 目标区不渲染，它也跟着一起隐藏。
 	{ id: "host:goal-plan", slot: "goalbar.actions", labelKey: "planMode", icon: "list", kind: "action", order: 25 },
-	{
-		id: "host:goal-collapse",
-		slot: "goalbar.actions",
-		labelKey: "collapsePanel",
-		icon: "chevron-up",
-		kind: "action",
-		order: 40,
-	},
-	{
-		id: "host:goal-model",
-		slot: "goalbar.actions",
-		labelKey: "goalBarReviewModel",
-		icon: "cpu",
-		kind: "action",
-		order: 50,
-	},
-	{
-		id: "host:goal-rounds",
-		slot: "goalbar.actions",
-		labelKey: "goalBarMaxRounds",
-		icon: "hash",
-		kind: "action",
-		order: 60,
-	},
-	// 目标模式 2.0：执行者模型 + 打开执行对话。
-	{
-		id: "host:goal-execmodel",
-		slot: "goalbar.actions",
-		labelKey: "goalBarExecModel",
-		icon: "cpu",
-		kind: "action",
-		order: 55,
-	},
+	// 目标模式 2.0：打开执行对话。
 	{
 		id: "host:goal-openrole",
 		slot: "goalbar.actions",

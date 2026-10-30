@@ -1,4 +1,4 @@
-# 精简发行版交付清单（阶段 A-E + D-9 至 D-11）
+# 精简发行版交付清单（阶段 A-E + D-9 至 D-12）
 
 基于上游 [xing-shuyin/pi-web-ui](https://github.com/xing-shuyin/pi-web-ui) @ **v0.111.0**（tag `7c40b44`，MIT）源码裁剪。来源/版本/许可见 `PROVENANCE.md`。
 
@@ -27,16 +27,17 @@
 | D-7 | 多引擎（DSH/Claude/Durable + 引擎切换/探测/更新全链路） | 5c62fdc |
 | D-8 | Plan/Delegate 入口（GoalBar 计划按钮 + PlanBoard + 审查者委派开关/徽标） | 2be7a90 |
 | D-10 | 插件 UI 入口（顶栏「插件」+ 插件面板/管理弹窗 + 设置页「界面插件」页）与右侧空栏（RightPanel 及 D-6b 残留的文件树代码、FileTransferDialog、SlotTabs、对应 CSS），清理 106 个无引用 i18n key；插件运行时与 MCP 保留（D-11 已删） | 7f8a39f |
-| D-11 | 设置页「系统提示词 / 预设 / 扩展 / MCP 服务器 / 目标审查」五个分区；插件运行时整套（`server/plugins.ts` 等 20 个服务端模块、前端插件宿主/视图/围栏/图标、`plugins/` 目录含 page-picker、`plugin-sdk/`、CLI 插件子命令、`browser_page` 工具与网页引用附件）；MCP（自带 MCP 桥 + `mcp_manage` 工具，SDK 自带的 `builtin:mcp` 扩展用 `disabledBuiltinExtensions` 关掉）；设置预设（保存/应用/导入/导出/分享）。清理 270 个无引用 i18n key、313 条无引用 CSS 规则。pi-llm-wiki 扩展、定时任务、审批、内置布局保留 | 70f90bd + 本次 |
+| D-11 | 设置页「系统提示词 / 预设 / 扩展 / MCP 服务器 / 目标审查」五个分区；插件运行时整套（`server/plugins.ts` 等 20 个服务端模块、前端插件宿主/视图/围栏/图标、`plugins/` 目录含 page-picker、`plugin-sdk/`、CLI 插件子命令、`browser_page` 工具与网页引用附件）；MCP（自带 MCP 桥 + `mcp_manage` 工具，SDK 自带的 `builtin:mcp` 扩展用 `disabledBuiltinExtensions` 关掉）；设置预设（保存/应用/导入/导出/分享）。清理 270 个无引用 i18n key、313 条无引用 CSS 规则。pi-llm-wiki 扩展、定时任务、审批、内置布局保留 | 70f90bd、2aec462 |
+| D-12 | 删除已不引用的 `pi-web-cockpit/vendor/mini-harness-runtime/` 与 `pi-web-cockpit/config/client-state.seed.json` 以及旧 `CodeLoopModal.tsx`（由统一 `TaskModal.tsx` 取代） | b4ca3dd + D-12b |
 
 **净删除 325,784 行源码**（D-1 至 D-8，`git diff --stat 30902c1..HEAD`），当时 `server/` 3.7M、`web/src/` 3.5M。D-11 又删 74,661 行（含测试与语言包；`git diff --histogram` 统计），`server/` 降到 3.0M、`web/src/` 降到 2.8M。
 
 ## 三、验证证据位置
 
-- **单元测试**：`npx vitest run` → 312 个文件全过（3282 过 / 0 失败 / 9 跳过，2026-10-30，D-11 后；删掉只测插件、page-picker、MCP、预设的用例，保留功能的用例改写）。
-- **零 token 冒烟套件**：`node tests/run-smoke.mjs --no-build` → D-11 后清单 59 条（删了 15 条只测插件/MCP 的用例），58/59 通过；唯一失败是 `terminal-smoke-test`，本机 zsh 交互 shell 偶尔在用例的 3 秒窗口内没退出，D-11 未改终端代码与该用例，单独重跑 3 次过 2 次。D-10 时为 74/74。
-- **Loop 正确性**：`tests/unit/loop-extension.test.ts`（13 用例，mock 零 token）。
-- **Loop 前端渲染**：`tests/loop-bar-test.mjs`（14/14，Playwright：成对胶囊 `LLM loop` + `代码 loop`、LLM loop 展开/折叠、`CodeLoopModal` 弹窗开启时隐藏底部胶囊、预设/字段/高级折叠项与启动按钮门控）。
+- **单元测试**：`npx vitest run` → 313 个文件全过（3367 过 / 0 失败 / 9 跳过，2026-10-30，D-12 后；新增 `loop-status.test.ts` 56 条，扩充 `loop-extension` / `loop-routes` / `loop-cockpit-ui` 等）。
+- **零 token 冒烟套件**：`node tests/run-smoke.mjs --no-build` → D-11 后清单 59 条（删了 15 条只测插件/MCP 的用例），58/59 通过（核心 16/16 全过）；唯一偶发是 `terminal-smoke-test`，本机 zsh 交互 shell 偶尔在用例的 3 秒窗口内没退出，单独重跑可过。
+- **Loop 正确性**：`tests/unit/loop-extension.test.ts`（25 用例，mock 零 token）、`tests/unit/loop-routes.test.ts`（8 用例）、`tests/unit/loop-status.test.ts`（56 用例）、`tests/unit/loop-cockpit-ui.test.ts`（26 用例）。
+- **Loop 前端渲染**：`tests/loop-bar-test.mjs`（26/26，Playwright：单枚「新任务」胶囊、`TaskModal` 三选一验收方式分流、弹窗打开时隐藏胶囊、预设填充与门控）与 `tests/run-detail-ui-test.mjs`（31/31，Playwright：人话状态、`RunDetailModal` 证据/日志/diff/时间线展示、裁判掉线恢复 `loop_resume` / `loop_accept`）。
 - **E 阶段回归**：五项保留 + 删除项不渲染 + 无 pageerror（Playwright，隔离端口 8941，`PI_WEB_SDK=bundled`）。
 - **真实模型 E2E**（C 阶段）：代码 loop done/verdict=pass/code=0/review=pass；LLM loop done；续跑互斥/停止不复活/taskId 绑定均 live 验证。
 
@@ -89,3 +90,15 @@ node pi-web-cockpit/verify-cockpit.mjs  # 浏览器 E2E（可选 KEY_FILE / SHOT
 - 默认分支没有改动（是否把 `harness-cockpit` 设为默认分支需要人来定）。
 - `pi-web-cockpit/vendor/mini-harness-runtime/` 与 `config/client-state.seed.json` 已在 D-12 删除（运行时已并入 `server/loop/`，默认值已入源码）；服务端仍会忽略 `~/.pi/agent` 里登记的旧运行时包。
 - 设 key 后自动补选模型只作用于保存 key 的那个页面；同时开着的其他标签页仍要手动选一次模型。
+
+## 八、D-12：Loop 完成态可信度、服务端结构化启动、成果查看器与统一任务入口
+
+对照四阶段架构基调补齐 Loop 闭环体验与可信度：
+
+| 阶段 | 内容 | 提交 |
+|---|---|---|
+| D-12-1 | 完成态可信度：代码 Loop 在 validator 通过但 reviewer 出错时停在 `stopped` / `review-error`（`stopReason=reviewer-error`），不再误报完成；`state.json` 引入 `acceptance`（`passed` / `passed-validator-only` / `self-declared`），支持评审掉线后「重试评审」（`loop_resume`）或「按代码验证收下」（`loop_accept`） | b4ca3dd |
+| D-12-2 | 服务端结构化启动：`createLoopRun` 在点击开始时直接生成 `runId`、落盘 `state.json`（绑定 `sessionId`、`setupPending=true`）并立即推送前端快照，不再依赖模型首轮自觉调 `loop_start`（同会话已有活跃 run 时 `loop_start` 幂等返回） | b4ca3dd |
+| D-12-3 | 成果与证据查看器 + 人话状态：新增 `GET /api/mini-harness/runs/:runId/detail`（各轮评审报告、validator 日志、diff、journal）；前端 `loop-status.ts` 统一人话文案与色调，`RunDetailModal.tsx` 展示两行验收结论、各轮折叠报告、终端输出、着色 diff 与恢复操作 | b4ca3dd + D-12b |
+| D-12-4 | 统一任务入口：输入框上沿合并为单枚「新任务」胶囊（`host:task-new`），`TaskModal.tsx`（取代 `CodeLoopModal.tsx`）通过三选一验收方式（代码验证 + 模型评审 / 仅代码验证 / 仅模型评审）自动分流代码 Loop 与 LLM Loop | D-12b |
+| D-12-5 | 清理与收尾验证：删除 `vendor/mini-harness-runtime` 与 `client-state.seed.json`；全量 vitest 313/313、核心冒烟 16/16、`loop-bar-test.mjs` 与 `run-detail-ui-test.mjs` 浏览器 E2E 全绿 | b4ca3dd + D-12b |

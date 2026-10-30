@@ -1,12 +1,13 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useState, type KeyboardEvent } from "react";
 import { FiList } from "react-icons/fi";
 import type { GoalStatus } from "../types";
 import { isZhLocale, useI18n, useT } from "../i18n";
 import { appSend } from "../app-globals";
-import { closeTaskDesk, mhGet, mhPost, useCockpit } from "../loop-cockpit";
+import { closeTaskDesk, mhGet, mhPost, openRunDetail, useCockpit } from "../loop-cockpit";
+import { loopStatus, type LoopTone } from "../loop-status";
 import { Modal } from "./Modal";
 
-/** GET /api/mini-harness/runs 的一行（server/loop/routes.ts 的 LoopRunBrief）。 */
+/** GET /api/mini-harness/runs 的一行（server/loop/routes.ts 的 LoopRunBrief，这里只取用到的字段）。 */
 interface RunBrief {
 	runId: string;
 	stage: string;
@@ -17,7 +18,13 @@ interface RunBrief {
 	goal: string;
 	project: string;
 	updatedAt: string | null;
+	mode?: "code" | "llm";
+	stopReason?: string | null;
+	acceptance?: string | null;
 }
+
+/** 运行行左边那条色线：沿用任务台已有的三种（进行中紫 / 通过绿 / 出错红），另加一档黄。 */
+const ROW_TONE: Record<LoopTone, string> = { busy: "run", ok: "ok", warn: "warn", bad: "err", idle: "" };
 
 /** LLM loop 永久目录的一行（server/goal-history-log.ts 的 GoalLogRecord）。 */
 interface GoalRecord {
@@ -67,7 +74,7 @@ interface Props {
 }
 
 /** Loop 任务台：右侧抽屉。当前 LLM loop 的进度 / 执行者工具调用时间线 / 暂停·继续·停止，
- *  以及 LLM loop 永久目录与代码 loop 运行列表（都可删除）。打开时才轮询。 */
+ *  以及 LLM loop 永久目录与代码 loop 运行列表（都可删除；代码 loop 的行点开 = 任务详情）。打开时才轮询。 */
 export const TaskDesk = memo(function TaskDesk({ goal, activeConversationId }: Props) {
 	const open = useCockpit("taskDeskOpen");
 	const t = useT();
@@ -255,22 +262,42 @@ export const TaskDesk = memo(function TaskDesk({ goal, activeConversationId }: P
 					<div className="task-desk-empty">{t("taskDeskNone")}</div>
 				) : (
 					runs.map((r) => {
-						const done = r.status !== "active";
+						const st = loopStatus(r, t);
+						const openDetail = () => openRunDetail(r.runId);
+						const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+							if (e.target !== e.currentTarget) return;
+							if (e.key === "Enter" || e.key === " ") {
+								e.preventDefault();
+								openDetail();
+							}
+						};
 						return (
-							<div key={r.runId} className={`task-desk-ev ${done ? "ok" : "run"}`} title={r.goal}>
+							<div
+								key={r.runId}
+								className={`task-desk-ev task-desk-run ${ROW_TONE[st.tone]}`}
+								data-run-id={r.runId}
+								role="button"
+								tabIndex={0}
+								title={`${t("loopOpenDetail")}\n${r.goal}`}
+								onClick={openDetail}
+								onKeyDown={onKey}
+							>
 								<button
 									type="button"
 									className="task-desk-del"
-									onClick={() => void del("runs/delete", { runId: r.runId }, t("taskDeskDeleteRunConfirm"))}
+									onClick={(e) => {
+										e.stopPropagation();
+										void del("runs/delete", { runId: r.runId }, t("taskDeskDeleteRunConfirm"));
+									}}
 								>
 									{t("taskDeskDelete")}
 								</button>
-								<span className="nm">{r.project || "—"}</span>{" "}
-								<span className="ar">
-									{t("goalBarRound", { n: `${r.round}/${r.maxRounds}` })} · {r.stage}
-								</span>
+								<span className="nm">{r.goal.slice(0, 70) || r.runId}</span>
+								<div className={`task-desk-run-status tone-${st.tone}`}>{st.text}</div>
 								<div className="out">
-									{done ? t("taskDeskEnded") : t("taskDeskRunning")} · {verdictText(r.lastVerdict)}
+									{[r.project, r.updatedAt ? String(r.updatedAt).replace("T", " ").slice(5, 16) : ""]
+										.filter(Boolean)
+										.join(" · ")}
 								</div>
 							</div>
 						);

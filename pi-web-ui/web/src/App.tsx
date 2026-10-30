@@ -15,9 +15,10 @@ import { MessageList } from "./components/MessageList";
 import { ChatInput } from "./components/ChatInput";
 import { GoalBar } from "./components/GoalBar";
 import { LoopBar } from "./components/LoopBar";
-import { CodeLoopModal } from "./components/CodeLoopModal";
+import { TaskModal } from "./components/TaskModal";
 import { ClusterModal } from "./components/ClusterControls";
 import { TaskDesk } from "./components/TaskDesk";
+import { RunDetailModal } from "./components/RunDetailModal";
 import { SandboxModal } from "./components/SandboxModal";
 import { WorktreeBanner } from "./components/WorktreeBanner";
 import { FiRefreshCw, FiFeather } from "react-icons/fi";
@@ -1619,12 +1620,9 @@ export function App() {
 								<div className="goalbar-slot">
 									<GoalBar
 										goal={chat.goal}
-										models={chat.models}
-										modelsLoading={chat.modelsLoading}
 										activeConversationId={chat.activeConversationId}
 										uiGoalbarActions={uiGoalbarActions}
 										onUiAction={onUiAction}
-										mainModel={chat.state?.model ?? null}
 									/>
 								</div>
 							)}
@@ -1633,10 +1631,15 @@ export function App() {
 							<div className="goalbar-slot">
 								<LoopBar loop={chat.state?.loop ?? null} goalModeEnabled={chat.settings?.goalModeEnabled !== false} />
 							</div>
-							{/* 驾驶舱弹层（Portal 到 body）：代码 loop 启动表单 / 连接集群 / Loop 任务台。 */}
-							<CodeLoopModal />
+							{/* 驾驶舱弹层（Portal 到 body）：新任务（统一任务入口）/ 连接集群 / Loop 任务台 / 任务详情。 */}
+							<TaskModal
+								goal={chat.goal}
+								mainModel={chat.state?.model ?? null}
+								goalModeEnabled={chat.settings?.goalModeEnabled !== false}
+							/>
 							<ClusterModal />
 							<TaskDesk goal={chat.goal} activeConversationId={chat.activeConversationId} />
+							<RunDetailModal currentLoop={chat.state?.loop ?? null} />
 							{/* 扩展问卷：非模态内联面板，插在输入框上方，对话内容保持可见 */}
 							{/* 通用右键菜单（contextmenu.* 槽位）：各处的 onContextMenu 打开它。 */}
 							<ContextMenu onAction={(entry, target, value) => onUiAction(entry, value, target)} />

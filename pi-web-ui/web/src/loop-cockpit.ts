@@ -1,5 +1,5 @@
 /**
- * 驾驶舱 Loop 体验的前端小状态与 HTTP 接口：任务台抽屉 / 代码 loop 弹窗 / 连接集群。
+ * 驾驶舱 Loop 体验的前端小状态与 HTTP 接口：任务台抽屉 / 新任务弹窗 / 连接集群 / 任务详情。
  *
  * 只是几个弹层开关 + 一份集群连通状态，不进 app-globals（那里是快照镜像）；
  * 打开入口的组件（顶栏、输入框、目标条药丸）各自 import 开关函数，不必层层传 props。
@@ -17,20 +17,35 @@ export interface ClusterStatus {
 	message: string;
 }
 
+/** 新任务弹窗的验收方式：代码验证 + 模型评审 / 仅代码验证（都走 mini-harness 代码 loop）/
+ *  仅模型评审（走 GoalService 的 LLM loop）。 */
+export type TaskAcceptance = "code-review" | "code" | "llm";
+
+/** 打开新任务弹窗时的预填（终态条「重试」/ 详情面板「用同一目标重新开始」带回上次的任务）。
+ *  criteria 缺省 = 清空；acceptance 缺省 = 不动弹窗里当前选的验收方式。 */
+export interface TaskPrefill {
+	goal?: string;
+	criteria?: string;
+	acceptance?: TaskAcceptance;
+}
+
 interface CockpitState {
-	codeLoopOpen: boolean;
-	/** 打开代码 loop 弹窗时预填的目标（终态条「重试」带回上次的 goal）。 */
-	codeLoopPrefill: string;
+	taskOpen: boolean;
+	/** 本次打开带的预填；null = 沿用弹窗里上次没提交的草稿。 */
+	taskPrefill: TaskPrefill | null;
 	clusterOpen: boolean;
 	taskDeskOpen: boolean;
+	/** 任务详情面板正在看的 runId；null = 关着。 */
+	runDetail: string | null;
 	cluster: ClusterStatus | null;
 }
 
 let state: CockpitState = {
-	codeLoopOpen: false,
-	codeLoopPrefill: "",
+	taskOpen: false,
+	taskPrefill: null,
 	clusterOpen: false,
 	taskDeskOpen: false,
+	runDetail: null,
 	cluster: null,
 };
 const listeners = new Set<() => void>();
@@ -55,21 +70,24 @@ export function useCockpit<K extends keyof CockpitState>(key: K): CockpitState[K
 	);
 }
 
-/** 任一驾驶舱弹层开着（输入框上沿的 loop 胶囊此时收起，不与弹层抢视线）。 */
+/** 任一驾驶舱弹层开着（新任务 / 连接集群 / 任务台 / 任务详情）：输入框上沿的「新任务」胶囊此时收起，不与弹层抢视线。 */
 export function useCockpitPopupOpen(): boolean {
 	return useSyncExternalStore(
 		subscribe,
-		() => state.codeLoopOpen || state.clusterOpen || state.taskDeskOpen,
+		() => state.taskOpen || state.clusterOpen || state.taskDeskOpen || state.runDetail !== null,
 		() => false,
 	);
 }
 
-export const openCodeLoop = (prefill = ""): void => patch({ codeLoopOpen: true, codeLoopPrefill: prefill });
-export const closeCodeLoop = (): void => patch({ codeLoopOpen: false });
+export const openTaskModal = (prefill: TaskPrefill | null = null): void =>
+	patch({ taskOpen: true, taskPrefill: prefill });
+export const closeTaskModal = (): void => patch({ taskOpen: false, taskPrefill: null });
 export const openCluster = (): void => patch({ clusterOpen: true });
 export const closeCluster = (): void => patch({ clusterOpen: false });
 export const openTaskDesk = (): void => patch({ taskDeskOpen: true });
 export const closeTaskDesk = (): void => patch({ taskDeskOpen: false });
+export const openRunDetail = (runId: string): void => patch({ runDetail: runId });
+export const closeRunDetail = (): void => patch({ runDetail: null });
 
 export function mhUrl(path: string): string {
 	return withToken(appUrl(`/api/mini-harness/${path}`));
