@@ -153,7 +153,6 @@ const SLOT_IDS: UiSlotId[] = [
 	"composer.actions",
 	"rightpanel.tabs",
 	"terminal.toolbar",
-	"scm.toolbar",
 	"bottombar",
 	"file.preview.toolbar",
 	"contextmenu.topbar",
@@ -254,7 +253,6 @@ export function applyUiSlotCardinality<T extends { id: string; hidden: boolean }
  *                    挂载口径），其余 kind 当动作按钮；宿主自己 diff 出来的后台进程仍走
  *                    该面板原生的列表，两者在同一面板里共存。
  *   v8 新增槽位：file.preview.toolbar / leftpanel.sessions / terminal.toolbar /
- *                    scm.toolbar / goalbar.actions 均已登记宿主条目（见下表），与插件贡献
  *                    按同一顺序统一渲染；chat.header / chat.empty / notice.actions 仍是
  *                    纯插件新增位（宁缺勿造），无插件贡献时渲染层返回 null、不渲染，
  *                    DOM 与旧版一字不差。渲染位置：chat.header 在 App 主列顶部、
@@ -395,17 +393,6 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		group: "views",
 		align: "end",
 	},
-	{
-		id: "host:git",
-		slot: "topbar.primary",
-		labelKey: "scmTab",
-		icon: "git",
-		kind: "view",
-		view: "git",
-		order: 22,
-		group: "views",
-		align: "end",
-	},
 	// 插件面板（Chrome 扩展图标那个位置）：一个 🧩 入口列出全部已装插件，每行带「钉到顶栏」
 	// 开关。插件视图 tab 默认不钉（合成条目 hidden，见 withPluginViewItems），钉住的才回到
 	// 这里当 tab（order 23，紧跟本条目之前）。图标用 emoji 而不是词表名：词表名会被布局页
@@ -525,17 +512,6 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 	//                     （web/src/topbar-fit.ts 按视觉顺序从尾部丢），而不是反过来。
 	// 别把它调回 95：那时尾部实际是「新对话(96)」，窄屏会先把核心动作「新对话」收进 ⋯
 	//（顺序即丢弃顺序，这是设计上刻意的单一口径）。理由：纯外链、零上下文价值。
-	{
-		id: "host:github",
-		slot: "topbar.primary",
-		labelKey: "githubRepo",
-		icon: "github",
-		kind: "action",
-		order: 200,
-		group: "system",
-		align: "end",
-		hidden: true,
-	},
 
 	// ---- 底栏（基本都是「展示型」条目 kind="badge"；只有工作目录可点） ----
 	{ id: "host:conn", slot: "bottombar", labelKey: "connected", icon: "dot", kind: "badge", order: 5, group: "status" },
@@ -865,41 +841,6 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		order: 65,
 	},
 	{ id: "host:goal-clear", slot: "goalbar.actions", labelKey: "goalBarClear", icon: "x", kind: "action", order: 70 },
-
-	// ---- SCM（SCMPanel.tsx：头栏簇 + 分支行簇分别排序，插件条目落头栏） ----
-	{ id: "host:scm-changes", slot: "scm.toolbar", labelKey: "scmChanges", icon: "file", kind: "action", order: 10 },
-	{ id: "host:scm-history", slot: "scm.toolbar", labelKey: "scmHistory", icon: "clock", kind: "action", order: 20 },
-	{
-		id: "host:scm-refresh",
-		slot: "scm.toolbar",
-		labelKey: "scmRefreshTip",
-		icon: "refresh",
-		kind: "action",
-		order: 30,
-	},
-	{ id: "host:scm-branch", slot: "scm.toolbar", labelKey: "scmSwitchBranch", icon: "git", kind: "action", order: 40 },
-	{ id: "host:scm-switch", slot: "scm.toolbar", labelKey: "scmSwitch", icon: "git", kind: "action", order: 50 },
-	{ id: "host:scm-push", slot: "scm.toolbar", labelKey: "scmPush", icon: "upload", kind: "action", order: 60 },
-	{ id: "host:scm-pull", slot: "scm.toolbar", labelKey: "scmPull", icon: "download", kind: "action", order: 70 },
-	{
-		id: "host:scm-input",
-		slot: "scm.toolbar",
-		labelKey: "scmCommitPlaceholder",
-		icon: "edit",
-		kind: "action",
-		order: 80,
-	},
-	{ id: "host:scm-genmsg", slot: "scm.toolbar", labelKey: "scmGenMsg", icon: "cpu", kind: "action", order: 85 },
-	{ id: "host:scm-commit", slot: "scm.toolbar", labelKey: "scmCommit", icon: "check", kind: "action", order: 90 },
-	{
-		id: "host:scm-commit-all",
-		slot: "scm.toolbar",
-		labelKey: "scmCommitAll",
-		icon: "check",
-		kind: "action",
-		order: 100,
-	},
-	{ id: "host:scm-term", slot: "scm.toolbar", labelKey: "terminal", icon: "terminal", kind: "action", order: 110 },
 
 	// ---- 终端面板头（TerminalPanel.tsx：命令列表头 + 终端 tab 头，插件条目落 tab 头） ----
 	{
@@ -1826,7 +1767,7 @@ function placeTopbarPluginViews(entries: WorkingEntry[], rank: RankMap): Working
 	if (unrankedViews.length === 0) return entries;
 	const rest = entries.filter((entry) => !isPluginViewItem(entry) || rank.has(entry.id));
 	const anchor =
-		["host:git", "host:terminal", "host:chat"]
+		["host:terminal", "host:chat"]
 			.map((id) => rest.findIndex((entry) => entry.id === id))
 			.find((index) => index >= 0) ?? -1;
 	const panel = rest.findIndex((entry) => entry.id === "host:plugins");

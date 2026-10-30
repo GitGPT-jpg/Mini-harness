@@ -485,9 +485,9 @@ describe("TopBar 槽位渲染（顺序即 slot 顺序，插件条目与宿主条
 			hostEntry("host:terminal"),
 		]);
 		const tabs = Array.from(container.querySelectorAll('[role="tab"]'));
-		expect(tabs.length).toBe(3);
+		expect(tabs.length).toBe(2);
 		// 选中的 terminal 落在 slot 顺序的最后一位（文案随语言包变，用选中态定位）。
-		expect(tabs.findIndex((b) => b.getAttribute("aria-selected") === "true")).toBe(2);
+		expect(tabs.findIndex((b) => b.getAttribute("aria-selected") === "true")).toBe(1);
 		tabs.forEach((t) => expect(t.parentElement?.classList.contains("topbar-flow")).toBe(true));
 	});
 
@@ -569,7 +569,6 @@ describe("TopBar 实测宽度溢出（放不下的自动进「⋯」）", () => 
 			hostEntry("host:open-project"),
 			hostEntry("host:chat"),
 			hostEntry("host:terminal"),
-			hostEntry("host:git"),
 			hostEntry("host:new-chat"),
 		];
 		const { container } = mount("chat", rows);
@@ -579,8 +578,8 @@ describe("TopBar 实测宽度溢出（放不下的自动进「⋯」）", () => 
 		act(() => more!.click());
 		// 退进菜单的是原样控件（tb-tab/chip 包一层关菜单），不是扁平菜单行。
 		const menuItems = document.querySelectorAll(".plugin-topbar-menu .plugin-topbar-menu-keep");
-		expect(menuItems.length).toBe(3);
-		expect(document.querySelectorAll(".plugin-topbar-menu .plugin-topbar-menu-keep > .tb-tab").length).toBe(2);
+		expect(menuItems.length).toBe(2);
+		expect(document.querySelectorAll(".plugin-topbar-menu .plugin-topbar-menu-keep > .tb-tab").length).toBe(1);
 	});
 });
 

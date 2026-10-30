@@ -318,7 +318,6 @@ export function TopBar({
 		"host:open-project",
 		"host:chat",
 		"host:terminal",
-		"host:git",
 		"host:plugins",
 		"host:search",
 		"host:browser",
@@ -328,7 +327,6 @@ export function TopBar({
 		"host:language",
 		"host:theme",
 		"host:update",
-		"host:github",
 		"host:new-chat",
 		"host:new-ephemeral-chat",
 		"host:new-sandbox",
@@ -1038,19 +1036,6 @@ export function TopBar({
 			>
 				<FiTerminal />
 				<span>{t("terminal")}</span>
-			</button>
-		) : null,
-		"host:git": tabOn("git") ? (
-			<button
-				type="button"
-				role="tab"
-				aria-selected={view === "git"}
-				className={`tb-tab${view === "git" ? " active" : ""}`}
-				data-tip={t("scmTab")}
-				onClick={() => onViewChange("git")}
-			>
-				<FiGitBranch />
-				<span>{t("scmTab")}</span>
 			</button>
 		) : null,
 		// 插件面板入口（Chrome 扩展图标那个位置）：列出全部已装插件，每行带「钉到顶栏」

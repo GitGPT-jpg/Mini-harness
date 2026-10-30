@@ -36,7 +36,7 @@ import { BROWSER_PAGE_TOOL_NAME } from "../../../server/tool-manager.js";
 import { EnginePicker } from "./EnginePicker";
 import { appUrl } from "../base-url";
 
-export type ViewName = "chat" | "terminal" | "git" | `plugin:${string}`;
+export type ViewName = "chat" | "terminal" | `plugin:${string}`;
 
 /** Loop 耗时：1m05s / 1h03m（active 时随秒级 tick 刷新）。 */
 export function formatLoopElapsed(ms: number): string {
@@ -913,13 +913,6 @@ export function BarItem({
 			isTab = true;
 			onClick = () => onViewChange?.("terminal");
 			break;
-		case "host:git":
-			iconNode = <FiGitBranch className="bar-item-icon" />;
-			labelText = named(t("scmTab"));
-			isActive = view === "git";
-			isTab = true;
-			onClick = () => onViewChange?.("git");
-			break;
 		case "host:new-chat":
 			iconNode = <FiPlus className="bar-item-icon" />;
 			labelText = named(t("newChat"));
@@ -1005,12 +998,6 @@ export function BarItem({
 				if (onOpenPluginMenu) onOpenPluginMenu(e.currentTarget);
 				else onOpenSettings?.("plugins");
 			};
-			break;
-		case "host:github":
-			iconNode = <FiGithub className="bar-item-icon" />;
-			labelText = named("GitHub");
-			extraClasses = "chip github";
-			onClick = () => window.open("https://github.com/xing-shuyin/pi-web-ui", "_blank", "noreferrer,noopener");
 			break;
 		case "host:cwd":
 			iconNode = <FiFolder className="bar-item-icon" />;

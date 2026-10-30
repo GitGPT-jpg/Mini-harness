@@ -55,7 +55,7 @@ const ids = (entries: { id: string }[]) => entries.map((e) => e.id);
 
 describe("UI slot cardinality（P1-4）", () => {
 	it("所有现有挂载点都有显式 list 规格，新增 single 不会改变现有入口语义", () => {
-		expect(UI_SLOT_SPECS).toHaveLength(33);
+		expect(UI_SLOT_SPECS).toHaveLength(32);
 		expect(UI_SLOT_SPECS.every((spec) => spec.cardinality === "list")).toBe(true);
 		expect(new Set(UI_SLOT_SPECS.map((spec) => spec.slot)).size).toBe(UI_SLOT_SPECS.length);
 	});
@@ -118,7 +118,6 @@ describe("BUILTIN_UI_ITEMS（宿主默认）", () => {
 			expect.arrayContaining([
 				"host:chat",
 				"host:terminal",
-				"host:git",
 				"host:search",
 				"host:browser",
 				"host:tasks",
@@ -155,7 +154,6 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			"host:open-project",
 			"host:chat",
 			"host:terminal",
-			"host:git",
 			"host:plugins",
 			"host:search",
 			"host:browser",
@@ -170,7 +168,6 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			"host:new-sandbox",
 			"host:files",
 			// order 200：尾部条目 = 实测溢出的第一顺位被收起者（见 BUILTIN_UI_ITEMS 注释）
-			"host:github",
 		]);
 		expect(ids(slots.bottombar)).toEqual([
 			"host:conn",
@@ -194,7 +191,7 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 		expect(settings?.hidden).toBe(false);
 		expect(settings?.order).toBe(60);
 		// 没用到的槽位是空数组（渲染层不必判空），且全部槽位都在
-		expect(Object.keys(slots)).toHaveLength(33);
+		expect(Object.keys(slots)).toHaveLength(32);
 		expect(slots["composer.leading"]).toEqual([]);
 		// 输入框动作区有 7 个宿主内置（上传/模板/模型/思考/DSH×2/发送），发送簇 align=end
 		// （计划模式已搬到目标条 host:goal-plan）
@@ -222,7 +219,6 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			"host:language",
 			"host:theme",
 			"host:update",
-			"host:github",
 		]);
 		// 常驻 = 「切视图（chat/terminal/git） / 起新活（new-chat/new-ephemeral-chat/new-sandbox） /
 		// 看运行态（tasks） / 进设置（settings）」四类，加品牌、项目、搜索、面板开关
@@ -232,7 +228,6 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			"host:open-project",
 			"host:chat",
 			"host:terminal",
-			"host:git",
 			"host:plugins",
 			"host:search",
 			"host:tasks",
@@ -270,7 +265,6 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			"composer.actions",
 			"rightpanel.tabs",
 			"terminal.toolbar",
-			"scm.toolbar",
 			"bottombar",
 			"file.preview.toolbar",
 			"contextmenu.topbar",
@@ -289,7 +283,6 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 
 	it("kind=view 的条目带 view 目标（宿主据此切视图）", () => {
 		const slots = build([]);
-		expect(slots["topbar.primary"].find((e) => e.id === "host:git")?.view).toBe("git");
 		expect(slots["rightpanel.tabs"].map((e) => [e.id, e.view])).toEqual([["host:right-files", "files"]]);
 	});
 
@@ -448,7 +441,7 @@ describe("buildUiSlots / 第 2 层：插件贡献", () => {
 			arrange: [],
 		});
 		const slots = build([dirty]);
-		expect(Object.keys(slots)).toHaveLength(33);
+		expect(Object.keys(slots)).toHaveLength(32);
 		expect(ids(Object.values(slots).flat()).some((id) => id === "dirty:bad")).toBe(false);
 	});
 });
@@ -580,12 +573,12 @@ describe("顶栏插件视图区段", () => {
 				layout: {
 					shown: ["run-trace:__view", "editor:__view"],
 					// 旧布局顺序只列了宿主条目，没有列新插件视图
-					order: ["host:chat", "host:terminal", "host:git"],
+					order: ["host:chat", "host:terminal"],
 				},
 			},
 		);
 		const ids = slots["topbar.primary"].filter((entry) => !entry.hidden).map((entry) => entry.id);
-		expect(ids.indexOf("host:git")).toBeLessThan(ids.indexOf("run-trace:__view"));
+		expect(ids.indexOf("host:terminal")).toBeLessThan(ids.indexOf("run-trace:__view"));
 		expect(ids.indexOf("run-trace:__view")).toBeLessThan(ids.indexOf("host:plugins"));
 		expect(ids.indexOf("run-trace:__view")).toBeLessThan(ids.indexOf("editor:__view"));
 	});
@@ -636,16 +629,16 @@ describe("buildUiSlots / 第 4 层：用户偏好（最高）", () => {
 	});
 
 	it("order 列表：列出的按列表顺序排在最前，未列出的保持原顺序", () => {
-		const slots = build([], { layout: { order: ["host:github", "host:chat"] } });
-		expect(ids(slots["topbar.primary"]).slice(0, 2)).toEqual(["host:github", "host:chat"]);
-		// 其余仍按权重排：github/chat 置顶之后是 history(0) → brand(1) → open-project(3) …
-		expect(ids(slots["topbar.primary"]).slice(2, 5)).toEqual(["host:history", "host:brand", "host:open-project"]);
+		const slots = build([], { layout: { order: ["host:chat"] } });
+		expect(ids(slots["topbar.primary"])[0]).toBe("host:chat");
+		// 其余仍按权重排：chat 置顶之后是 history(0) → brand(1) → open-project(3) …
+		expect(ids(slots["topbar.primary"]).slice(1, 4)).toEqual(["host:history", "host:brand", "host:open-project"]);
 		expect(slots["topbar.primary"].find((e) => e.id === "host:chat")?.userOverrides).toEqual(["order"]);
 	});
 
 	it("order 列表里的历史 id（条目已不存在）被忽略", () => {
-		const slots = build([], { layout: { order: ["ghost:gone", "host:github"] } });
-		expect(ids(slots["topbar.primary"])[0]).toBe("host:github");
+		const slots = build([], { layout: { order: ["ghost:gone", "host:chat"] } });
+		expect(ids(slots["topbar.primary"])[0]).toBe("host:chat");
 		expect(slots["topbar.primary"]).toHaveLength(BUILTIN_UI_ITEMS.filter((i) => i.slot === "topbar.primary").length);
 	});
 
@@ -697,7 +690,7 @@ describe("buildUiSlots / 第 4 层：用户偏好（最高）", () => {
 	});
 
 	it("不改动传入的 plugins / layout（纯函数）", () => {
-		const layout = { hidden: ["host:chat"], order: ["host:github"] };
+		const layout = { hidden: ["host:chat"], order: ["host:search"] };
 		const snapshot = JSON.stringify(layout);
 		const pluginSnapshot = JSON.stringify(p);
 		build([p], { layout });
@@ -738,13 +731,13 @@ describe("restoreUiItem / restoreAllUi", () => {
 		const layout = {
 			hidden: ["host:chat", "host:sound"],
 			shown: ["host:chat"],
-			order: ["host:chat", "host:github"],
+			order: ["host:chat", "host:search"],
 			groups: { "host:chat": "g", "host:sound": "s" },
 			labels: { "host:chat": "聊天", "host:sound": "声音" },
 		};
 		expect(restoreUiItem(layout, "host:chat")).toEqual({
 			hidden: ["host:sound"],
-			order: ["host:github"],
+			order: ["host:search"],
 			groups: { "host:sound": "s" },
 			labels: { "host:sound": "声音" },
 		});
@@ -957,61 +950,6 @@ describe("bottombar align 分区（P1-2 收尾：路由走数据不走 id）", (
 	});
 });
 
-describe("面板 chrome 宿主条目（file.preview / goalbar / scm / terminal / leftpanel）", () => {
-	it("各槽位默认顺序与旧硬编码一致", () => {
-		const slots = build([]);
-		expect(ids(slots["file.preview.toolbar"])).toEqual([
-			"host:fp-md",
-			"host:fp-toc",
-			"host:fp-html",
-			"host:fp-edit",
-			"host:fp-wrap",
-			"host:fp-zoom",
-			"host:fp-ref",
-			"host:fp-full",
-			"host:fp-close",
-		]);
-		expect(ids(slots["goalbar.actions"])).toEqual([
-			"host:goal-pill",
-			"host:goal-set",
-			"host:goal-wizard",
-			"host:goal-plan",
-			"host:goal-lock",
-			"host:goal-collapse",
-			"host:goal-model",
-			"host:goal-execmodel",
-			"host:goal-rounds",
-			"host:goal-openrole",
-			"host:goal-clear",
-		]);
-		expect(ids(slots["scm.toolbar"])).toEqual([
-			"host:scm-changes",
-			"host:scm-history",
-			"host:scm-refresh",
-			"host:scm-branch",
-			"host:scm-switch",
-			"host:scm-push",
-			"host:scm-pull",
-			"host:scm-input",
-			"host:scm-genmsg",
-			"host:scm-commit",
-			"host:scm-commit-all",
-			"host:scm-term",
-		]);
-		expect(ids(slots["terminal.toolbar"])).toEqual(["host:term-cmd-refresh", "host:term-cmd-new", "host:term-tab-new"]);
-		expect(ids(slots["leftpanel.sessions"])).toEqual([]);
-	});
-
-	it("隐藏与调序走同一套偏好（与顶栏同口径）", () => {
-		const slots = build([], {
-			layout: { hidden: ["host:fp-close", "host:scm-push"], order: ["host:fp-close", "host:fp-md"] },
-		});
-		expect(slots["file.preview.toolbar"].find((e) => e.id === "host:fp-close")?.hidden).toBe(true);
-		expect(slots["scm.toolbar"].find((e) => e.id === "host:scm-push")?.hidden).toBe(true);
-		expect(ids(slots["file.preview.toolbar"]).slice(0, 2)).toEqual(["host:fp-close", "host:fp-md"]);
-	});
-});
-
 describe("withPluginViewItems（插件视图 tab 进槽位）", () => {
 	it("有视图的插件补一条 kind=view 合成条目（view:false 跳过）", () => {
 		const input = [plugin("mail", { items: [], arrange: [] }), plugin("renderer", undefined, { view: false })];
@@ -1039,8 +977,8 @@ describe("withPluginViewItems（插件视图 tab 进槽位）", () => {
 		const slots = build(
 			withPluginViewItems([plugin("b", { items: [], arrange: [] }), plugin("a", { items: [], arrange: [] })]),
 		);
-		const tabs = ids(slots["topbar.primary"]).filter((id) => id === "host:git" || id.endsWith(":__view"));
-		expect(tabs).toEqual(["host:git", "b:__view", "a:__view"]);
+		const tabs = ids(slots["topbar.primary"]).filter((id) => id.endsWith(":__view"));
+		expect(tabs).toEqual(["b:__view", "a:__view"]);
 		const entry = slots["topbar.primary"].find((e) => e.id === "a:__view")!;
 		expect(entry.kind).toBe("view");
 		expect(entry.view).toBe("plugin:a");
@@ -1105,7 +1043,7 @@ describe("插件视图的钉住开关（pluginViewItemId / setPluginViewPinned /
 		// id 恰好等于 source 的视图条目
 		expect(isPluginViewItem({ id: "mail:__view", source: "plugin:other" })).toBe(false);
 		// 宿主条目
-		expect(isPluginViewItem({ id: "host:git", source: "host" })).toBe(false);
+		expect(isPluginViewItem({ id: "host:chat", source: "host" })).toBe(false);
 		// 插件贡献的普通条目，恰好也以 :__view 结尾（不误伤）
 		expect(isPluginViewItem({ id: "mail:list:__view", source: "plugin:mail" })).toBe(false);
 	});
