@@ -15503,23 +15503,11 @@
 	.settings-tab[data-tab="skills"] {
 		--tile: #e879f9;
 	}
-	.settings-tab[data-tab="extensions"] {
-		--tile: #818cf8;
-	}
-	.settings-tab[data-tab="plugins"] {
-		--tile: #38bdf8;
-	}
 	.settings-tab[data-tab="layout"] {
 		--tile: #94a3b8;
 	}
-	.settings-tab[data-tab="review"] {
-		--tile: #facc15;
-	}
 	.settings-tab[data-tab="vision"] {
 		--tile: #22d3ee;
-	}
-	.settings-tab[data-tab="presets"] {
-		--tile: #fb923c;
 	}
 	.settings-tab[data-tab="subagent-templates"] {
 		--tile: #4ade80;

@@ -2700,9 +2700,7 @@ export function App() {
 			{settingsOpen && (
 				<SettingsModal
 					chat={chat}
-					terminal={terminal}
 					initialSection={settingsInitialSection}
-					onSwitchToTerminal={() => setView("terminal")}
 					onClose={() => setSettingsOpen(false)}
 					onOpenIconEdit={() => setIconEditOpen(true)}
 					onOpenManageModels={() => {
