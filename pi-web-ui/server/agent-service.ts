@@ -62,6 +62,7 @@ import {
 	loadLoopState,
 	type LoopEvent,
 } from "./loop/extension.js";
+import { modelsConfigHasCredentials } from "./pi-setup-state.js";
 import {
 	checkAll as checkAllUpdates,
 	collectTargets,
@@ -6009,9 +6010,8 @@ export class ClientSession {
 				try {
 					const modelsFile = join(this.agentDir, "models.json");
 					if (existsSync(modelsFile)) {
-						const conf = JSON.parse(readFileSync(modelsFile, "utf8")) as Record<string, unknown>;
-						const provs = conf?.providers;
-						if (provs && typeof provs === "object" && Object.keys(provs).length > 0) {
+						// 只认自带凭据的服务商：种入的 oneapi 只有目录没有 key，不能挡掉首次配置弹窗。
+						if (modelsConfigHasCredentials(JSON.parse(readFileSync(modelsFile, "utf8")))) {
 							configured = true;
 						}
 					}
