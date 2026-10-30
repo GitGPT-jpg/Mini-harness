@@ -348,49 +348,6 @@ try {
 	}
 	console.log("✓ server entry/manifest/path-traversal never exposed");
 
-	// -- 5. 插件市场列表（plugin_catalog）：添加/移除回环 + 内置条目 -----------
-	// 注：attach 时的 plugin_catalog 在 connect()（ready）后已到达，此处监听新推送。
-	const addNoticeP = waitFor(sock, (m) => m.type === "notice" && m.text?.includes("已添加到插件列表"), "add notice");
-	const addCatP = waitFor(sock, (m) => m.type === "plugin_catalog", "catalog after add");
-	sock.send(
-		JSON.stringify({
-			type: "plugin_catalog_add",
-			entry: { source: "someone/else/tool", id: "my-tool", name: "我的插件" },
-		}),
-	);
-	const catAfterAdd = await addCatP;
-	await addNoticeP;
-	const entries = catAfterAdd.entries ?? [];
-	// 随包 catalog.json 里有内置维护条目（webmail/db-client/vscode-editor/mermaid）
-	if (!entries.some((e) => e.id === "webmail" && e.builtin === true && e.source) || entries.length < 4) {
-		fail(`builtin catalog wrong: ${JSON.stringify(entries)}`);
-	} else {
-		console.log(
-			`✓ plugin_catalog carries ${entries.filter((e) => e.builtin).length} builtin + ${entries.filter((e) => !e.builtin).length} custom entries`,
-		);
-	}
-	const added = entries.find((e) => e.id === "my-tool");
-	if (!added || added.builtin !== false || added.name !== "我的插件" || added.source !== "someone/else/tool") {
-		fail(`custom entry not merged: ${JSON.stringify(added)}`);
-	} else {
-		console.log("✓ plugin_catalog_add persists custom entry + re-pushes");
-	}
-	// 移除自定义条目 → 重推后消失（builtin 仍在）
-	const rmCatP = waitFor(sock, (m) => m.type === "plugin_catalog", "catalog after remove");
-	sock.send(JSON.stringify({ type: "plugin_catalog_remove", id: "my-tool" }));
-	const catAfterRm = await rmCatP;
-	if ((catAfterRm.entries ?? []).some((e) => e.id === "my-tool")) fail("custom entry should be removed");
-	if (!(catAfterRm.entries ?? []).some((e) => e.id === "webmail" && e.builtin))
-		fail("builtin entry must survive remove");
-	console.log("✓ plugin_catalog_remove drops the custom entry, builtin survives");
-	// 自定义文件落盘校验
-	{
-		const { readFileSync } = await import("node:fs");
-		const stored = JSON.parse(readFileSync(join(dataDir, "plugin-catalog.json"), "utf8"));
-		if ((stored.entries ?? []).length !== 0) fail(`custom file should be back to empty: ${JSON.stringify(stored)}`);
-		console.log("✓ <dataDir>/plugin-catalog.json persisted");
-	}
-
 	sock.close();
 	console.log("\nALL PLUGIN TESTS PASSED");
 } catch (err) {

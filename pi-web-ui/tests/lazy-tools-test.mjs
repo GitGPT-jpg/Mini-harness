@@ -191,31 +191,16 @@ ws.send(JSON.stringify({ type: "set_model", modelId: "main/lazy-tools-mock" }));
 for (let i = 0; i < 100 && state?.model?.id !== "lazy-tools-mock"; i++) await sleep(100);
 check("已切到 mock 模型", state?.model?.id === "lazy-tools-mock", `model=${state?.model?.id}`);
 
-// 按需加载**默认关**（#652 起）：刚启动的实例应当已经把全部工具挂在活跃集里，没有 load_tools。
+// D-9a 起工具按需加载默认开启：刚启动的实例默认只有核心工具 + load_tools 常驻。
 ws.send(JSON.stringify({ type: "get_settings" }));
 for (let i = 0; i < 50 && typeof settings?.toolLazyLoading !== "boolean"; i++) await sleep(50);
 check(
-	"默认关：开箱即用全部工具，load_tools 不出现",
-	settings?.toolLazyLoading === false &&
+	"默认开：刚启动即启用按需加载，只有核心工具 + load_tools 常驻",
+	settings?.toolLazyLoading === true &&
 		Array.isArray(state?.tools) &&
-		!state.tools.includes("load_tools") &&
-		state.tools.includes("patch"),
+		state.tools.includes("load_tools") &&
+		!state.tools.includes("patch"),
 	`lazy=${settings?.toolLazyLoading} tools=${state?.tools?.join(",")}`,
-);
-
-// 按需加载**默认关**（#652 起）：先显式打开，再验证「开」时的目录与缓存行为。
-// 新会话才有空种子（老会话按当时活跃集做种子，不会被反向清空），所以打开后另起一个对话。
-ws.send(JSON.stringify({ type: "set_settings", toolLazyLoading: true }));
-for (let i = 0; i < 50 && settings?.toolLazyLoading !== true; i++) await sleep(50);
-check("默认关：显式打开按需加载后设置生效", settings?.toolLazyLoading === true, `value=${settings?.toolLazyLoading}`);
-ws.send(JSON.stringify({ type: "new_chat" }));
-const lazPrevConv = state?.conversationId;
-for (let i = 0; i < 50 && state?.conversationId === lazPrevConv; i++) await sleep(50);
-for (let i = 0; i < 50 && !state?.tools?.includes("load_tools"); i++) await sleep(50);
-check(
-	"按需加载开的会话里，只有核心工具 + load_tools 常驻",
-	state?.tools?.includes("load_tools") && !state?.tools?.includes("patch"),
-	`tools=${state?.tools?.join(",")}`,
 );
 
 // 模型列表里应该只有目录（名字 + 摘要），没有完整 schema。
@@ -229,14 +214,14 @@ check(
 	firstTools.join(","),
 );
 check(
-	"未加载的工具（patch/lsp）不在 tools 里",
-	!firstTools.includes("patch") && !firstTools.includes("lsp"),
+	"未加载的工具（patch/subagent）不在 tools 里",
+	!firstTools.includes("patch") && !firstTools.includes("subagent"),
 	firstTools.join(","),
 );
 const firstSystem = systemText(first);
 check(
 	"系统提示词里列了目录工具（名称 + 一行摘要）",
-	firstSystem.includes("- patch:") && firstSystem.includes("- lsp:"),
+	firstSystem.includes("- patch:") && firstSystem.includes("- subagent:"),
 	`system len=${firstSystem.length}`,
 );
 check("系统提示词带「先 load_tools」的说明", /load_tools/.test(firstSystem));

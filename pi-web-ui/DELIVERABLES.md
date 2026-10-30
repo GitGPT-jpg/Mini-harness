@@ -32,8 +32,9 @@
 ## 三、验证证据位置
 
 - **单元测试**：`npx vitest run` → 373 个文件全过（4391 过 / 0 失败 / 9 跳过，2026-10-30，D-9 收尾后）。
+- **零 token 冒烟套件**：`node tests/run-smoke.mjs --no-build` → **74/74 全绿**（含恢复的 `token-auth-test`、适配 D-9 默认值的 `lazy-tools-test`/`vision-bridge-test`/`subagent-template-test`/`takeover-test`/`plugin-test`/`elsewhere-lifecycle-test`，并清理了 D-4/D-4b/D-5 已删插件的过期用例）。
 - **Loop 正确性**：`tests/unit/loop-extension.test.ts`（13 用例，mock 零 token）。
-- **Loop 前端渲染**：`tests/loop-bar-test.mjs`（9/9，Playwright）。
+- **Loop 前端渲染**：`tests/loop-bar-test.mjs`（14/14，Playwright：成对胶囊 `LLM loop` + `代码 loop`、LLM loop 展开/折叠、`CodeLoopModal` 弹窗开启时隐藏底部胶囊、预设/字段/高级折叠项与启动按钮门控）。
 - **E 阶段回归**：五项保留 + 删除项不渲染 + 无 pageerror（Playwright，隔离端口 8941，`PI_WEB_SDK=bundled`）。
 - **真实模型 E2E**（C 阶段）：代码 loop done/verdict=pass/code=0/review=pass；LLM loop done；续跑互斥/停止不复活/taskId 绑定均 live 验证。
 

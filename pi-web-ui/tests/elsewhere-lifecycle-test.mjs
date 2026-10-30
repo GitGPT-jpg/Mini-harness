@@ -289,7 +289,7 @@ try {
 	clientB.send({ type: "take_over_conversation", owner: schedRow.owner, id: schedRow.convId });
 	const rejectNotice = await clientB.waitForType(
 		"notice",
-		(m) => m.text?.includes("定时任务/插件会话不支持过户"),
+		(m) => m.text?.includes("定时任务") && m.text?.includes("不支持过户"),
 		10000,
 	);
 	check("请求过户伪客户端时被拒并给出后台任务引导（#426）", rejectNotice.text.includes("后台任务面板"));

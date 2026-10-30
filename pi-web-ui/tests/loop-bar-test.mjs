@@ -1,9 +1,16 @@
 /**
- * Loop bar — idle pill + editor UI test.
- * Verifies the idle state is a compact pill at the RIGHT end (not overlapping
- * the centered goal pill), clicking opens the editor (goal / mode / validate
- * cmd / max rounds / reviewer), the start button stays disabled until a goal
- * is typed, and the bottom-bar host:loop item is absent while no loop runs.
+ * Dual-capsule loop entry + LLM loop editor + CodeLoopModal UI test.
+ * Verifies:
+ * 1. Idle state renders `.goalbar-collapsed` (absolute above composer) with two
+ *    non-overlapping capsules: `.loop-capsule.llm` ("LLM loop") and `.loop-capsule.code` ("代码 loop").
+ * 2. Bottom bar has no `.bar-item-loop` while idle.
+ * 3. Clicking `.loop-capsule.llm` expands `.goalbar` with `.goalbar-input` and start/plan buttons;
+ *    start button stays disabled until a goal is typed; collapsing returns to dual capsules.
+ * 4. Clicking `.loop-capsule.code` opens `CodeLoopModal` (`.cockpit-modal.code-loop-modal`),
+ *    hides `.goalbar-collapsed`, and provides presets, `#cl-goal`, `#cl-criteria`,
+ *    `#cl-planner`, `#cl-reviewer`, and `<details class="cockpit-adv">` (`#cl-cmd`, `#cl-roots`, `#cl-rounds`).
+ * 5. Start button in `CodeLoopModal` stays disabled until `#cl-goal` is filled, then enables;
+ *    Cancel closes the modal and restores the dual capsules.
  * No model calls.
  */
 import { CHROME_PATH } from "./lib/chrome.mjs";
@@ -60,63 +67,90 @@ async function run() {
 	const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 	const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 	await page.goto(`http://localhost:${port}`);
-	await page.waitForSelector(".loopbar-collapsed", { timeout: 20000 });
-	// 等 state 到达、布局稳定（boot 态药丸浮在顶部 y≈160，state 到达后落到底部；
-	// 不等稳定就点会点在位移前的坐标上，编辑器打不开）。
+	await page.waitForSelector(".goalbar-collapsed", { timeout: 20000 });
 	await page.waitForSelector(".boot-wait", { state: "detached", timeout: 20000 }).catch(() => {});
 	await sleep(1200);
 
-	// 1. Idle = compact pill at the right end, floating (absolute, above composer).
-	const pill = page.locator(".loopbar-collapsed");
-	const pillPos = await pill.evaluate((el) => getComputedStyle(el).position);
-	check("idle loop pill floats (absolute)", pillPos === "absolute", pillPos);
+	// 1. Idle = dual capsules inside .goalbar-collapsed floating above composer.
+	const collapsed = page.locator(".goalbar-collapsed");
+	const collapsedPos = await collapsed.evaluate((el) => getComputedStyle(el).position);
+	check("idle goalbar-collapsed floats (absolute)", collapsedPos === "absolute", collapsedPos);
 
-	// 2. Goal pill (centered) and loop pill (right) must not overlap.
-	const goalPill = page.locator(".goalbar-collapsed .goalbar-hint");
-	const loopPill = page.locator(".loopbar-collapsed .goalbar-hint");
-	if ((await goalPill.count()) > 0) {
-		const g = await goalPill.boundingBox();
-		const l = await loopPill.boundingBox();
-		const overlap = g && l && !(g.x + g.width < l.x || l.x + l.width < g.x);
-		check("goal pill and loop pill do not overlap", !overlap, `goal=[${g?.x},${g?.width}] loop=[${l?.x},${l?.width}]`);
-	} else {
-		check("goal pill present alongside loop pill", false, "goalbar-collapsed pill not found");
-	}
+	const llmCapsule = page.locator(".goalbar-collapsed .loop-capsule.llm");
+	const codeCapsule = page.locator(".goalbar-collapsed .loop-capsule.code");
+	check(
+		"both LLM loop and code loop capsules rendered",
+		(await llmCapsule.count()) === 1 && (await codeCapsule.count()) === 1,
+	);
+
+	// 2. Two capsules must not overlap horizontally.
+	const g = await llmCapsule.boundingBox();
+	const l = await codeCapsule.boundingBox();
+	const overlap = g && l && !(g.x + g.width <= l.x || l.x + l.width <= g.x);
+	check(
+		"LLM loop and code loop capsules do not overlap",
+		Boolean(g && l && !overlap),
+		`llm=[${g?.x},${g?.width}] code=[${l?.x},${l?.width}]`,
+	);
 
 	// 3. No host:loop bottom-bar item while idle (renders only with loop state).
 	check("bottom bar has no loop item while idle", (await page.locator(".bar-item-loop").count()) === 0);
 
-	// 4. Click the pill → editor opens inside the loop slot.
-	await loopPill.click();
-	await page.waitForSelector(".goalbar-slot .goalbar-input", { timeout: 8000 });
-	check("clicking loop pill opens editor", true);
+	// 4. Click LLM loop capsule → expands .goalbar editor; start button disabled until goal typed.
+	await llmCapsule.click();
+	await page.waitForSelector(".goalbar .goalbar-input", { timeout: 8000 });
+	check("clicking LLM loop capsule opens goalbar editor", true);
 
-	// 5. Editor fields: goal input + mode toggles + validate cmd + max rounds + reviewer.
-	const startBtn = page.locator(".goalbar-slot .goalbar-btn", { hasText: /启动|Start/ }).first();
-	check("start disabled until goal typed", (await startBtn.isDisabled()) === true);
-	const goalInput = page.locator(".goalbar-slot .goalbar-input");
-	await goalInput.fill("创建 done.txt");
-	check("start enabled after goal typed", (await startBtn.isDisabled()) === false);
-	const codeBtn = page.locator(".goalbar-slot .goalbar-btn", { hasText: /代码|Code/ }).first();
-	const llmBtn = page.locator(".goalbar-slot .goalbar-btn", { hasText: "LLM" }).first();
-	check("mode toggles (code/llm) present", (await codeBtn.count()) > 0 && (await llmBtn.count()) > 0);
-	const labels = await page.locator(".goalbar-slot .goalbar-round").allInnerTexts();
-	const labelText = labels.join(" | ");
+	const goalStartBtn = page.locator(".goalbar .goalbar-btn.action").first();
+	check("LLM loop start disabled until goal typed", (await goalStartBtn.isDisabled()) === true);
+	const goalInput = page.locator(".goalbar .goalbar-input");
+	await goalInput.fill("验证目标输入");
+	check("LLM loop start enabled after goal typed", (await goalStartBtn.isDisabled()) === false);
+	await goalInput.fill("");
+
+	// Collapse back to dual capsules (`host:goal-collapse` is the 2nd `.goalbar-icon-btn` after lock).
+	const collapseBtn = page.locator(".goalbar .goalbar-row .goalbar-icon-btn").nth(1);
+	await collapseBtn.click();
+	await page.waitForSelector(".goalbar-collapsed .loop-capsule.code", { timeout: 8000 });
+
+	// 5. Click code loop capsule → opens CodeLoopModal and hides bottom capsules while open.
+	await page.locator(".goalbar-collapsed .loop-capsule.code").click();
+	await page.waitForSelector(".cockpit-modal.code-loop-modal", { timeout: 8000 });
+	check("clicking code loop capsule opens CodeLoopModal", true);
 	check(
-		"validate cmd + max rounds + reviewer options present",
-		/验证命令|Validate/.test(labelText) && /轮数上限|Max rounds/.test(labelText) && /Reviewer/.test(labelText),
-		labelText,
+		"bottom loop capsules hidden while CodeLoopModal is open",
+		(await page.locator(".goalbar-collapsed").count()) === 0,
 	);
 
-	// 6. Switch mode to LLM — active style moves between the two toggles.
-	await llmBtn.click();
-	await sleep(200);
-	const llmActive = await llmBtn.getAttribute("class");
-	const codeActive = await codeBtn.getAttribute("class");
+	// 6. CodeLoopModal fields: presets, goal, criteria, planner/reviewer selects, advanced details, start/cancel.
+	const modalStartBtn = page.locator(".code-loop-modal .cockpit-row .btn.primary");
+	check("code loop start disabled until goal typed", (await modalStartBtn.isDisabled()) === true);
 	check(
-		"llm mode toggles active class",
-		(llmActive || "").includes("action") && !(codeActive || "").includes("action"),
+		"presets + goal + criteria + planner/reviewer present",
+		(await page.locator(".code-loop-modal .cockpit-preset").count()) >= 3 &&
+			(await page.locator("#cl-goal").count()) === 1 &&
+			(await page.locator("#cl-criteria").count()) === 1 &&
+			(await page.locator("#cl-planner").count()) === 1 &&
+			(await page.locator("#cl-reviewer").count()) === 1,
 	);
+
+	// Open advanced <details> and check #cl-cmd, #cl-roots, #cl-rounds.
+	await page.locator(".code-loop-modal details.cockpit-adv summary").click();
+	check(
+		"advanced options (#cl-cmd, #cl-roots, #cl-rounds) present",
+		(await page.locator("#cl-cmd").count()) === 1 &&
+			(await page.locator("#cl-roots").count()) === 1 &&
+			(await page.locator("#cl-rounds").count()) === 1,
+	);
+
+	await page.locator("#cl-goal").fill("修复单元测试并验证通过");
+	check("code loop start enabled after goal typed", (await modalStartBtn.isDisabled()) === false);
+
+	// Cancel closes modal and restores dual capsules.
+	const cancelBtn = page.locator(".code-loop-modal .cockpit-row .btn:not(.primary)");
+	await cancelBtn.click();
+	await page.waitForSelector(".goalbar-collapsed .loop-capsule.code", { timeout: 8000 });
+	check("canceling CodeLoopModal restores dual capsules", (await page.locator(".code-loop-modal").count()) === 0);
 
 	await browser.close();
 	server?.kill();

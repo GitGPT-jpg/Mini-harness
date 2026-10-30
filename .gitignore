@@ -11,6 +11,10 @@ web-demo/
 # ---- 密钥 / 口令（绝不入库）----
 # One API Key 存在 ~/.pi/agent/auth.json（仓库外）；访问口令存在 ~/.pi-web/（仓库外）
 *token*
+!pi-web-ui/server/**
+!pi-web-ui/web/**
+!pi-web-ui/tests/**
+!pi-web-ui/scripts/**
 auth.json
 *.pem
 *.key

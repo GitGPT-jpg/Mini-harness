@@ -49,7 +49,6 @@ const ALL = [
 	"conv-cross-project-test",
 	"conv-cwd-test",
 	"project-model-key-test",
-	"plugin-jobs-test",
 	// 插件目录授权的**接线**（request → 浏览器确认 → 落表 → 插件读得到 → 撤销）。
 	"plugin-grants-test",
 	// 注册面目录的 WS 往返（P2-7：plugin_api_catalog → 22 slot+别名+工具表+方法表+占用者）。
@@ -61,7 +60,6 @@ const ALL = [
 	"plugin-scaffold-test",
 	"provider-oauth-test",
 	"provider-keys-test",
-	"db-client-test",
 	"chat-abort-attachments-rollback-test",
 	// 临时对话（issue #285）：inMemory 不落盘 + 左栏 isEphemeral 标记 + 转正落盘（对照组验普通对话真落盘）。
 	"ephemeral-chat-test",
@@ -78,25 +76,19 @@ const ALL = [
 	// 审查者模式（自动委派）：开关快照 + prompt 自动转给常驻执行对话 + 关闭后恢复（零 token）。
 	"delegate-mode-test",
 	"left-panel-delete-test",
-	"legado-web-test",
 	"list-files-missing-dir-test",
 	// #262 regression: directory symlinks classify as dir on all platforms + "~/" expansion in the panel path bar (Android/Termux).
 	"list-files-symlink-home-test",
 	// 宿主 cron 引爆的溢出回归（远期 / 永不发生的表达式不能把服务打成死循环）。
 	"plugin-cron-overflow-test",
-	// 笔记插件（notes）：清单/HTTP 通道/长轮询推送/持久化（零 token，浏览器 E2E 另见 notes-ui-test）。
-	"notes-test",
 	"plugin-bgtask-test",
 	// 左栏「运行的对话」插件运行条目（P3）：登记推送 / attach 补发 / clear / 心跳过期整组清空。
 	"plugin-leftpanel-running-test",
 	// 后台任务「自动清理」的协议面（阈值落库/归一化、钉住、立即清理反馈）。
 	"bg-cleanup-test",
-	// pm2 进程管家：manifest 被宿主接受 + tasks.panel 占位 + 真激活 + 三个路由（零 token）。
-	"pm2-manager-plugin-test",
 	"plugin-command-test",
 	"plugin-cwd-test",
 	"plugin-http-test",
-	"plugin-proxy-test",
 	"mcp-bridge-test",
 	"plugin-settings-test",
 	"plugin-test",
@@ -118,15 +110,11 @@ const ALL = [
 	"restart-service-test",
 	"running-list-test",
 	"settings-test",
-	// SFTP 插件（项目级 .pi/sftp.json）：差异计划 / dry-run / 删除保护 / 凭据引用 / 变更迁移。
-	// 用 tests/lib/mock-ssh.mjs 的内嵌 SFTP 服务，首次需 ssh2（离线拷不到就现场装，故不进 CORE）。
-	"sftp-plugin-test",
 	"shutdown-test",
 	"slash-commands-test",
 	"snapshot-delta-test",
 	// 历史消息服务端按需加载（窗口化）：首份快照只带尾部窗口 + 往前翻页 + get_state 不回退。
 	"message-window-test",
-	"ssh-plugin-test",
 	"subagent-template-test",
 	// 子代理接管（#652 变体）：被接管页面已加载子代理工具但不再活跃时，
 	// 目录里不能再出现「已加载却永不激活」的死路条目（见 PATCH-B1 门控）。
@@ -165,7 +153,6 @@ const ALL = [
 	// 且**系统提示词逐字节不变、tools 只追加**（前缀缓存不被我们打坏）。
 	"lazy-tools-test",
 	"vision-bridge-test",
-	"vscode-editor-plugin-test",
 	// 额外工作区根（宿主侧多根，issue #146）：set_workspace_roots 落快照 + 插件受支持路径跨根。
 	"workspace-roots-test",
 ];

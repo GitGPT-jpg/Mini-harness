@@ -114,8 +114,17 @@ async function main() {
 		const names = s.settings.subagentTemplates.map((t) => t.name);
 		check(
 			"初始列表已带内置默认模板",
-			names.length >= 6 &&
-				["review", "implement", "research", "scout", "audit", "delegate"].every((n) => names.includes(n)),
+			names.length >= 8 &&
+				[
+					"explore",
+					"review",
+					"implement",
+					"harness-runner",
+					"prefill-opt",
+					"cache-adapt",
+					"cache-loss",
+					"hitrate-debug",
+				].every((n) => names.includes(n)),
 			JSON.stringify(names),
 		);
 	}

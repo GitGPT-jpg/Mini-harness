@@ -1,0 +1,266 @@
+# 训推引擎组 Harness 交接文档
+
+> 更新于 2026-10-30。分支 `harness-cockpit` @ `9cc13c9`，已推到 GitHub，本地与远端一致。
+> 读法：先看第 0 节「现状」和第 11 节「待办」；要改代码再看第 3–10 节。
+
+## 0. 现状
+
+- **产品**：「训推引擎组 Harness」是上游 pi-web-ui v0.111.0 的源码裁剪定制版，跑 pi 1.4.0，接 Baidu One API 网关，服务推理侧（sglang / AttentionStore / prefill / cache）的 AI Loop 工作流。
+- **D-9 已完成**：旧做法是 npm 装 pi-web-ui 包，再由 `harden.mjs` 改写 `dist/`、往 `index.html` 注入脚本。现在所有定制都在 `pi-web-ui/` 源码里；`harden.mjs`、`verify-hardened.mjs`、`harness-server/` 已删除。
+- **能用**：`./setup.sh` 一键安装 → `pi-web-cockpit/start-hardened.sh` 启动 → 首次配置弹窗填 One API Key → 直接对话。干净 HOME 实测通过，setup 可重复跑。
+- **测试**：typecheck 0 错误、build 通过、vitest 373/373 个文件通过、首装浏览器 E2E 14/14、`verify-cockpit.mjs` 15/15、**零 token 冒烟套件 `run-smoke.mjs` 74/74 全绿**、`tests/loop-bar-test.mjs` 14/14 全绿（含 `token-auth-test.mjs` 恢复与 `.gitignore` 例外规则）。
+- **刻意没动**：GitHub 默认分支（用户要求先不动）；icode 上的版本（仍是旧 harden 版）。
+
+## 1. 仓库与分支
+
+| 项 | 说明 |
+|---|---|
+| 本工作树 | `/Users/zhangteng14/ComateProjects/mini-harness-cockpit`，分支 `harness-cockpit` |
+| 主工作树 | `/Users/zhangteng14/ComateProjects/pi agent 的定制化`，分支 `1`：旧 harden 版驾驶舱，另一个窗口在维护，**不要改** |
+| GitHub | remote `github` = `https://github.com/GitGPT-jpg/Mini-harness`，分支 `harness-cockpit` 已推到 `9cc13c9` |
+| icode | remote `origin` = `icode.baidu.com/baidu/ai/mini-harness`。禁止直推 master，要用 `icode push` 提 CR，commit 需绑 iCafe 卡（luno-5578）。最新 CR #123037970 是旧 harden 版，待他人 +2，不含本分支 |
+| 本机在跑的驾驶舱 | `127.0.0.1:8787`，来自主工作树的旧版。**测试别占这个端口，也别杀这个进程** |
+| 上游来源 | 见 `pi-web-ui/PROVENANCE.md`：xing-shuyin/pi-web-ui v0.111.0（tag commit `7c40b44`，MIT），vendor 基线提交 `30902c1` |
+
+## 2. 做过什么
+
+- **A–C 阶段**：vendor 上游源码；SDK 固定 1.4.0；把 Loop 运行时（原 `vendor/mini-harness-runtime`）移植为 `pi-web-ui/server/loop/extension.ts`，修了 6 个正确性问题（显式 sessionId / taskId 绑定、epoch 守卫读盘、续跑互斥、启动挂起记录等）；前端 LoopBar 与状态栏 Loop 段。
+- **D-1–D-8**：删除桌面壳、语音/TTS、Canvas、插件/MCP/技能市场、38 个无关插件、SSH 远程、Git 面板、文件树、多引擎、Plan/Delegate 入口，净删约 32.6 万行。
+- **E**：交付清单 `pi-web-ui/DELIVERABLES.md`。
+- **D-9（本轮，详细说明见各提交信息）**：
+
+| 阶段 | 内容 | 提交 |
+|---|---|---|
+| D-9a | 安全项：绝对路径读取白名单（工作区、`~/.mini-harness`、系统临时目录，其余 403）；`defaultOn=false` 的工具不再被打开；codemode 按需注册；技能硬禁名单 | 5483c64 |
+| D-9b | 能力与默认值（关沙盒 / plan / delegate / 子代理 / pageRef / 远程 SSH，vision 与工具图片默认关，工具延迟加载默认开）；品牌（标题、manifest、顶栏、PWA 图标）；领域灵魂；首次配置预选 oneapi | 95eba81、81bc05e、1268962 |
+| D-9c | 去掉 CSS 隐藏的残余入口；8 个推理启动提示词模板；子代理模板收敛为 review / implement / explore + 5 个推理专属 | bba6b31 |
+| D-9d | Loop 自主化，服务端 + 前端（见 4.3） | 6875645、a5f9a05 |
+| D-9e | 统一启动/安装入口；`PI_WEB_TOKEN=auto`；删除 harden.mjs、verify-hardened.mjs、harness-server/ | fc74f04、7412e68 |
+| D-9f | 测试全绿；干净 HOME 实测发现并修复两处首装问题；`verify-cockpit.mjs`；交付文档 | 04a695d、eee6e64、b787b1f、c67b634、9cc13c9 |
+
+## 3. 仓库地图
+
+```
+仓库根/
+├── setup.sh              一键安装：Node 校验 → pi@1.4.0 → 领域 skill → One API 服务商 → 构建 pi-web-ui
+│                         → 停用 7 个风险 skill → pi-llm-wiki → 桌面 .app（可重复跑）
+├── install.sh            命令行安装入口（等价 setup.sh）
+├── build/package.sh      打 tarball + macOS DMG（DMG 启动器以 pi-web-ui/dist/server/index.js 判断是否装好）
+├── tunnel/tunnel.sh      可选 SSH 隧道兜底（kubectl 直连不通才用），写 ~/.mini-harness/proxy.env
+├── skills/               7 个领域 skill 源（setup.sh 拷到 ~/.pi/agent/skills）
+├── assets/icon.jpg       桌面 .app 图标源
+├── pi-web-cockpit/
+│   ├── start-hardened.sh            启动脚本（已入库）
+│   ├── verify-cockpit.mjs           浏览器 E2E 验证
+│   ├── config/models.oneapi.json    One API 服务商 + 模型目录种子（无密钥）
+│   ├── config/client-state.seed.json  已不再使用（旧 harden 的首装种子）
+│   ├── assets/brand-*.png           品牌图源（logo = icon1111，favicon = 紫色 C）
+│   ├── vendor/pi-llm-wiki/          审查过的知识库扩展（setup.sh 装依赖并登记）
+│   ├── vendor/mini-harness-runtime/ 已不再使用（已并入 server/loop/，服务端会剔除它的登记）
+│   └── package.json                 只剩 SDK / typebox / playwright-core，setup.sh 不再在这里 npm install
+└── pi-web-ui/            驾驶舱源码。开发规矩看 AGENTS.md，交付清单看 DELIVERABLES.md
+```
+
+## 4. 定制点在源码哪里
+
+### 4.1 安全与精简
+
+- 绝对路径读取白名单：`server/index.ts` 的 `absReadAllowed`。
+- 能力开关：`server/engine-capabilities.ts` 的 `DEFAULT_PI_CAPABILITIES`；顶栏按能力门控：`web/src/components/TopBar.tsx` 的 `isCapabilityGatedOff`。
+- 客户端默认值：`server/client-state.ts`（vision / 工具图片关、`DEFAULT_TOOL_LAZY_LOADING` 默认开、terminalBash 关）。
+- 工具默认关（eval / browser_page / codemode 等）：`server/tool-manager.ts` 的 `AGENT_TOOL_CATALOG`。
+- 技能硬禁名单（browser-tools、transcribe、brave-search、gccli、gdcli、gmcli、youtube-transcript）：`server/agent-service.ts` 约 2974 行；codemode 按需注册也在 agent-service。
+
+### 4.2 品牌、灵魂、模板、首次配置
+
+- 领域灵魂：`server/prompt-composer.ts` 的 `BUILTIN_SOUL` / `BUILTIN_SOUL_ZH`。
+- 品牌：`web/index.html`（title、favicon）、`web/public/manifest.webmanifest`、`web/public/icons/*.png`、`web/public/favicon.png|svg`；顶栏品牌名在 `web/src/components/BarItem.tsx` 的 `host:brand`。
+- 提示词模板：`web/src/components/PromptTemplates.tsx`（8 个 `inf-*` 模板）。
+- 子代理模板：`server/subagent-templates.ts` + `subagent-templates-hant.ts`（繁中视图有守卫测试：行数、ASCII token 序列必须一致，不能出现简体专用字）。
+- 首次配置弹窗：`web/src/components/PiSetupModal.tsx`（`PREFERRED_PROVIDER = "oneapi"`）。弹不弹由 `server/agent-service.ts` 的 `isPiConfigured()` 决定，其中 models.json 一路走 `server/pi-setup-state.ts`（只认内联 apiKey 的服务商）。填完 key 后补选模型：`server/model-admin.ts` 的 `adoptModelAfterKey` 钩子，实现在 agent-service。
+
+### 4.3 Loop 自主化
+
+服务端：
+
+- `server/goal-service.ts`
+  - `wizardPrompt()`：调研向导只给 `goal_ask` 工具，先提问；收敛后必须用 PLAN CHECK 把计划大纲交给用户确认（开始执行 / 我要修改 / 取消），确认后才输出 `GOAL:`；取消或关对话框时向导回复 `CANCELLED`，不设目标、不开跑。
+  - `pauseGoal()` / `resumeGoal()`：暂停 = 作废循环代次 + 停掉执行者当前回合，保留目标、执行者与产物；继续时从被打断的那一轮重做。
+  - `snapshotExecutor()`：执行者 sessionId 写进 `goal.roles.executor`，任务台据此读工具调用。
+  - `logGoal()`：设目标记一条 `created`，收尾追加 `finished:<kind>`（复用同一 id）。
+- `server/goal-history-log.ts`：LLM loop 永久目录 `<DATA_DIR>/goal-history.jsonl`，只有 `index.ts` 调过 `configureGoalLog()` 才落盘。
+- `server/loop/extension.ts`：代码 loop 运行时（状态机 + validator 门禁 + 自动下一轮 + 续跑），导出 `listRuns` / `familyOf` / `runsRoot` 供路由用。
+- `server/loop/routes.ts`：`/api/mini-harness/*`（见第 7 节）。
+- `server/agent-service.ts` 的 `startLoop()`：把 `loop_start_request` 拼成启动提示词，含验收标准、产物目录，没给检查命令时让模型先写一个真正检查的 `validate.py`。
+
+前端：
+
+- `web/src/loop-cockpit.ts`：三个弹层的开关、集群状态 store、`mhGet` / `mhPost`（`appUrl()` + `withToken()`）。
+- `web/src/components/GoalBar.tsx`：折叠行里成对的「LLM loop / 代码 loop」胶囊（任一驾驶舱弹层打开时收起）；编辑器里的评审模型胶囊、代码 loop 入口、说明行、「自己审自己」提醒；改名（LLM loop / 开始 / 帮我细化 / 规划模型 / 最多尝试）。
+- `web/src/components/LoopBar.tsx`：代码 loop 状态条（运行中、终态、重试）；目标模式关掉时补一枚代码 loop 胶囊。
+- `web/src/components/CodeLoopModal.tsx`：代码 loop 启动弹窗（预设、验收条件、规划/评审模型跨厂商校验、检查命令、产物目录、尝试次数）。
+- `web/src/components/TaskDesk.tsx`：任务台抽屉（四段进度、工具调用时间线、暂停/继续/停止、LLM loop 历史、代码 loop 运行列表，可删除）。
+- `web/src/components/ClusterControls.tsx`：输入框里的集群按钮、底栏「集群已连接」指示、kubeconfig 弹窗。6 秒一次的状态轮询挂在 App 级的弹窗组件上。
+- 插槽 `web/src/ui-slots.ts`：新增 `host:task-desk`（顶栏，排在「后台任务」前）和 `host:cluster`（底栏，紧跟连接状态）。底栏连接文案改为「API 已连接」。
+- 样式在 `web/src/styles.css` 的「驾驶舱 Loop 体验」一段；i18n 在 `web/src/i18n.tsx`（`codeLoop*`、`cluster*`、`taskDesk*`、`api*` 等 84 个 key，已同步 12 个语言包）。
+
+### 4.4 启动与口令
+
+- `server/index.ts` 的 `resolveAuthToken()`：`PI_WEB_TOKEN=auto` 时口令落在 `<DATA_DIR>/pi-web-token`（不存在就生成 24 字节随机 hex，权限 0600，重启复用）。不设 `PI_WEB_TOKEN` 时行为与上游一致。
+- `pi-web-cockpit/start-hardened.sh`：设好环境后 `exec node pi-web-ui/dist/server/index.js --host 127.0.0.1 --port ${PI_WEB_PORT:-8787}`。
+
+## 5. 怎么跑
+
+```bash
+./setup.sh                                   # 仓库根目录；装过再跑也安全
+pi-web-cockpit/start-hardened.sh             # 或双击桌面「训推引擎组 Harness.app」
+open "http://localhost:8787/?token=$(cat ~/.pi-web/pi-web-token)"
+```
+
+`start-hardened.sh` 设置的环境：
+
+- `PI_WEB_TOKEN`：默认 `auto`，已设置则沿用。
+- `PI_WEB_LOCALE`：默认 `zh`。
+- `PI_WEB_MANAGED=1`：关插件市场与应用内自更新。
+- `PI_WEB_SDK=bundled`：固定用随包的 pi SDK 1.4.0，不跟随机器上的全局 pi。
+- `PI_WEB_PORT`：默认 8787。端口只能用它改，不能在命令后追加 `--port`（服务端取第一个 `--port`）。
+- 有 `~/.mini-harness/proxy.env` 就 source 它；有 `~/.pi-web/kubeconfig` 就导出 `KUBECONFIG`。
+
+开发时：`cd pi-web-ui && npm run dev`（后端 8788 + vite 5173）。改完源码要 `npm run build` 再重启服务，或重跑 `./setup.sh`。
+
+## 6. 运行时数据在哪
+
+- `~/.pi/agent/`
+  - `models.json`：setup 种入 oneapi（已有则不覆盖）。
+  - `auth.json`、`provider-keys.json`：API key，权限 0600。
+  - `settings.json`：`packages` 里登记 pi-llm-wiki，`llm-wiki` 段是静默配置（不配 embedding，不外联）。
+  - `skills/`：领域 skill；`skills.disabled/`：被停用的 7 个风险 skill，移回即恢复。
+  - `sessions/`：会话转录。
+- `~/.pi-web/`
+  - `pi-web-token`：访问口令（0600）。
+  - `client-state.json`：客户端设置。**改它之前先停服务**，否则运行中的服务会用内存态回写覆盖。
+  - `kubeconfig`：「连接集群」保存的配置（0600）。
+  - `goal-history.jsonl`：LLM loop 永久目录（只在任务台里删除才会消失）。
+- `~/.mini-harness/runs/<runId>/`：代码 loop 的 `state.json` 与 `journal.jsonl`。`~/.mini-harness/proxy.env`：隧道代理环境。
+
+## 7. 接口与协议变更
+
+HTTP（都受 `PI_WEB_TOKEN` 全局中间件鉴权，实现在 `server/loop/routes.ts`）：
+
+- `GET /api/mini-harness/runs[?history=1]`、`GET /runs/latest`：代码 loop 运行列表（非历史视图只给活跃和 5 分钟内结束的）。
+- `POST /api/mini-harness/runs/delete {runId}`：runId 须匹配 `^[0-9]{8,}-[a-z0-9]{4,}$`，防路径穿越。
+- `GET /api/mini-harness/models`：只回 provider / id / family，不含 baseUrl 和 key。
+- `GET /api/mini-harness/task?session=<sessionId>`：读执行者会话 jsonl 尾部 1MB，返回最近 40 条工具调用。
+- `GET /api/mini-harness/goals`、`POST /goals/delete {id}`：LLM loop 永久目录。
+- `GET /api/mini-harness/cluster`（结果缓存 8 秒）、`POST /cluster {kubeconfig}`（≤256KB，写 0600 后立即跑 `kubectl cluster-info --request-timeout=5s`，并设置服务进程的 `KUBECONFIG`）、`POST /cluster/clear`。
+
+WebSocket（`server/protocol.ts`）：
+
+- 新增客户端消息 `pause_goal`、`resume_goal`。
+- `loop_start_request` 新增 `criteria?`、`artifactRoots?`。
+- `GoalStatus` 新增 `paused?`，`phase` 新增 `"paused"`；`GoalRoleRef` 新增 `sessionId?`。
+
+CLI：删除了 `pi-web-ui frp` 子命令（原因见第 9 节）。
+
+## 8. 验证
+
+### 8.1 每次改动的三连验
+
+```bash
+cd pi-web-ui
+npx prettier --write <改动文件>
+npm run typecheck
+npx vitest run <相关测试>          # 全量：npx vitest run
+```
+
+### 8.2 浏览器 E2E
+
+服务起来后跑 `node pi-web-cockpit/verify-cockpit.mjs`。可设 `PORT`（默认 8787）、`TOKEN_FILE`（默认 `~/.pi-web/pi-web-token`）、`KEY_FILE`（出现首次配置弹窗时从这个 auth.json 取 oneapi key）、`SHOTS`（截图目录）。它会真实调用一次模型，并在新终端里 echo 一行。
+
+### 8.3 干净 HOME 实测
+
+步骤见第 12 节。
+
+### 8.4 本轮结果（2026-10-30）
+
+| 项 | 结果 |
+|---|---|
+| `npm run typecheck` | 0 错误 |
+| `npm run build` | 通过 |
+| `npm run lint` | 0 error，98 条既有 warning |
+| `npx vitest run` | 373/373 个文件通过（4391 过，9 跳过） |
+| 干净 HOME 跑 `./setup.sh` | 退出码 0，重跑仍为 0 |
+| 首装浏览器 E2E | 14/14，含首次配置填 key 后同一页的真实对话往返 |
+| `verify-cockpit.mjs`（隔离实例） | 15/15 |
+| `node tests/loop-bar-test.mjs`（双胶囊 + 代码 loop 弹窗） | 14/14 |
+| 冒烟 `node tests/run-smoke.mjs`（零 token，各自起服务） | **74/74 全部通过** |
+
+此前冒烟套件的 17 个失败及 `loop-bar-test.mjs` 过期问题已全部修复/清理完毕：
+
+- **D-4 / D-4b / D-5 已删插件与市场的残留测试已清理**：从 `tests/run-smoke.mjs` 移除了 9 个已删插件/SSH/VSCode 条目，删除了 `tests/` 下对应的 14 个废弃测试文件，并移除了 `plugin-test.mjs` 中针对已删市场协议 `plugin_catalog_add` / `plugin_catalog_remove` 的段落。
+- **D-9 默认值变更对应的 4 个冒烟用例已对齐**：`lazy-tools-test`（默认开启按需加载 + 改验保留的 `subagent` 目录项）、`vision-bridge-test`（默认关闭视觉桥，测试中显式开启并按需请求 `get_settings`）、`subagent-template-test`（对齐 8 个内置推理/编码子代理模板）、`takeover-test`（显式放行 `disabledAgentTools: []` 以测试 `browser_page` 过户）。
+- **补齐与修复其余测试**：恢复了曾被根 `.gitignore` `*token*` 规则吞掉的 `tests/token-auth-test.mjs`（21 项断言全过，并在 `.gitignore` 补齐 `!pi-web-ui/tests/**` 等例外规则）；修复了 `elsewhere-lifecycle-test.mjs` 的伪客户端过户提示断言；重写了 `tests/loop-bar-test.mjs` 以覆盖新的「LLM loop / 代码 loop」双胶囊与 `CodeLoopModal` 弹窗交互（14/14 全过）。
+
+### 8.5 没有实测到的
+
+- 用真实 kubeconfig 连集群：只验了未配置态、空内容拦截、清除。
+- 真实模型下「帮我细化」的完整流程（提问 → 计划确认 → 开跑 / 取消），以及暂停与继续。后者目前只有单测（`tests/unit/goal-delegated.test.ts` 的「暂停 / 继续」）。
+- 从代码 loop 弹窗发起、跑到 done 的完整一轮：弹窗只验了 UI；Loop 运行时本身在 C 阶段做过真实模型 E2E。
+- 任务台在真实执行者会话上的工具调用时间线：接口有单测（`tests/unit/loop-routes.test.ts`）。
+- `build/package.sh` 打 DMG / tarball：只改了启动器的「是否已装」判断，没重新打包。
+- Linux 上跑 `setup.sh`：只在 macOS 实测过。
+
+## 9. 关键决策与原因
+
+- **暂停的实现**：暂停时作废循环代次并停掉执行者回合，旧循环在下一个代次守卫处静默退出，不走「受阻」收尾；继续时开一个新循环。被打断的那一轮会重做（轮次回退 1），否则有限轮预算会被暂停吃掉，继续后可能直接判「轮次用尽」。
+- **LLM loop 永久目录要显式开启**：只有 `index.ts` 调了 `configureGoalLog(DATA_DIR)` 才写盘。单测里直接 `new GoalService` 不会写到真实的 `~/.pi-web`。
+- **集群轮询挂在 App 级弹窗上**：按钮和底栏指示只读 store。ChatInput 的单测用假定时器 `runAllTimers`，组件里挂常驻 `setInterval` 会让它判定死循环。
+- **代码 loop 走 `loop_start_request`**：服务端先落一条挂起记录再发启动提示词，启动失败有明确原因。不再像旧版那样往输入框里填字再模拟回车。
+- **`PI_WEB_TOKEN=auto` 是显式开关**：不改上游默认，不设 token 时行为不变。
+- **删掉 FRP 子命令**：`bin/frp-manager.mjs` 依赖的 ssh2 在 D-5 已删，导致整个 CLI 一加载就崩（`systemd-install` 用例连带失败）；FRP 把本地端口暴露到公网，也与驾驶舱只听 127.0.0.1 的安全口径相反。
+- **折叠目标条兜底用例改断言**：上游用例要求 `!important`，与 `css-layers` 契约（整份 styles.css 的 `!important` ≤ 1）冲突。改为断言该规则位于无层区（无层规则天然压过 theme 层）。
+- **不删 `vendor/mini-harness-runtime/`**：服务端在 `extensionsOverride` 里按路径剔除它，老用户 settings.json 里的旧登记不会和内置版抢工具表。
+- **首次配置判定**：models.json 只声明了目录、密钥要填进 auth.json 的服务商（setup.sh 种入的 oneapi 就是）不算「已配置」，否则新机器永远不弹填 key 的弹窗。
+- **填 key 后补选模型**：优先设置里的默认模型，其次刚配好的服务商的第一个可用模型；已有真实模型的对话不动。
+
+## 10. 坑与规矩
+
+- **开发规矩全在 `pi-web-ui/AGENTS.md`**：协议只改 `server/protocol.ts`；i18n 改 zh/en 后跑 `npm run i18n:sync`（死 key 守卫会拦没人引用的 key）；CSS 变量先定义后用；`!important` ≤ 1；新增内置条目要在 `web/src/host-icon.tsx` 登记图标名；`tests/unit/ui-slots.test.ts` 钉死了顶栏 / 底栏条目顺序，增删条目要同步改。
+- **根 `.gitignore` 有宽规则会吞新文件**：`*token*`、`*.png` 等。D-9b 就被吞过 `auth-token.ts` 和 PWA 图标。新增文件后用 `git check-ignore -v <文件>` 确认；`pi-web-ui/.gitignore` 里有 `!web/public/icons/*.png` 等例外。
+- `web/public/manifest.webmanifest` 是 CRLF 换行，**别对它跑 prettier**。
+- 提交时 git 钩子会打印几行 `cat: ...` 报错（主仓库路径带空格），无害，Change-Id 照常写入。
+- **没有可用模型时 session.model 不是空**：agent-core 会填一个占位模型（provider / id 都是 `"unknown"`），判断「有没有模型」要排除它。
+- **测试隔离**：端口用 ≥8900，数据目录用 `mktemp`，不要 `pkill -f`，不要动 8787 上的旧驾驶舱。需要真实 key 时只复制到临时目录，用完连目录删掉。
+- **格式检查范围**以 `npm run format:check` 为准；它覆盖不到的目录里有 34 个上游文件本来就不符合 prettier，不用管。
+- lint 有 98 条既有 warning（未使用的 import 等），0 个 error，没有清理。
+
+## 11. 待办与建议的下一步
+
+1. **默认分支**：要不要把 `harness-cockpit` 设成 GitHub 默认分支。用户 2026-10-30 明确说先不动。
+2. **icode 同步**：icode 上仍是旧 harden 版（CR #123037970）。要换成源码版就走 `icode push`：先把整棵树压成一个 commit（一次推超过 50 个 change 会被拒），装 Change-Id 钩子，commit 绑卡 luno-5578，推之前 `git stash push --include-untracked` 保持干净；平台不允许自己 +2。
+3. ~~**补齐过期测试**~~（已完成：冒烟套件 `run-smoke.mjs` 74/74 全绿、`loop-bar-test.mjs` 14/14 全绿、`token-auth-test.mjs` 21/21 全绿并加入 `.gitignore` 例外）。
+4. **补实测**：8.5 列出的几项，尤其是真实集群和真实模型下的「帮我细化」与暂停/继续。
+5. **可选清理**：`pi-web-cockpit/config/client-state.seed.json`、`pi-web-cockpit/vendor/mini-harness-runtime/` 已不再使用；`@types/ssh2` 开发依赖残留；98 条 lint warning。
+6. **已知小缺口**：
+   - 填 key 后的补选模型只作用于保存 key 的那个页面，同时开着的其他标签页要手动选一次模型。
+   - 旧版左下角「多 run 状态药丸」没有移植，由 LoopBar 状态条和任务台的运行列表覆盖。
+
+## 12. 附：干净 HOME 实测步骤
+
+可移植 / 一键安装的结论必须这样验（只验部件会漏掉首装才出现的问题，D-9f 的两处首装 bug 都是这样抓到的）：
+
+```bash
+H=$(mktemp -d /tmp/mh-home.XXXX)
+git clone -q --no-hardlinks --branch harness-cockpit /Users/zhangteng14/ComateProjects/mini-harness-cockpit "$H/mini-harness"
+cd "$H/mini-harness"
+CLEAN_ENV=(env -i HOME="$H" USER="$USER" LANG=en_US.UTF-8 TERM=xterm TMPDIR=/tmp \
+  PATH="$H/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+  npm_config_prefix="$H/.npm-global" npm_config_cache="$HOME/.npm")
+"${CLEAN_ENV[@]}" bash ./setup.sh; echo "exit=$?"        # 全局 npm 装到临时前缀，不碰本机
+"${CLEAN_ENV[@]}" PI_WEB_PORT=8934 ./pi-web-cockpit/start-hardened.sh &   # 别用 8787
+PORT=8934 TOKEN_FILE="$H/.pi-web/pi-web-token" KEY_FILE="$HOME/.pi/agent/auth.json" \
+  node pi-web-cockpit/verify-cockpit.mjs
+kill %1; rm -rf "$H"                                       # 首次配置弹窗会把 key 写进 $H，务必删掉
+```
+
+要点：`env -i` 隔开真实 HOME；`npm_config_prefix` 让 `npm install -g pi` 装进临时目录；共享 npm 缓存只为提速。
