@@ -9,24 +9,26 @@
 
 import type { AgentEngineCapabilities } from "./protocol.js";
 
-/** Pi 原生引擎能力：全功能全集 */
+/** Pi 原生引擎能力：推理发行版裁剪后的出厂集（关闭与 Loop 重叠/非推理场景的能力）。
+ *  SSH/沙盒/计划/委派/子代理/页面选择器已从源码删除或在发行版关闭；presentFiles 保留
+ *  （推理产出 report/chart 成果卡片要用）。 */
 export const DEFAULT_PI_CAPABILITIES: Readonly<AgentEngineCapabilities> = Object.freeze({
-	remoteSsh: true,
-	sandboxes: true,
+	remoteSsh: false,
+	sandboxes: false,
 	workspaceRoots: true,
 	conversationRef: true,
-	pageRef: true,
+	pageRef: false,
 	presentFiles: true,
-	planMode: true,
-	delegateMode: true,
-	subagents: true,
+	planMode: false,
+	delegateMode: false,
+	subagents: false,
 	toolPromptOverride: true,
 	lazyTools: true,
 	softCap: true,
 	treeFork: true,
 	messageEdit: true,
 	steer: true,
-	ephemeralChat: true,
+	ephemeralChat: false,
 });
 
 /** DSH 引擎能力：外部独立进程运行时（缺失 SSH 透明接管、conversation_read 等宿主特性） */

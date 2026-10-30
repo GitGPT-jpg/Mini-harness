@@ -266,8 +266,10 @@ export function normalizeSkillsCatalogBudget(v: unknown): number {
  *  开箱即用优先——见 #652；`PI_WEB_TOOL_LAZY_LOADING=1/true/on/yes` 部署级打开，给
  *  「想省上下文、愿意让模型多一步 load_tools」的实例一个开关；用户在设置面板的选择优先于此）。 */
 export const DEFAULT_TOOL_LAZY_LOADING = (() => {
+	// 推理发行版默认开延迟加载（省 token、稳 prompt cache 前缀）；仅显式设 off/0/false/no 才关。
 	const v = (process.env.PI_WEB_TOOL_LAZY_LOADING ?? "").trim().toLowerCase();
-	return v === "1" || v === "true" || v === "on" || v === "yes";
+	if (v === "0" || v === "false" || v === "off" || v === "no") return false;
+	return true;
 })();
 
 export const DEFAULT_CODEMODE_MODE: "on" | "only" = "on";
@@ -1131,7 +1133,7 @@ export class ClientStateStore {
 			devNoCache: stored?.devNoCache,
 			autoReload: stored?.autoReload,
 			toolsWrap: stored?.toolsWrap ?? true,
-			toolImagesEnabled: stored?.toolImagesEnabled ?? true,
+			toolImagesEnabled: stored?.toolImagesEnabled ?? false,
 			keepRecentMessages: normalizeKeepRecentMessages(stored?.keepRecentMessages),
 			reversePagination: stored?.reversePagination ?? false,
 			showForkedParentSessions: stored?.showForkedParentSessions ?? false,
@@ -1141,7 +1143,7 @@ export class ClientStateStore {
 			skillsCatalogMaxDesc: normalizeSkillsCatalogMaxDesc(stored?.skillsCatalogMaxDesc),
 			skillsCatalogShowLocation: Boolean(stored?.skillsCatalogShowLocation ?? false),
 			skillsCatalogBudget: normalizeSkillsCatalogBudget(stored?.skillsCatalogBudget),
-			visionBridgeEnabled: stored?.visionBridgeEnabled ?? true,
+			visionBridgeEnabled: stored?.visionBridgeEnabled ?? false,
 			visionBridgeModel: stored?.visionBridgeModel ?? null,
 			visionBridgePromptMode: stored?.visionBridgePromptMode === "replace" ? "replace" : "append",
 			visionBridgePrompt: stored?.visionBridgePrompt ?? "",
@@ -1210,7 +1212,7 @@ export class ClientStateStore {
 			devNoCache: settings.devNoCache ?? cur.devNoCache,
 			autoReload: settings.autoReload ?? cur.autoReload,
 			toolsWrap: settings.toolsWrap ?? cur.toolsWrap ?? true,
-			toolImagesEnabled: settings.toolImagesEnabled ?? cur.toolImagesEnabled ?? true,
+			toolImagesEnabled: settings.toolImagesEnabled ?? cur.toolImagesEnabled ?? false,
 			keepRecentMessages: normalizeKeepRecentMessages(
 				settings.keepRecentMessages ?? cur.keepRecentMessages ?? DEFAULT_KEEP_RECENT_MESSAGES,
 			),
@@ -1230,7 +1232,7 @@ export class ClientStateStore {
 			skillsCatalogBudget: normalizeSkillsCatalogBudget(
 				settings.skillsCatalogBudget ?? cur.skillsCatalogBudget ?? DEFAULT_SKILLS_CATALOG_BUDGET,
 			),
-			visionBridgeEnabled: settings.visionBridgeEnabled ?? cur.visionBridgeEnabled ?? true,
+			visionBridgeEnabled: settings.visionBridgeEnabled ?? cur.visionBridgeEnabled ?? false,
 			// 按键存在性合并：null 是合法值（清除语义），`null ?? cur` 会把旧值
 			// 复活到磁盘（设置面板清空后重启又回来）。settings-service 持久化
 			// 时传全量对象，键总在；其他调用方传 partial，键缺 = 保持旧值。

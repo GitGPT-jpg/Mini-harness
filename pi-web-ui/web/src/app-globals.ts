@@ -42,22 +42,22 @@ import type { ClientMessage, ConnStatus, UiServiceInfo, AgentEngineCapabilities 
  *  ⚠️ 协议里 `AgentEngineCapabilities` 新增字段时必须同步到此处，否则「缺省」方向上
  *  消费方（`capabilities.steer !== false` 这类判式）会与真实引擎口经不一致。 */
 export const DEFAULT_ENGINE_CAPABILITIES: AgentEngineCapabilities = {
-	remoteSsh: true,
-	sandboxes: true,
+	remoteSsh: false,
+	sandboxes: false,
 	workspaceRoots: true,
 	conversationRef: true,
-	pageRef: true,
+	pageRef: false,
 	presentFiles: true,
-	planMode: true,
-	delegateMode: true,
-	subagents: true,
+	planMode: false,
+	delegateMode: false,
+	subagents: false,
 	toolPromptOverride: true,
 	lazyTools: true,
 	softCap: true,
 	treeFork: true,
 	messageEdit: true,
 	steer: true,
-	ephemeralChat: true,
+	ephemeralChat: false,
 };
 
 export interface AppGlobals {
