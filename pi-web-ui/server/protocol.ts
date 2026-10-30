@@ -54,8 +54,7 @@ export interface UiMessage {
 	timestamp?: number;
 	model?: string;
 	provider?: string;
-	/** Assistant message usage cost in USD (from SDK usage.cost.total).
-	 *  Useful for plugins tracking per-provider or metered costs. */
+	/** Assistant message usage cost in USD (from SDK usage.cost.total). */
 	usageCost?: number;
 	stopReason?: string;
 	errorMessage?: string;
@@ -120,8 +119,6 @@ export interface AgentEngineCapabilities {
 
 	/** 是否支持跨会话上下文引用（包含配套的 conversation_read 等工具按需回拉转录） */
 	conversationRef: boolean;
-	/** 是否支持网页/页面捕获引用 */
-	pageRef: boolean;
 	/** 是否支持富媒体文件展示卡片工具（present_files 等） */
 	presentFiles: boolean;
 
@@ -162,8 +159,7 @@ export interface UiState {
 	/** 当前底层智能体引擎的能力声明（Capabilities）。前端据此动态隐藏不支持的入口。 */
 	engineCapabilities?: AgentEngineCapabilities;
 	/** 额外工作区根（宿主侧多根，见 set_workspace_roots）：按项目（cwd）持久化。
-	 *  AI 仍只在主 cwd 里干活（pi SDK 是单 cwd 模型）；右栏文件树可跨这些根浏览，
-	 *  插件的受支持路径（host.fs / host.project.create）也把这些根当作「工作区内」。
+	 *  AI 仍只在主 cwd 里干活（pi SDK 是单 cwd 模型）；右栏文件树可跨这些根浏览。
 	 *  空数组/缺省 = 单根。DSH 引擎不提供该字段。 */
 	workspaceRoots?: string[];
 	/** 服务进程所在机器的用户主目录（wire 格式，`/` 分隔）：右栏 🏠 一键直达。
@@ -382,14 +378,13 @@ export interface SlashCommandInfo {
 	argumentHint?: string;
 	argumentHintEn?: string;
 	/** Where the command comes from: web-native builtin / SDK extension /
-	 *  prompt template / skill / UI plugin（registerCommand）。 */
-	source: "builtin" | "extension" | "prompt" | "skill" | "plugin";
+	 *  prompt template / skill. */
+	source: "builtin" | "extension" | "prompt" | "skill";
 }
 
 /** Attachment spec shared by "prompt" and "edit_message" client messages:
- *  workspace-path attachments (reference/lines), an already-granted web
- *  page (page), raw pasted/dropped images (imageData) and raw uploaded files
- *  (fileData). Files are never injected into the prompt — the model gets a
+ *  workspace-path attachments (reference/lines), raw pasted/dropped images
+ *  (imageData) and raw uploaded files (fileData). Files are never injected into the prompt — the model gets a
  *  path reference and reads on demand. */
 /** 用户选中的消息原文；发送后保留副本，避免来源消息变化影响引用。 */
 export interface TextQuote {
@@ -400,23 +395,18 @@ export interface TextQuote {
 }
 
 export interface PromptAttachment {
-	/** Workspace path — except for mode "page", where it is the page's origin
-	 *  (e.g. "https://example.com"), which is also the browser_page `target`,
-	 *  and mode "conversation", where it is unused ("") — the reference
-	 *  travels in conversationId/sessionPath instead. */
+	/** Workspace path — except for mode "conversation", where it is unused
+	 *  ("") — the reference travels in conversationId/sessionPath instead. */
 	path: string;
 	/** "reference" = path-only aside（默认；文件内容不进 prompt）。
 	 *  "lines" = same reference plus the 1-based inclusive range the user picked.
 	 *  "inline" = LEGACY alias of "reference"（旧客户端/旧草稿会发它，服务端不再
 	 *  注入内容，按 reference 处理）。
-	 *  "page" = a web page granted to the AI via the page-picker extension:
-	 *  the server never stats/reads it — it only tells the model which
-	 *  browser_page target to use. `name` carries the page title.
 	 *  "conversation" = another conversation quoted by the user (left-panel
 	 *  right-click / global-search quote): the server emits a small
 	 *  <conversation-ref> aside pointing at it, and the model fetches the
 	 *  transcript on demand with the conversation_read tool. */
-	mode?: "inline" | "reference" | "lines" | "page" | "conversation" | "quote";
+	mode?: "inline" | "reference" | "lines" | "conversation" | "quote";
 	/** mode "quote"：path 留空，引用原文和来源保存在 quote。 */
 	quote?: TextQuote;
 	/** mode "conversation" + 引用运行中对话：conversation id（如 "c3"，含子代理）。 */
@@ -558,7 +548,7 @@ export type ClientMessage =
 	| { type: "retry_last" }
 	// -- background tasks (AI-started servers) ------------------------------
 	/** Kill ONE background server the agent started (by listening port). */
-	| { type: "kill_background_server"; port?: number; taskId?: string }
+	| { type: "kill_background_server"; port?: number }
 	/** Kill EVERY background server the agent started (frees all ports). */
 	| { type: "kill_background_servers" }
 	/** Re-push the current background-server list (the server also refreshes it
@@ -710,8 +700,6 @@ export type ClientMessage =
 	/** Check the npm registry for a newer pi-web-ui version. */
 	| { type: "check_update" }
 	| { type: "check_updates_all"; force?: true } // webui + direct pi extensions (manifest)
-	/** Check updates for installed UI plugins (<dataDir>/plugins). */
-	| { type: "check_plugin_updates" }
 	/** Restart the supervised service (same effect as `pi-web-ui server restart`:
 	 *  this process exits and its supervisor brings it back). The server refuses
 	 *  when no supervisor manages this instance (foreground / dev / Docker). */
@@ -909,7 +897,7 @@ export type ClientMessage =
 	/** 显式续跑：按 runId 绑定（run 的 sessionId 必须匹配本会话，否则拒绝——
 	 *  不做 cwd 兜底接管）。同一 run 的在途续跑会被互斥拒绝（不重复执行）。 */
 	| { type: "loop_resume"; runId: string }
-	// -- settings (system prompt / skills / extensions / presets) ------------
+	// -- settings (system prompt / skills / extensions) ----------------------
 	/** Request the current settings state (also pushed automatically on attach). */
 	| { type: "get_settings" }
 	/** Apply a partial settings update: compose template / per-source overrides or
@@ -930,11 +918,6 @@ export type ClientMessage =
 			disabledExtensions?: string[];
 			/** 统一 Agent 工具禁用名单（见 server/tool-manager.ts；live 生效无需 reload）。 */
 			disabledAgentTools?: string[];
-			/** 插件 AI 工具禁用名单（工具名；live 生效无需 reload）。 */
-			disabledPluginTools?: string[];
-			/** Installed UI plugins hidden in the settings panel (UI-only toggle,
-			 *  never triggers a runtime reload). */
-			disabledPlugins?: string[];
 			/** Persistent-terminal tools on/off (default on). Off → terminal_* tools
 			 *  are removed from the active tool set and the built-in usage guidance
 			 *  disappears from the system prompt. */
@@ -963,7 +946,7 @@ export type ClientMessage =
 			/** 问卷提问（ask_user_question）开关（默认开）。关 → 模型不再弹问卷。 */
 			questionnaireEnabled?: boolean;
 			/** 工具执行审批（人机协同）总开关（默认开）。关 → 一切审批都不弹：内置高危
-			 *  检测直接放行、插件 pre guard 的 ask 也按放行处理（纯运行开关，live 生效，无需 reload）。 */
+			 *  检测直接放行（纯运行开关，live 生效，无需 reload）。 */
 			toolApprovalEnabled?: boolean;
 			/** 同项目并行提醒开关（默认开）。关 → 同项目另有对话在跑时不发 notice、不给 AI 注提醒、不通知对端。纯运行开关，无需 reload。 */
 			parallelReminderEnabled?: boolean;
@@ -1026,7 +1009,7 @@ export type ClientMessage =
 			/** 内置标记总开关 + 按 marker 禁用（markersEnabled=false 时全部停用）。 */
 			markersEnabled?: boolean;
 			disabledMarkers?: string[];
-			/** 宿主 UI 布局的用户偏好（插件 UI 贡献 + 内置条目的隐藏/排序/分组）。
+			/** 宿主 UI 布局的用户偏好（内置条目的隐藏/排序/分组）。
 			 *  纯 UI 偏好，per-client 持久化，不触发 reload。 */
 			uiLayout?: UiLayoutPrefs;
 			/** 输入框上方的快捷短语（点击即发送）。纯 UI 偏好，不需要 reload runtime。 */
@@ -1040,25 +1023,6 @@ export type ClientMessage =
 			 *  服务端存全局标记，跨会话/跨浏览器生效，避免删除默认后又被填回）。 */
 			quickPhrasesSeeded?: boolean;
 	  }
-	// -- plugins (<dataDir>/plugins) -----------------------------------------
-	/** App-level message from a plugin's client bundle to its server side.
-	 *  Routed by pluginId; unknown/failed plugins are silently ignored. */
-	| { type: "plugin_message"; pluginId: string; payload: unknown }
-	/** Re-scan the plugin directory: deactivate removed entries, activate new
-	 *  ones, bump the epoch and re-push the catalog. Same spirit as
-	 *  extensions_reload but for pi-web-ui's own UI plugins. */
-	| { type: "plugins_reload" }
-	/** 特权 DOM 访问授权（wantsDom 插件）：granted=true 走两步握手——服务端生成
-	 *  在途 consent 请求（plugin_dom_consent_request 广播），收到绑定来源的
-	 *  plugin_dom_consent_response 才写入 <dataDir>/plugin-dom.json 并 epoch+1
-	 *  重推清单（浏览器按新 epoch 重拉 bundle）；granted=false = 撤销，单步直达
-	 *  （降权方向不值得拖 120s 窗口）。 */
-	| { type: "plugin_dom_consent"; pluginId: string; granted: boolean }
-	/** plugin_dom_consent 两步握手的应答：id 回显 plugin_dom_consent_request.id。
-	 *  服务端校验应答连接属于请求广播时的在线端才落盘（防陌生连接代答）。 */
-	| { type: "plugin_dom_consent_response"; id: string; ok: boolean }
-	/** Save the CURRENT settings as a named preset (overwrites if it exists). */
-	| { type: "save_preset"; name: string }
 	/** Upsert 一个子代理模板（同名覆盖；全局共享，所有客户端一致）。停用标记
 	 *  enabled 一起保存 —— 关闭的模板设置面板可见、可重开，但 AI 工具查询不到。 */
 	| { type: "save_subagent_template"; template: UiSubagentTemplate }
@@ -1073,20 +1037,6 @@ export type ClientMessage =
 	| { type: "delete_approval_rule"; id: string }
 	/** 恢复某条内置审批规则到系统默认设定。 */
 	| { type: "reset_builtin_approval_rule"; id: string }
-	// -- MCP 服务器管理（全局 ~/.pi/agent/mcp.json 与项目级 .pi/mcp.json） --------
-	/** 保存或更新 MCP 服务器（支持全局与项目级配置；同名同作用域覆盖）。 */
-	| {
-			type: "save_mcp_server";
-			server: UiMcpServer;
-			prevName?: string;
-			prevScope?: McpScope;
-	  }
-	/** 删除指定作用域下的 MCP 服务器。 */
-	| { type: "delete_mcp_server"; name: string; scope: McpScope }
-	/** 切换指定作用域下的 MCP 服务器启用/停用状态。 */
-	| { type: "toggle_mcp_server"; name: string; scope: McpScope; enabled: boolean }
-	/** 手动重新加载全部 MCP 服务器。 */
-	| { type: "reload_mcp" }
 	// -- Skill 技能市场安装与卸载 ----------------------------------------------
 	/** 从技能市场安装技能到全局 (~/.pi/agent/skills) 或项目级 (.pi/skills)。 */
 	| {
@@ -1101,62 +1051,10 @@ export type ClientMessage =
 			name: string;
 			scope: "global" | "project";
 	  }
-	/** Save a UI plugin's declarative settings (manifest "settings" schema).
-	 *  The host validates against the schema, persists to storage.json and
-	 *  notifies the plugin (host.onSettingsChanged). */
-	| { type: "plugin_settings"; pluginId: string; values: Record<string, unknown> }
-	/** Run a plugin install / update / uninstall as a BACKGROUND JOB
-	 *  (server/plugin-installer.ts) instead of a visible terminal tab: the
-	 *  settings panel stays open, the job keeps running page-side, and
-	 *  progress/results come back as `plugin_job` messages to the caller.
-	 *  One job at a time (a second start while one runs is refused with a
-	 *  notice); on success the server reloads plugins + re-pushes the
-	 *  catalog/list to every client. Refused on managed instances (they
-	 *  install through their deploy). */
-	| {
-			type: "plugin_job";
-			/** Client-generated job id, echoed back on every update. */
-			jobId: string;
-			action: "install" | "update" | "uninstall";
-			/** Plugin id: install target dir name / uninstall target. */
-			id: string;
-			/** install/update: remote source owner/repo[/subdir][#ref] (local paths
-			 *  stay CLI-only on purpose). */
-			source?: string;
-			/** install/update: build the plugin from source first (isolated build,
-			 *  same as CLI `--build`). */
-			build?: boolean;
-			/** install/update: never build, even for source-only plugins (same as
-			 *  CLI `--no-build`; mutually exclusive with build). */
-			noBuild?: boolean;
-	  }
-	/** Cancel a running plugin job (kills its process tree; finished jobs are
-	 *  unaffected). */
-	| { type: "plugin_job_cancel"; jobId: string }
-	/** 安装前先读 spec（DSH 对照 P0-3 引导式安装）：在动 CLI 之前做形状分类 +
-	 *  本地已装判定 + （GitHub 源）一次远端 manifest 探测，把失败归到七种 problem
-	 *  之一。`requestId` 回显在 plugin_install_inspect_result 上。
-	 *  `explicitId` = 用户填的落盘 id（缺省由来源推导）；`force` = 已装不再是问题。 */
-	| { type: "plugin_install_inspect"; requestId: string; source: string; explicitId?: string; force?: boolean }
-	/** 拉取机器可读的注册面目录（P2-7：slot/工具/宿主方法表+当前占用者，按需查，不进快照）。 */
-	| { type: "plugin_api_catalog"; requestId: string }
-	/** 用户对「插件请求访问工作区外目录」的答复（id 回显 plugin_path_request.id）。
-	 *  remember=true 时把授权记进 <dataDir>/plugin-grants.json（下次不再问）。 */
-	| { type: "plugin_path_response"; id: string; ok: boolean; remember?: boolean }
-	/** 撤销插件目录授权（设置面板）：给 pluginId 清掉它的全部授权，给了 path 只清
-	 *  该目录；两者都不给 = 清空整张表。 */
-	| { type: "plugin_path_revoke"; pluginId?: string; path?: string }
-	/** 用户对「插件请求能力授权」的答复（id 回显 plugin_permission_request.id）。
-	 *  remember=true 记进 <dataDir>/plugin-permissions.json（下次不再问），
-	 *  false/缺省 = 仅本次运行有效。 */
-	| { type: "plugin_permission_response"; id: string; ok: boolean; remember?: boolean }
-	/** 撤销能力授权（设置面板）：给 pluginId 清它的全部，给 family 缩到该族，
-	 *  给 host/model 缩到命中该范围的条目；全不给 = 清空整张表（含内存授权）。 */
-	| { type: "plugin_permission_revoke"; pluginId?: string; family?: "net" | "llm"; host?: string; model?: string }
 	/** 设置当前项目的**额外工作区根**（宿主侧多根）：AI 仍只在主 cwd 里干活（pi SDK
-	 *  是单 cwd 模型），文件树与插件的受支持路径可跨这些根。空数组 = 回到单根。
+	 *  是单 cwd 模型），文件树可跨这些根。空数组 = 回到单根。
 	 *  只收绝对路径（相对路径直接丢弃）、去重、最多 8 个；按项目（cwd）持久化在
-	 *  client-state.json，改了立刻推一次快照并在插件宿主里同步。 */
+	 *  client-state.json，改了立刻推一次快照。 */
 	| { type: "set_workspace_roots"; roots?: string[] }
 	// -- DSH engine user patches (<dataDir>/dsh-patches) ---------------------
 	/** List <dataDir>/dsh-patches/*.yml (DSH engine only; pi engine ignores). */
@@ -1255,73 +1153,6 @@ export type ClientMessage =
 	 *  每条 prompt 由服务端转给一个常驻落盘执行对话执行；写类/派发类工具加硬闸门。
 	 *  conversationId 缺省 = 当前对话。计划模式优先（两者同开时不自动派活）。 */
 	| { type: "set_delegate_mode"; enabled: boolean; conversationId?: string }
-	/** Answer to page_request (id echoes page_request.id). `ok:false` carries a
-	 *  human-readable `error` — no browser/extension, page not allowed, or the
-	 *  action itself failed. The server never inspects `result`'s shape; it is
-	 *  handed to the model as-is (JSON). */
-	| {
-			type: "page_response";
-			id: string;
-			ok: boolean;
-			result?: unknown;
-			error?: string;
-	  }
-	/** Replace the current settings with the named preset and apply it. */
-	| { type: "apply_preset"; name: string }
-	/** Remove the named preset. */
-	| { type: "delete_preset"; name: string }
-	// -- preset sharing (server/preset-share.ts, docs/preset-sharing.md) ------
-	/** 导出预设（或当前设置）为可分享的 JSON 文本。name 为空 = 导出当前设置。
-	 *  meta 只影响外壳字段（description/author/tags），不回写本地预设。 */
-	| {
-			type: "preset_export";
-			/** 导出来源：preset（name 命名的预设）或 current（当前设置）。缺省按 preset。 */
-			source?: "preset" | "current";
-			name?: string;
-			description?: string;
-			author?: string;
-			tags?: string[];
-			/** 关联的对话 id（用于让同一会话的回执被优先处理；可选）。 */
-			requestId?: string;
-	  }
-	/** 解析导入文本（dryRun 只回预览，不落盘）；导入成功后可顺带 apply。 */
-	| {
-			type: "preset_import";
-			json: string;
-			dryRun?: boolean;
-			/** 覆盖文档里的 name（重名兜底/用户改名）。 */
-			name?: string;
-			/** 导入后立即应用（等价于再点一次应用）。 */
-			apply?: boolean;
-			/** **可选导入**：只写入这些字段（名字必须是预设白名单里的；不传 = 全部）。
-			 *  名单为空数组 = 什么都不写（服务端回错）。 */
-			fields?: string[];
-			requestId?: string;
-	  }
-	/** 按网址导入（服务端抓取，避开浏览器 CORS 与 SSRF 风险）。 */
-	| {
-			type: "preset_import_url";
-			url: string;
-			dryRun?: boolean;
-			name?: string;
-			apply?: boolean;
-			/** 同 preset_import.fields：只写入勾选的字段。 */
-			fields?: string[];
-			requestId?: string;
-	  }
-	/** 浏览社区共享预设目录（refresh=true 绕过 5 分钟缓存）。 */
-	| { type: "preset_catalog"; refresh?: boolean; requestId?: string }
-	/** 一键分享到社区共享仓库（gh issue create；失败回落预填网页）。 */
-	| {
-			type: "preset_share";
-			/** 分享来源：preset（name 命名的预设）或 current（当前设置）。缺省按 preset。 */
-			source?: "preset" | "current";
-			name?: string;
-			description?: string;
-			author?: string;
-			tags?: string[];
-			requestId?: string;
-	  }
 	/** Drop one workspace from this client's recent-project list (UI state
 	 *  only — nothing on disk is touched). */
 	| { type: "remove_project"; path: string }
@@ -1662,26 +1493,18 @@ export interface LoopUiState {
  *  can be stopped individually or all at once, and the list persists even
  *  after the conversation that started them ends. */
 export interface BgServer {
-	/** Port the server listens on (the stable key for agent-started servers).
-	 *  Plugin-registered tasks have no port — they carry taskId/plugin instead. */
+	/** Port the server listens on (the stable key for agent-started servers). */
 	port?: number;
 	/** Process id of the listening process (agent-started servers). */
 	pid?: number;
-	/** Plugin task id (host.registerBackgroundTask) — present for plugin tasks. */
-	taskId?: string;
-	/** Plugin id that registered this task (kill routing). */
-	plugin?: string;
-	/** When the server/task was first detected or registered (ms epoch). */
+	/** When the server was first detected (ms epoch). */
 	since: number;
 	/** Best-effort process name (tasklist / ps), undefined when unknown. */
 	name?: string;
 	/** Best-effort full command line (PowerShell CIM / ps -o command=) so the
 	 *  panel can show WHAT is actually running, undefined when unknown. */
 	command?: string;
-	/** 插件任务的活动状态文案（如轮询间隔、连接数），可经 update 刷新。 */
-	status?: string;
-	/** 用户把这个后台实例**钉住**了（`set_bg_keep`）：自动清理永不碰它。
-	 *  只对宿主自己 diff 出来的端口进程有意义（插件任务不参与自动清理）。 */
+	/** 用户把这个后台实例**钉住**了（`set_bg_keep`）：自动清理永不碰它。 */
 	keep?: boolean;
 }
 
@@ -1978,252 +1801,8 @@ export interface UiProviderConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Plugins (optional UI components dropped into <dataDir>/plugins/<id>/)
+// Host UI layout (built-in slots / user layout preferences)
 // ---------------------------------------------------------------------------
-
-export interface UiPluginUpdateInfo {
-	id: string;
-	name?: string;
-	version?: string;
-	latestVersion?: string | null;
-	source: string;
-	localSha: string | null;
-	remoteSha: string | null;
-	updatable: boolean;
-	builtin?: boolean;
-	error?: string;
-}
-
-/** One installed pi-web-ui plugin (see server/plugins.ts). A plugin is a
- *  directory under <dataDir>/plugins/<id>/ with a manifest.json and optional
- *  server entry (index.mjs) + client view bundle (client/entry.mjs). Not
- *  bundled with the app — users install by dropping the directory in and
- *  restarting (or reconnecting: the list is re-scanned on every attach). */
-
-/** 一个声明式设置字段（manifest "settings" 数组里的元素）。 */
-export interface UiPluginSettingField {
-	/** 字段 key（storage.json settings 对象里的键；同一插件内唯一）。 */
-	key: string;
-	/** 控件类型：文本 / 密码 / 数字 / 开关 / 下拉 / 机密。
-	 *  secret 与 password 的区别：password 只是前端掩码、值仍明文存 storage.json；
-	 *  secret 存加密 secrets（AES-256-GCM），浏览器侧 settingsValues 只看到有无（布尔），
-	 *  插件运行时 getSettings() 才拿到真值；保存时空串 = 不改。 */
-	type: "text" | "password" | "number" | "boolean" | "select" | "secret";
-	/** 表单里的显示名。 */
-	label: string;
-	/** 未保存过时的默认值。 */
-	default?: string | number | boolean;
-	/** number 用：范围。 */
-	min?: number;
-	max?: number;
-	/** select 用：静态候选值。 */
-	options?: string[];
-	/** select 用：候选项由**宿主**按数据源在浏览器侧现算（插件不必自己维护清单，
-	 *  也就不会随模型配置变化而过期）：
-	 *  "models" = 已配置鉴权的模型（值 `provider/id`，标签同设置面板的模型选择器）；
-	 *  "thinkingLevels" = SDK 思考强度档位（`off`…`max`，标签走 `thinking.<值>`）。
-	 *  两者渲染时都会在最前面加一个空值选项（= 跟随全局默认，插件侧拿到空串自行回落）；
-	 *  服务端不做候选值校验（清单在宿主侧、随配置变化），非法值由用的时候（如 `host.chat`）报错。 */
-	optionsFrom?: "models" | "thinkingLevels";
-	/** 帮助文案（悬浮提示/小字）。 */
-	hint?: string;
-}
-
-/** manifest "requires" 硬依赖声明（P2-8）：任一条不满足即拒绝激活 +
- *  教学式错误（区别于 peerPlugins 的缺失只警告）。决定启动时机的是依赖，
- *  不是目录顺序：ensureLoaded 按依赖拓扑排序激活，环/缺失直接拒。 */
-export interface PluginRequires {
-	/** 宿主 API 下限（> 宿主 PLUGIN_API_VERSION 即拒+请升级；与 apiVersion 的精确代际不同，这是下限）。 */
-	hostApi?: number;
-	/** 必须可用的宿主能力族：须是已知族（拼写错/要新版宿主即拒），且须同时在自家
-	 *  permissions 里声明（否则运行时必被门控拒绝，不如启动时就说清楚）。 */
-	families?: string[];
-	/** 必须已安装且激活成功的对等插件（硬依赖；缺失/失败/被删即拒+点名）。 */
-	plugins?: string[];
-}
-
-/** 机器可读的注册面目录（P2-7）：slot/工具/宿主方法表 + 当前占用者。
- *  类型唯一事实源在这里（装配见 server/plugin-api-catalog.ts）；
- *  下发走 WS 只读查询 `plugin_api_catalog` → `plugin_api_catalog_result`（不进快照）。 */
-export interface CatalogSlotOccupant {
-	pluginId: string;
-	/** 该插件在这个 slot 上的条目数（manifest 基线 + 运行时注册合并后）。 */
-	items: number;
-}
-export interface CatalogSlotEntry {
-	/** 完整槽位名（如 "topbar.primary"）。 */
-	slot: string;
-	/** 自然简写（如 "topbar" → "topbar.primary"；manifest 与运行时注册通用）。 */
-	aliases: string[];
-	/** 可用的条目种类（缺省 action；settings.pages 缺省 page）。 */
-	kinds: string[];
-	/** 当前占用者（只含条目数，不含条目内容；按插件 id 排序）。 */
-	occupants: CatalogSlotOccupant[];
-	/** 替换风险：谁能动这里的条目，一句话。 */
-	replaceRisk: string;
-	/** manifest 最小例子（能直接抄）。 */
-	example: string;
-}
-export interface CatalogAgentTool {
-	name: string;
-	group: string;
-	defaultOn: boolean;
-	dshVisible: boolean;
-}
-export interface CatalogHostMethod {
-	/** 如 "ui.register" / "registerAgentTool" / "fs.readText"。 */
-	name: string;
-	/** 需要的能力族（"-" = 无需声明，旧全权/观察类）。 */
-	needs: string;
-	summary: string;
-	/** 最小调用例子（一行）。 */
-	example: string;
-}
-export interface PluginApiCatalog {
-	/** 目录 schema 版本（以后加字段即 +1，读取方按 version 兼容）。 */
-	version: 1;
-	slots: CatalogSlotEntry[];
-	agentTools: CatalogAgentTool[];
-	hostMethods: CatalogHostMethod[];
-}
-
-/** 插件按扩展名接管文件单击预览的声明（实际渲染由 client/entry.mjs 提供）。 */
-export interface UiPluginFileHandler {
-	id: string;
-	extensions: string[];
-	priority: number;
-	label?: string;
-	labelEn?: string;
-}
-
-/** P3：插件登记的「运行中」条目（左栏「运行的对话」分区里，按插件分组展示）。
- *  仅展示：不是对话、没有 runtime，点击只把 action 回传给插件的浏览器 bundle。 */
-export interface PluginPanelItem {
-	/** 插件内唯一（服务端去重，重复的后者丢弃）。 */
-	id: string;
-	title: string;
-	/** 副标题（如「第 3/5 步」）。 */
-	hint?: string;
-	/** running = 进行中；done / error = 已结束（仍可见，直到插件清掉或心跳过期）。 */
-	status: "running" | "done" | "error";
-	/** 单个 emoji / 短符号（≤ 8 字符）。 */
-	icon?: string;
-	/** 点击时回传给插件的动作名（插件 bundle 用 host.onUiAction 接）；缺省则点击无效果。 */
-	action?: string;
-}
-
-/** P3：某个插件的一组运行中条目（分组标题用插件显示名）。 */
-export interface PluginPanelGroup {
-	pluginId: string;
-	pluginName: string;
-	items: PluginPanelItem[];
-}
-
-export interface UiPluginInfo {
-	/** Directory name; must match ^[A-Za-z0-9_-]+$ (path-safety). */
-	id: string;
-	/** Display label from manifest.json (shown as the view tab). */
-	name: string;
-	version?: string;
-	description?: string;
-	/** Optional project/homepage URL from manifest.json. */
-	homepage?: string;
-	/** A client/entry.mjs exists → the frontend should load its view bundle. */
-	hasClient: boolean;
-	/** Optional emoji/single-char icon from manifest.json — shown instead of
-	 *  the generic puzzle glyph on the view tab. */
-	icon?: string;
-	/** Optional inline SVG icon (manifest.json `iconSvg`) — rendered in place
-	 *  of `icon` wherever the plugin badge is shown (topbar view tab,
-	 *  right-panel tab, settings lists). Server-validated shape only; the
-	 *  frontend sanitizes again before injecting. */
-	iconSvg?: string;
-	/** The plugin failed to activate (bad entry / thrown error) — UI shows it
-	 *  greyed out instead of a dead tab. */
-	error?: string;
-	/** 宿主当前持有该插件实例（loaded 表里有它；激活失败的占位行也有）。
-	 *  设置面板据此合成运行相位：error→失败 / 用户禁用→已禁用 /
-	 *  active→运行中 / 其他→纯前端（无 index.mjs，从未激活）。
-	 *  可选字段：缺省 = 未知（旧服务端）。 */
-	active?: boolean;
-	/** Declared capabilities from manifest.json (e.g. "fs", "net", "tools") —
-	 *  informational for now: surfaced in the settings panel so users can see
-	 *  what a plugin claims to touch before trusting it. */
-	permissions?: string[];
-	/** 出站网络白名单（permissions 含 "net" 时生效：主机后缀匹配，空 = 全拒）。 */
-	netAllowlist?: string[];
-	/** 引擎约束（{ "pi-web-ui": ">=1.2.0" }，不满足即拒绝激活）。 */
-	engines?: Record<string, string>;
-	/** 可选对等依赖（其它插件 id，缺失只警告不断活）。 */
-	peerPlugins?: string[];
-	/** 硬依赖声明（manifest "requires"）：不满足即拒绝激活（区别于 peerPlugins 的软警告）。 */
-	requires?: PluginRequires;
-	/** Declarative settings schema from manifest.json "settings" — rendered as a
-	 *  form in the main ⚙ panel (type/label/default/min/max/options). */
-	settingsSchema?: UiPluginSettingField[];
-	/** Current stored values (storage.json "settings" key, defaults applied). */
-	settingsValues?: Record<string, unknown>;
-	/** 每个设置值的来源层（P2-9 层式组合）：default = schema 缺省 / override =
-	 *  用户 overlay（<dataDir>/plugin-overrides/<id>.json，不 fork 改官方默认）/
-	 *  stored = 面板保存的 storage.json 值（最高）。secret 字段永为 default/stored。 */
-	settingsSources?: Record<string, "default" | "override" | "stored">;
-	/** Install source recorded by `pi-web-ui install` (<dir>/.pi-source.json):
-	 *  the original spec the user typed (owner/repo, URL or local path). The
-	 *  settings panel offers an Update button only when this exists. */
-	source?: string;
-	/** manifest.permissions 含 "dom" 族 = 该插件请求特权 DOM 访问（直接碰宿主外壳的
-	 *  DOM，不走 slot 框架）。有此声明时 client bundle 默认 403，需用户在设置面板
-	 *  逐个授权（plugin_dom_consent）后才下发。 */
-	wantsDom?: boolean;
-	/** 用户已授权该插件的特权 DOM 访问（<dataDir>/plugin-dom.json，全局共享）。 */
-	domGranted?: boolean;
-	/** Fenced-code languages this plugin can render (manifest "renderers"). The
-	 *  frontend builds a language→plugin map and lazily loads the plugin's
-	 *  bundle the first time such a fence actually renders in a message. */
-	renderers?: string[];
-	/** 自定义消息部件类型（manifest "messageWidgets"）：`customType === <type>`
-	 *  的消息由该插件渲染（Markdown 经 loadMessageWidget 按需加载
-	 *  `default.messageWidgets[type]`，载荷 JSON 序列化后传入）。 */
-	messageWidgets?: string[];
-	/** 自定义附件卡类型（manifest "attachmentCards"，预留：附件 details.kind
-	 *  命中时由插件渲染卡片）。 */
-	attachmentCards?: string[];
-	/** 输入框补全源（manifest "composerProviders"，预留：@提及/斜杠补全增补）。 */
-	composerProviders?: string[];
-	/** 文件单击查看器声明；扩展名统一为小写并带点。 */
-	fileHandlers?: UiPluginFileHandler[];
-	/** Whether the plugin exposes a standalone view tab (manifest "view",
-	 *  default true). Renderer-only plugins set false so the frontend skips
-	 *  eagerly loading their bundle for the tab and only loads it on demand. */
-	view?: boolean;
-	/** manifest "preload" (default false): keep the client bundle loaded even
-	 *  though the plugin has no view tab (view:false). Needed by plugins whose
-	 *  top-level code must keep running across page reloads (reminder polling,
-	 *  keyboard shortcuts, an always-available floating panel …). The bundle is
-	 *  executed once per page load and may omit `export default { mount }`. */
-	preload?: boolean;
-	/** 这个插件对宿主 UI 的全部贡献（manifest "ui" + 运行时 host.ui.register
-	 *  合并后的快照，见 UiPluginUi）。宿主负责渲染/排序/溢出/可访问性，
-	 *  插件只做声明 + 回调 —— 不碰 DOM。 */
-	ui?: UiPluginUi;
-	/** 运行时诊断记录（manifest/ui 解析丢弃原因 + 工具/命令/路由重复或非法等
-	 *  warning/error 摘要，英文短句、供设置面板“界面插件”页展开查看）。
-	 *  可选字段：缺省/空 = 无可报告的诊断；只做可观测性，不影响隔离/权限语义。 */
-	diagnostics?: string[];
-	/** 该插件经 registerAgentTool 注册的 AI 工具快照（设置面板展示 + 逐工具开关用；
-	 *  缺省/空 = 该插件未注册 AI 工具）。只含展示字段，不含 execute。 */
-	agentTools?: UiPluginAgentTool[];
-}
-
-/** 插件注册的 AI 工具在 UiPluginInfo 上的只读快照（设置面板展示用）。 */
-export interface UiPluginAgentTool {
-	/** 全局唯一的工具名（如 mail_list）。 */
-	name: string;
-	/** UI 显示标签（缺省 = name）。 */
-	label?: string;
-	/** 给 LLM 的工具描述（面板里做悬浮提示）。 */
-	description?: string;
-}
 
 /**
  * 宿主支持的**挂载点**（slot）。这是宿主 UI 扩展点的唯一枚举：新增一个挂载点 =
@@ -2362,7 +1941,7 @@ export interface UiContribution {
 	labelEn?: string;
 	/** emoji/单字符图标 或 宿主图标名。 */
 	icon?: string;
-	/** 内联 SVG 图标（与 UiPluginInfo.iconSvg 同语义；有则优先于 icon 渲染）。 */
+	/** 内联 SVG 图标（有则优先于 icon 渲染）。 */
 	iconSvg?: string;
 	/** 悬浮提示。 */
 	hint?: string;
@@ -2450,110 +2029,6 @@ export interface UiLayoutPrefs {
 	sideDockFloat?: boolean;
 	/** 用户自定义槽位/位置（将条目挪到 topbar.primary / bottombar / sidebar.left / sidebar.right）。 */
 	slots?: Record<string, UiSlotId>;
-}
-
-/** 一个插件下发的全部 UI 贡献（manifest "ui" 与运行时注册合并后的快照）。 */
-export interface UiPluginUi {
-	/** 本插件贡献的条目（按 slot 分组由前端做，此处是平铺数组）。 */
-	items: UiContribution[];
-	/** 本插件对其它条目的整理意图。 */
-	arrange: UiArrangeOp[];
-}
-
-/** 插件能力族（manifest.permissions 条目冒号前的族名）。
- *  fs:read / fs:write 由宿主从 "fs" 派生：只声明 fs:read = 跨目录写与
- *  project.create 被拒；声明 "fs" = 读写全开（向后兼容）。
- *  net = 出站网络白名单（manifest.netAllowlist 未命中即拒）；
- *  llm = host.llm.complete 孤立补全（花用户模型额度）；
- *  dom:anchor = 仅限 anchors 挂载点的范围 DOM（免用户授权，完整 document
- *  仍需 "dom" + 用户授权）。 */
-export type PluginPermissionFamily =
-	| "fs"
-	| "fs:read"
-	| "fs:write"
-	| "ui"
-	| "tools"
-	| "http"
-	| "chat"
-	| "llm"
-	| "net"
-	| "dom"
-	| "dom:anchor"
-	| "notify"
-	| "storage"
-	| "secrets";
-
-/** 插件间事件总线的一条事件（host.events.emit/on）。 */
-export interface PluginBusEvent {
-	/** 事件名（建议 `<pluginId>:<name>` 前缀防撞）。 */
-	topic: string;
-	/** 发送方插件 id（宿主回填，发送方不可伪造）。 */
-	from?: string;
-	/** 事件载荷（JSON 可序列化，4KB 截断）。 */
-	payload?: unknown;
-}
-
-/** 插件可见的模型信息（host.models.list）。 */
-export interface PluginModelInfo {
-	id: string;
-	provider: string;
-	vision: boolean;
-}
-
-/** 插件可见的会话统计（host.onStats）。 */
-export interface PluginStats {
-	conversationId?: string;
-	tokens: { input: number; output: number; total: number };
-	cost: number;
-	contextUsage?: { tokens: number | null; contextWindow: number; percent: number | null };
-}
-
-/** One installable plugin in the "plugin list / marketplace" (see
- *  server/plugin-catalog.ts). Unlike {@link UiPluginInfo} (an INSTALLED
- *  plugin), a catalog entry is a one-click install candidate shown in the
- *  settings panel. Two sources are merged:
- *    - builtin : <pkgRoot>/plugins/catalog.json shipped with pi-web-ui (the
- *      maintained list — plugin authors contribute by adding an entry + PR)
- *    - custom  : <dataDir>/plugin-catalog.json, user-added entries (anyone
- *      can drop a third-party plugin into the list via the settings UI)
- *  Custom entries override a builtin entry of the same id (so users can
- *  adjust the maintained defaults). */
-export interface UiPluginCatalogEntry {
-	/** Install id — the plugin lands in <dataDir>/plugins/<id>. Must match
-	 *  ^[A-Za-z0-9_-]+$. Installing always runs `pi-web-ui install <source>
-	 *  --name <id>` so the on-disk dir name matches this id (this is what the
-	 *  settings panel uses to detect installed/not-installed state). */
-	id: string;
-	/** Display name (falls back to id). */
-	name: string;
-	/** Display name in English (falls back to name). */
-	nameEn?: string;
-	description?: string;
-	descriptionEn?: string;
-	/** Optional emoji/single-char icon. */
-	icon?: string;
-	/** Optional inline SVG icon (same semantics as UiPluginInfo.iconSvg). */
-	iconSvg?: string;
-	/** Install source for the CLI: owner/repo[/subdir][#ref]. */
-	source: string;
-	/** true = from the shipped catalog; false = user added in the UI
-	 *  (only custom entries can be removed). */
-	builtin: boolean;
-	/** true = a custom entry whose id replaced a shipped-catalog entry with the
-	 *  same id: the display fields (name/icon/description) come from a
-	 *  user-supplied source and may imitate the official entry, so surfaces
-	 *  should mark it as user-supplied. The source field always keeps the real
-	 *  (custom) install source — it cannot impersonate the official one.
-	 *  Optional, purely additive; derived at merge time, not persisted. */
-	overridesBuiltin?: boolean;
-	/** Optional project/homepage URL. */
-	homepage?: string;
-	/** Catalog origin category:
-	 *  - "builtin": Shipped with pi-web-ui repository
-	 *  - "community": Official community registry (pi-web-ui-plugins)
-	 *  - "custom": Manually added by user in settings UI
-	 */
-	origin?: "builtin" | "community" | "custom";
 }
 
 /** One of pi's built-in providers, with whether auth is configured. */
@@ -2688,7 +2163,7 @@ export interface ElsewhereRunning {
 	hasQuestion?: boolean;
 	/** 等答复问卷的简短标题/题目，供横幅与列表展示。 */
 	questionTitle?: string;
-	/** 是否为无头伪客户端（定时任务 scheduler: / 插件 plugin:）。
+	/** 是否为无头伪客户端（定时任务 scheduler:）。
 	 *  无头会话不支持过户与跨页作答，前端降级为只读状态展示。 */
 	pseudo?: boolean;
 	/** 持有方页面已断开（标签页/浏览器关了、手机锁屏后被回收），只剩服务端残留会话。
@@ -2726,7 +2201,7 @@ export interface DshPermissionOption {
 }
 
 // ---------------------------------------------------------------------------
-// Settings (system prompt / skills / extensions / presets)
+// Settings (system prompt / skills / extensions)
 // ---------------------------------------------------------------------------
 
 /** One loaded skill, with whether it is currently enabled. Disabled skills are
@@ -2748,78 +2223,6 @@ export interface UiExtensionInfo {
 	/** Resolved entry path. */
 	path: string;
 	enabled: boolean;
-}
-
-/** A named combination of prompt (compose template + per-source overrides) +
- *  disabled skills/extensions that the user can re-apply in one click. Persisted
- *  per client. promptMode/customSystemPrompt 是遗留字段（旧预设）。 */
-export interface UiSettingsPreset {
-	name: string;
-	promptMode: "append" | "replace";
-	customSystemPrompt: string;
-	promptTemplate: string;
-	promptOverrides: Record<string, string>;
-	disabledSkills: string[];
-	disabledExtensions: string[];
-	/** Extra instructions and skill toggles for the isolated goal-reviewer. */
-	reviewPrompt: string;
-	reviewDisabledSkills: string[];
-}
-
-/** 社区共享预设目录里的一条（预设分享仓库 index.json 的条目）。见
- *  server/preset-share.ts 与 docs/preset-sharing.md。 */
-export interface UiPresetCatalogEntry {
-	/** 稳定 id（`<slug>-<短哈希>`，同内容同 id）。 */
-	id: string;
-	name: string;
-	description: string;
-	author: string;
-	tags: string[];
-	/** 预设文件地址（可直接喂 preset_import_url）。 */
-	url: string;
-	/** 来源 Issue 页面地址（手工收录时为空串）。 */
-	issueUrl: string;
-	/** ISO 时间戳（仓库 index.json 的 updatedAt；可能为空串）。 */
-	updatedAt: string;
-	/** 列表徽标用的摘要（仓库未提供时缺省）。 */
-	summary?: {
-		promptMode: string;
-		skills: number;
-		agentTools: number;
-		hasTemplate: boolean;
-		hasReviewPrompt: boolean;
-	};
-}
-
-/** 导入预览（preset_import / preset_import_url 的 dryRun 回执）。解析与净化都
- *  在服务端做，前端只负责展示——用户点「导入」前没有任何东西落盘。 */
-export interface UiPresetImportPreview {
-	/** 写入后的预设名（文档 name；导入时可用 name 覆盖）。 */
-	name: string;
-	description: string;
-	author: string;
-	tags: string[];
-	format: string;
-	version: number;
-	/** 会写入的字段名（已白名单过滤）。dryRun 预览里是文档全部合法字段；
-	 *  确认导入的回执里是**实际写入**的字段（勾选子集）。 */
-	fields: string[];
-	/** 被忽略的未知字段名（旧版客户端/拼错字段的提示）。 */
-	ignored: string[];
-	/** 类型不符被丢弃的已知字段。 */
-	rejected: string[];
-	/** 本地已有同名预设（确认导入即覆盖）。 */
-	replaces: boolean;
-	/** 列表展示摘要。 */
-	summary: NonNullable<UiPresetCatalogEntry["summary"]>;
-	/** 预设中各字段净化后的具体值（供前端勾选时查看实际要导入的内容与明细）。 */
-	settings?: Record<string, unknown>;
-	/** 预览用文本片段（自定义系统提示词/模板/审查提示词，已截断）。 */
-	customSystemPrompt: string;
-	promptTemplate: string;
-	reviewPrompt: string;
-	disabledSkills: string[];
-	disabledExtensions: string[];
 }
 
 /** 一个子代理模板（设置面板「子代理模板」区的 CRUD 实体，也是 AI 派生子代理
@@ -2861,70 +2264,6 @@ export interface UiVisionBridgeModel {
 	label: string;
 }
 
-/** MCP 服务器作用域：global = Pi 全局 (~/.pi/agent/mcp.json)；project = 当前项目 (.pi/mcp.json)。 */
-export type McpScope = "global" | "project";
-
-/** MCP 服务器暴露给智能体的单个工具摘要 */
-export interface UiMcpToolInfo {
-	name: string;
-	description?: string;
-}
-
-/** 前端/设置面板交互使用的 MCP 服务器描述与运行时状态 */
-export interface UiMcpServer {
-	/** 服务器唯一标识名（[a-zA-Z0-9_-]+） */
-	name: string;
-	/** 配置归属作用域：全局或项目级 */
-	scope: McpScope;
-	/** 启动命令（stdio 传输模式，如 npx、node、uvx、python） */
-	command?: string;
-	/** 命令行参数 */
-	args?: string[];
-	/** 工作目录（stdio 传输模式） */
-	cwd?: string;
-	/** 环境变量（stdio 传输模式） */
-	env?: Record<string, string>;
-	/** 远程服务端点 URL（HTTP 传输模式，如 https://...） */
-	url?: string;
-	/** 自定义请求头（HTTP 传输模式） */
-	headers?: Record<string, string>;
-	/** 传输类型 */
-	type?: "stdio" | "http" | "streamable-http";
-	/** 超时时间（秒） */
-	timeout?: number;
-	/** 协议版本覆盖（缺省自动协商） */
-	protocolVersion?: string;
-	/** 是否启用（默认 true；false = 停用保留配置） */
-	enabled?: boolean;
-	/** 服务器能力说明（注入系统提示词与检索） */
-	description?: string;
-	/** 运行时状态：running = 运行中/就绪；stopped = 已停用；error = 启动或握手失败 */
-	status?: "running" | "stopped" | "error";
-	/** 启动失败或运行报错详情 */
-	error?: string;
-	/** 运行时成功发现的工具清单 */
-	tools?: UiMcpToolInfo[];
-}
-
-/** 从公开 API 或远程目录检索到的 MCP 服务器条目 */
-export interface RemoteMcpServer {
-	id: string;
-	name: string;
-	displayName?: string;
-	description: string;
-	homepage?: string;
-	package?: string;
-	command?: string;
-	args?: string[];
-	env?: Record<string, string>;
-	url?: string;
-	transport: "stdio" | "http";
-	source: string;
-	downloads?: number;
-	verified?: boolean;
-	iconUrl?: string;
-}
-
 /** 从公开 GitHub 仓库检索到的 Skill 技能简要信息 */
 export interface RemoteSkillSummary {
 	id: string;
@@ -2940,8 +2279,6 @@ export interface UiMarkerInfo {
 	guidance: string[];
 	/** 显示给用户的名称（设置面板中展示；缺省为 name）。 */
 	label?: string;
-	/** 归属插件 id（内置标记为 undefined）。 */
-	pluginId?: string;
 }
 
 /** 单个工具的用户覆盖文案（设置页「工具」区逐工具编辑；空字段/空串 = 用默认）。
@@ -2967,9 +2304,6 @@ export interface UiSettingsState {
 	disabledExtensions: string[];
 	/** 统一 Agent 工具禁用名单（单源；live 生效无需 reload）。 */
 	disabledAgentTools: string[];
-	/** 插件 AI 工具禁用名单（工具名全局唯一；live 生效无需 reload；
-	 *  未知/已卸载插件的条目保留，下次重装仍保持关闭）。 */
-	disabledPluginTools: string[];
 	/** @deprecated 遗留别名（由 disabledAgentTools 推导）：全开才算开。Off → terminal_*
 	 *  tools are removed from the active set and the guidance prompt is not injected. */
 	terminalToolsEnabled: boolean;
@@ -3000,7 +2334,7 @@ export interface UiSettingsState {
 	/** 问卷提问开关（默认开）。关 → 模型不再弹问卷对话框。 */
 	questionnaireEnabled: boolean;
 	/** 工具执行审批（人机协同）总开关（默认开）。关 → 一切审批都不弹：内置高危检测
-	 *  直接放行、插件 pre guard 的 ask 也按放行处理（纯运行开关，不进预设、无需 reload）。 */
+	 *  直接放行（纯运行开关，无需 reload）。 */
 	toolApprovalEnabled: boolean;
 	/** 当前对话的审批放行策略（仅内存，不落盘；设置面板「已记住的放行」撤销区）。 */
 	approvalPolicy: UiApprovalPolicyState;
@@ -3020,12 +2354,12 @@ export interface UiSettingsState {
 	/** 工具调用是否默认展开（默认开 = 展开；关 = 折叠）。 */
 	toolsWrap: boolean;
 	/** 工具结果里的图片直接显示（默认开）。关 → 工具卡不渲染缩略图。
-	 *  纯 UI 偏好，不进预设。 */
+	 *  纯 UI 偏好。 */
 	toolImagesEnabled: boolean;
 	/** 消息列表尾部保持完整渲染的消息条数（默认 15 = 与原硬编码一致）；更早的消息折叠为摘要行，
-	 *  点击摘要行可展开。纯 UI 偏好，不进预设。 */
+	 *  点击摘要行可展开。纯 UI 偏好。 */
 	keepRecentMessages: number;
-	/** 向上分页加载模式（默认关）。开 → 默认仅挂载最近历史消息，向上滚动或点击加载更早历史，完全跳过视口占位符获得原生流畅度。纯 UI 偏好，不进预设。 */
+	/** 向上分页加载模式（默认关）。开 → 默认仅挂载最近历史消息，向上滚动或点击加载更早历史，完全跳过视口占位符获得原生流畅度。纯 UI 偏好。 */
 	reversePagination?: boolean;
 	/** 历史对话列表中是否显示已被 fork 派生的父会话（默认 false = 仅显示链尾最新分支）。 */
 	showForkedParentSessions: boolean;
@@ -3062,9 +2396,6 @@ export interface UiSettingsState {
 	reviewPrompt: string;
 	/** Skills disabled only for the isolated goal-reviewer. */
 	reviewDisabledSkills: string[];
-	/** Installed UI plugins the user hid in the settings panel (UI-only:
-	 *  hidden tabs/views; server-side handlers stay reachable). */
-	disabledPlugins: string[];
 	/** 宿主 UI 布局的用户偏好（见 UiLayoutPrefs）。 */
 	uiLayout: UiLayoutPrefs;
 	/** The FULL system prompt actually in effect for the active conversation
@@ -3094,7 +2425,6 @@ export interface UiSettingsState {
 	/** Same skill catalog with enabled flags evaluated for the reviewer. */
 	reviewSkills: UiSkillInfo[];
 	extensions: UiExtensionInfo[];
-	presets: UiSettingsPreset[];
 	/** 内置标记工具开关（全局 + 按 marker）。 */
 	markersEnabled: boolean;
 	disabledMarkers: string[];
@@ -3124,12 +2454,6 @@ export interface UiSettingsState {
 	/** 内置默认模板名（settings_state 里供面板标「默认」徽标；用户文件为准时可能
 	 *  已删除/改名，长度可与 subagentTemplates 不同）。 */
 	subagentDefaultTemplates: string[];
-	/** MCP 服务器列表（含全局与项目级配置及当前运行时状态）。 */
-	mcpServers?: UiMcpServer[];
-	/** 全局 MCP 配置文件路径。 */
-	mcpGlobalConfigPath?: string;
-	/** 当前项目 MCP 配置文件路径。 */
-	mcpProjectConfigPath?: string;
 }
 
 /** DSH 用户补丁文件信息（<dataDir>/dsh-patches/*.yml 或 *.yml.disabled）。 */
@@ -3156,7 +2480,7 @@ export interface DshMarketPlugin {
 	install?: string;
 }
 
-export type UpdateItemKind = "webui" | "pi-core" | "package" | "git-extension" | "plugin" | "engine";
+export type UpdateItemKind = "webui" | "pi-core" | "package" | "git-extension" | "engine";
 
 export type ServerMessage =
 	| {
@@ -3166,12 +2490,6 @@ export type ServerMessage =
 			toRunId: string;
 			payload: string;
 			timestamp: number;
-	  }
-	| {
-			type: "mcp_servers";
-			servers: UiMcpServer[];
-			globalConfigPath?: string;
-			projectConfigPath?: string;
 	  }
 	| {
 			type: "ready";
@@ -3194,7 +2512,7 @@ export type ServerMessage =
 			 *  this page loaded and the page should reload itself. */
 			buildId?: string;
 			/** PI_WEB_MANAGED=1 — updates come from outside, so the client hides
-			 *  the update badge, the UPDATE panel and the plugin market. The
+			 *  the update badge and the UPDATE panel. The
 			 *  server refuses those messages anyway (server/managed.ts). */
 			managed?: boolean;
 			/** PI_WEB_TABS — the tabs this instance offers; absent means all of
@@ -3596,10 +2914,6 @@ export type ServerMessage =
 				error?: string;
 				/** git-extension only: `host/path` shorthand (prepend `git:` for the `pi update` command). */
 				source?: string;
-				/** plugin only: directory/install id, matches pluginId. */
-				pluginId?: string;
-				/** plugin only: whether this is a shipped built-in plugin. */
-				builtin?: boolean;
 			}[];
 			/** issue #321: pi SDK 副本状态快照，随每次 update_status_all 下发。
 			 *  `running` = 本进程实际加载的版本（可能是自带副本，也可能是跟随的全局副本）；
@@ -3616,148 +2930,8 @@ export type ServerMessage =
 	 *  snapshots/reconnects — this only drives the goal bar status. */
 	| { type: "goal_status"; status: GoalStatus }
 	/** Current settings state (system prompt mode/text, enabled skills &
-	 *  extensions, saved presets). Pushed on attach and after every settings
-	 *  change. */
+	 *  extensions). Pushed on attach and after every settings change. */
 	| { type: "settings_state"; settings: UiSettingsState }
-	// -- preset sharing (server/preset-share.ts) ------------------------------
-	/** preset_export 的回执：json = 可复制/下载的交换文档文本。 */
-	| {
-			type: "preset_export_result";
-			requestId?: string;
-			ok: boolean;
-			name?: string;
-			/** 建议的下载文件名（<slug>-<短哈希>.json）。 */
-			fileName?: string;
-			json?: string;
-			error?: string;
-	  }
-	/** preset_import / preset_import_url 的回执。dryRun=true 时只有预览，没有落盘。 */
-	| {
-			type: "preset_import_result";
-			requestId?: string;
-			ok: boolean;
-			dryRun: boolean;
-			preview?: UiPresetImportPreview;
-			/** 导入成功且 apply=true 时，是否已经应用到当前设置。 */
-			applied?: boolean;
-			error?: string;
-	  }
-	/** preset_catalog 的回执（失败时 entries 是上一次成功的缓存，cached=true）。 */
-	| {
-			type: "preset_catalog_result";
-			requestId?: string;
-			ok: boolean;
-			entries: UiPresetCatalogEntry[];
-			/** 目录来源地址（关闭时为空串）。 */
-			source: string;
-			cached: boolean;
-			/** 最近一次成功抓取的时间戳（0 = 从未成功）。 */
-			fetchedAt: number;
-			error?: string;
-	  }
-	/** preset_share 的回执：method=gh|api 时 url 是新 Issue（直接打开）；browser 时由
-	 *  前端复制 json 并打开 url（预填正文/标题的建 Issue 页，不需要任何凭据）。 */
-	| {
-			type: "preset_share_result";
-			requestId?: string;
-			ok: boolean;
-			method?: "gh" | "api" | "browser";
-			url?: string;
-			name?: string;
-			json?: string;
-			error?: string;
-	  }
-	// -- plugins (<dataDir>/plugins) -----------------------------------------
-	/** Installed-plugin catalog. Pushed on attach (the dir is re-scanned each
-	 *  time so freshly dropped plugins appear without a server restart) and
-	 *  after every plugins_reload. `epoch` increments on every server-side
-	 *  reload; the frontend uses it as an import-cache buster so changed
-	 *  bundles are actually re-fetched. */
-	| { type: "plugins"; plugins: UiPluginInfo[]; epoch: number }
-	/** Result of a check_plugin_updates run or an all-source update check
-	 *  containing UI plugins. Broadcast to all clients so plugin badges stay in sync. */
-	| { type: "plugin_updates"; updates: UiPluginUpdateInfo[] }
-	/** App-level message from a plugin's server side to its client bundles.
-	 *  Broadcast to every connected socket (plugins have no per-client state
-	 *  in v1); the frontend fans it out to the matching loaded view. */
-	| { type: "plugin_data"; pluginId: string; payload: unknown }
-	/** P3：左栏「运行的对话」里的插件运行条目（全量，非增量）。attach 时补发一次，之后每次变更
-	 *  广播（节流约 500ms）。不进快照：它的变化频率与对话快照无关，单独走这条消息。 */
-	| { type: "plugin_panel_items"; groups: PluginPanelGroup[] }
-	/** Plugin job progress — sent ONLY to the client that started the job. One
-	 *  `start`, N `log`, one `done`. `done` carries `ok` plus the tail of the
-	 *  job output so the settings panel can show what happened in place. */
-	| {
-			type: "plugin_job";
-			jobId: string;
-			action: "install" | "update" | "uninstall";
-			pluginId: string;
-			phase: "start" | "log" | "done";
-			/** phase="log": one output line (stdout/stderr merged). */
-			line?: string;
-			/** phase="done": job success. */
-			ok?: boolean;
-			/** phase="done" + failure: human-readable reason. */
-			error?: string;
-			/** phase="done": output tail (bounded), for inline details. */
-			output?: string;
-	  }
-	/** 安装前先读 spec 的回执（plugin_install_inspect 的响应，requestId 回显）。
-	 *  `problem` 非空 = 装了也是白装（先把这一条修掉）；`installed` = 已装（UI 转成「更新」）。
-	 *  `manifest` = 远端/本地探到的展示字段（让用户确认装的是什么）。 */
-	| {
-			type: "plugin_install_inspect_result";
-			requestId: string;
-			source: string;
-			kind: "npm" | "github" | "url" | "path" | "invalid";
-			suggestedId: string;
-			installed: boolean;
-			problem?:
-				"invalid-spec" | "already-installed" | "not-found" | "not-a-package" | "not-a-bundle" | "network" | "unknown";
-			detail?: string;
-			manifest?: { id?: string; name?: string; version?: string; description?: string; permissions?: string[] };
-	  }
-	/** 注册面目录回执（plugin_api_catalog 的响应，requestId 回显；只读装配，无副作用）。 */
-	| {
-			type: "plugin_api_catalog_result";
-			requestId: string;
-			catalog: PluginApiCatalog;
-	  }
-	/** 插件请求访问工作区外的目录：宿主弹确认（文案按 kind 本地化），用户答复经
-	 *  plugin_path_response 回传。未答复超时视为拒绝。 */
-	| { type: "plugin_path_request"; id: string; pluginId: string; path: string; reason?: string }
-	/** DOM 授权两步握手的在途请求（设置面板的授权点击触发服务端生成并广播）：
-	 *  id 供 plugin_dom_consent_response 回显；from = 发起端 clientId（前端只自动
-	 *  应答自己发起的授权）。120s 未应答视为拒绝。 */
-	| { type: "plugin_dom_consent_request"; id: string; pluginId: string; from: string }
-	/** 插件目录授权表（设置面板展示 + 撤销后刷新）。 */
-	| { type: "plugin_grants"; grants: { pluginId: string; paths: string[] }[] }
-	/** 插件请求能力授权（net 主机 / llm 模型作用域）：宿主弹确认，用户答复经
-	 *  plugin_permission_response 回传（remember=true 记盘）。未答复超时视为拒绝。 */
-	| {
-			type: "plugin_permission_request";
-			id: string;
-			pluginId: string;
-			family: "net" | "llm";
-			hosts?: string[];
-			models?: string[];
-			reason?: string;
-	  }
-	/** 能力授权表快照（attach 推 + 授权/撤销后重推；session 授权带 session:true）。 */
-	| {
-			type: "plugin_permissions";
-			grants: {
-				pluginId: string;
-				family: "net" | "llm";
-				hosts?: string[];
-				models?: string[];
-				reason?: string;
-				grantedAt: number;
-				session?: boolean;
-			}[];
-	  }
-	/** 一条能力授权请求已被某端答复（多标签页互斥：先答复者胜，其余静默收起）。 */
-	| { type: "plugin_permission_resolved"; id: string }
 	// -- DSH engine user patches --------------------------------------------
 	/** List of <dataDir>/dsh-patches/*.yml files (DSH engine only; pi engine
 	 *  never emits it). Pushed on request (dsh_patches_list) and after a
@@ -3828,29 +3002,6 @@ export type ServerMessage =
 			questions: UiQuestion[];
 			/** 所属会话标题/名称（可选），用于在提问弹窗中展示来源对话。 */
 			conversationTitle?: string;
-	  }
-	// -- browser page control (browser_page tool) ---------------------------
-	/** The model wants to act on a page in the user's browser
-	 *  (`browser_page` customTool; implemented by the page-picker browser
-	 *  extension — see plugins/page-picker/README.md「AI 操作页面」).
-	 *
-	 *  The frontend forwards this to the extension via
-	 *  `window.__piWebUiHost.pageCall()` and answers with page_response.
-	 *  `op` is the **extension-side** action name (`read` / `click` / `type` /
-	 *  `scroll` / `goto` / `wait` / `eval` / `pages`); the server never
-	 *  interprets it, so the op vocabulary lives with the extension.
-	 *
-	 *  Not stored in the snapshot: unlike a question there is nothing for the
-	 *  user to answer, and a reload mid-action just fails the tool call. */
-	| {
-			type: "page_request";
-			id: string;
-			op: string;
-			args?: Record<string, unknown>;
-			/** Target page origin (required when several pages are allowed). */
-			target?: string;
-			/** How long the server waits for the browser before failing the tool. */
-			timeoutMs: number;
 	  }
 	// -- background tasks ---------------------------------------------------
 	/** The background-server list (servers the agent left running, detected via

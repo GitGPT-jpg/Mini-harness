@@ -174,25 +174,6 @@ async function run() {
 	);
 	check("replace mode prefills the built-in vision-bridge prompt", true);
 
-	// System prompt: switch to the “replace” tab group first (only the active
-	// sidebar group is rendered), then flip to "replace" — the textarea must
-	// show the built-in default system prompt (the SDK's default, since the
-	// test agent dir has no system-prompt file).
-	await page.locator(".settings-tab", { hasText: "系统提示词" }).click();
-	const sysSection = page.locator(".set-section", { hasText: "系统提示词" });
-	const sysModeSelect = sysSection.locator("select").first();
-	await sysModeSelect.selectOption("replace");
-	await page.waitForFunction(
-		() => {
-			const sections = [...document.querySelectorAll(".set-section")];
-			const sys = sections.find((el) => el.textContent.includes("系统提示词"));
-			const ta = sys?.querySelector(".set-prompt-input");
-			return ta instanceof HTMLTextAreaElement && ta.value.includes("inference-serving optimization agent");
-		},
-		{ timeout: 10000 },
-	);
-	check("replace mode prefills the built-in system prompt", true);
-
 	await browser.close();
 }
 

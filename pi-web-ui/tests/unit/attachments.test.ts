@@ -279,35 +279,6 @@ describe("buildAttachmentMessages — 编辑重问附件恢复", () => {
 		expect(out[4].message.details.mode).toBe("reference");
 		expect(out[4].message.details.path).toBe("src/big.md");
 	});
-
-	it("网页引用（mode:page）：不读文件，只给模型 browser_page 的 target（origin）+ 标题", async () => {
-		const notices: { level: string; text: string }[] = [];
-		// cwd 是一个空目录：若实现去 stat(URL) 就会报「附件不存在」并产出 0 张卡。
-		const ctx = makeCtx({ dataDir: tempDir(), cwd: tempDir(), clientId: "c", notices });
-		const out = (await buildAttachmentMessages(ctx, [
-			{ path: "https://search.bilibili.com/all?keyword=x", mode: "page", name: "铁手杯 · 搜索" },
-		])) as Aside[];
-		expect(notices).toEqual([]);
-		expect(out.length).toBe(1);
-		expect(out[0].message.details.mode).toBe("page");
-		// 卡片名用页面标题，path 保留完整 URL（消息里可点开）
-		expect(out[0].message.details.name).toBe("铁手杯 · 搜索");
-		expect(out[0].message.details.path).toBe("https://search.bilibili.com/all?keyword=x");
-		// 给模型的那句话：带 origin 形式的 target（扩展按 origin 判定），且明说不要去抓网页
-		const text = out[0].message.content[0].text ?? "";
-		expect(text).toContain('target="https://search.bilibili.com"');
-		expect(text).toContain("browser_page");
-		expect(text).toContain("do not fetch");
-	});
-
-	it("网页引用的标题带引号/尖括号 → 标签属性被转义，不写坏 XML", async () => {
-		const ctx = makeCtx({ dataDir: tempDir(), cwd: tempDir(), clientId: "c", notices: [] });
-		const out = (await buildAttachmentMessages(ctx, [
-			{ path: "https://example.com/", mode: "page", name: 'a "b" <c>' },
-		])) as Aside[];
-		const text = out[0].message.content[0].text ?? "";
-		expect(text).toContain('title="a &quot;b&quot; &lt;c&gt;"');
-	});
 });
 
 describe("buildAttachmentMessages — 对话引用（mode:conversation）", () => {

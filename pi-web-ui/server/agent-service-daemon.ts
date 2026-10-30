@@ -7,44 +7,31 @@
  * - 跨标签页会话查重与同项目并行感知（SessionOwnerInfo & ElsewhereRunning）
  * - 跨端手动过户事务与夭折回滚（Takeover Transactions & Rollback）
  * - 跨端问卷预告与答复路由（Peek & Answer Elsewhere Questions）
- * - 插件/调度器无头客户端隔离执行（completeForPlugins & scheduler dispatch）
+ * - 定时任务无头客户端执行（chatFromScheduler）
  * - 服务端运行状态快照（serviceStatus）
  *
  * 从 agent-service.ts 抽出为独立模块。
  */
 import { join, resolve } from "node:path";
 import { statSync } from "node:fs";
-import { VERSION, getAgentDir, type AgentSession } from "@earendil-works/pi-coding-agent";
+import { VERSION, type AgentSession } from "@earendil-works/pi-coding-agent";
 import { ClientStateStore } from "./client-state.js";
 import { ClaimStore } from "./claim-store.js";
 import { toServiceInfo, launchOrigin } from "./launch-origin.js";
-import { isPseudoClientId, checkPluginCwd } from "./client-id-utils.js";
+import { isPseudoClientId } from "./client-id-utils.js";
 import { pickAdoptableOrphan, type OrphanCandidate } from "./orphan-manager.js";
 import { findMostRecentSessionFileFast } from "./session-parser.js";
 import { isRemoteWorkspaceUri, resolveWorkspaceSessionDir } from "./remote-ssh-service.js";
 import { getMaxOpenConversations } from "./agent-formatters.js";
 import { collectSubagentDescendantIds } from "./subagents.js";
-import { pickLatestClientSnapshot } from "./plugin-conversation-view.js";
-import type { ToolGuardHook } from "./tool-guards.js";
 import type {
 	ServerMessage,
 	UiServiceInfo,
 	QuestionAnswer,
 	ElsewhereRunning,
-	BgServer,
 	AgentEngineCapabilities,
 } from "./protocol.js";
 import { DEFAULT_PI_CAPABILITIES } from "./engine-capabilities.js";
-import type {
-	PluginToolEvent,
-	PluginRunEvent,
-	PluginConversationSnapshot,
-	PluginAgentTool,
-	PluginCommandDef,
-	PluginConversationQuery,
-	PluginChatRequest,
-	PluginChatResult,
-} from "./plugins.js";
 import type { SchedulerStore } from "./scheduler-tasks.js";
 import {
 	ClientSession,
@@ -62,24 +49,6 @@ export class AgentService {
 	private offlineSince = new Map<string, number>();
 	/** 客户端 -> 离线行宽限期到期定时器（到期后让其他客户端重推，行消失）。 */
 	private offlineTimers = new Map<string, ReturnType<typeof setTimeout>>();
-	/** index.ts 注入：SDK 工具执行事件的插件转发钩子，attach 时拷贝到每个新会话。 */
-	onToolEvent: ((ev: PluginToolEvent) => void) | undefined = undefined;
-	/** index.ts 注入：bash/read 插件拦截钩子，attach 时拷贝到每个新会话。 */
-	toolGuard: ToolGuardHook | undefined = undefined;
-	/** index.ts 注入：运行轨迹事件的插件转发钩子，attach 时拷贝到每个新会话。 */
-	onRunEvent: ((ev: PluginRunEvent) => void) | undefined = undefined;
-	/** index.ts 注入：对话切换通知钩子，attach 时拷贝到每个新会话。 */
-	onConversationChanged: (() => void) | undefined = undefined;
-	/** index.ts 注入：模型切换成功通知钩子（#542），attach 时拷贝到每个新会话。 */
-	onClientModelChanged: ((snap: PluginConversationSnapshot) => void) | undefined = undefined;
-	/** index.ts 注入：读取插件当前注册的 AI 工具（attach 时拷贝到每个新会话）。 */
-	pluginToolsProvider: (() => PluginAgentTool[]) | undefined = undefined;
-	/** index.ts 注入：读取插件当前注册的斜杠命令（attach 时拷贝到每个新会话）。 */
-	pluginCommandsProvider: (() => PluginCommandDef[]) | undefined = undefined;
-	/** index.ts 注入：读取插件注册的常驻后台任务（并入 bg_servers 面板）。 */
-	pluginBgTasksProvider: (() => BgServer[]) | undefined = undefined;
-	/** index.ts 注入：停止插件任务（kill_background_server with taskId）。 */
-	pluginStopBgTask: ((taskId: string) => boolean) | undefined = undefined;
 	/** index.ts 注入：内置调度存储（attach 时拷贝到每个新会话，供 schedule_* 工具）。 */
 	schedulerStore: SchedulerStore | undefined = undefined;
 	private clients = new Map<string, ClientSession>();
@@ -99,10 +68,6 @@ export class AgentService {
 	private stateStore: ClientStateStore;
 	/** Set by index.ts: called when /pi-web-ui:quit is invoked. */
 	onQuit: (() => boolean) | undefined = undefined;
-	/** 任意客户端成功切换工作区后触发（新绝对路径 + 该项目的额外工作区根）。
-	 *  index.ts 接到 PluginManager.notifyCwd / notifyWorkspaceRoots，让插件宿主的
-	 *  host.cwd 实时跟随当前项目、受支持路径范围跟着多根变。 */
-	onClientCwdChanged: ((cwd: string, roots: string[]) => void) | undefined = undefined;
 
 	constructor(
 		private cwd: string,
@@ -168,30 +133,10 @@ export class AgentService {
 		return null;
 	}
 
-	/** 插件 steer 跨客户端兜底：除请求方外逐个问其他客户端的 conversations，
-	 *  找到持有方由其执行 steer（只调 steerOwnConversation，不碰钩子，无递归）；
-	 *  都找不到回 undefined，调用方回未知对话。单客户端异常跳过，不影响其他。 */
-	async steerElsewhere(
-		excludeClientId: string,
-		id: string,
-		text: string,
-	): Promise<{ ok: boolean; error?: string } | undefined> {
-		for (const [clientId, cs] of this.clients) {
-			if (clientId === excludeClientId) continue;
-			try {
-				const r = await cs.steerOwnConversation(id, text);
-				if (r) return r;
-			} catch {
-				// 单客户端坏了继续找下一个
-			}
-		}
-		return undefined;
-	}
-
 	/** issue #193：定时任务唤醒发起对话。逐个客户端找持有方，用 steer 语义投递
 	 *  （运行时插队、未跑时普通投递，不切用户当前对话）；都找不到回 ok:false，
 	 *  调用方（index.ts executor）回落视口/无头执行。quiesced 时直接拒绝。
-	 *  issue #226：成功时带回持有方 clientId（插件绑定网页会话时原样回执）。
+	 *  issue #226：成功时带回持有方 clientId。
 	 *  issue #231：opts.sessionFile 是跨压缩/重启的稳定键 —— 优先按它认同一会话
 	 *  （内存对话 id 重启即失效，压缩后同文件对话可能已换新 id，成功时带回**实际**
 	 *  投递的 conversationId + sessionFile，调用方据此重绑定任务）；id 相位带 cwd
@@ -418,7 +363,7 @@ export class AgentService {
 
 		for (const [clientId, cs] of this.clients) {
 			if (clientId === excludeClientId) continue;
-			// 伪客户端（scheduler:/plugin:）不走浏览器，sinkCount 永远为 0，保留。
+			// 伪客户端（scheduler:）不走浏览器，sinkCount 永远为 0，保留。
 			const isPseudo = AgentService.isPseudoClientId(clientId);
 			// 无浏览器连接的残骸（sinkCount=0 = 断连留存）：宽限期内仍下发（标
 			// ownerOffline，可接管），过期或 TTL=0 时按 issue #291 不入列表。
@@ -578,95 +523,6 @@ export class AgentService {
 		return n;
 	}
 
-	/** 插件用：全客户端最近活跃对话的快照（#542：按 clientId 取某个标签页正在看的
-	 *  对话；缺省回落「最近活跃的**非子代理**会话」——子代理跑得再勤也不会把用户
-	 *  正在看的对话挤出快照）。clientId 不认识/该客户端暂无对话时同样走回落。 */
-	readConversationForPlugins(opts?: PluginConversationQuery): PluginConversationSnapshot | null {
-		const want = (opts?.clientId ?? "").trim();
-		if (want) {
-			const cs = this.clients.get(want);
-			if (cs) {
-				try {
-					// 显式客户端：返回它**真正在看**的对话（含子代理对话——那是事实，
-					// 快照带 isSubagent 由插件自己判）。
-					const s = cs.readConversationForPlugins({ preferActive: true, includeSubagents: true });
-					if (s) return s;
-				} catch {
-					/* 单客户端坏了不影响回落 */
-				}
-			}
-		}
-		const snaps: (PluginConversationSnapshot | null)[] = [];
-		for (const cs of this.clients.values()) {
-			try {
-				snaps.push(cs.readConversationForPlugins());
-			} catch {
-				/* 单客户端坏了不影响其他 */
-			}
-		}
-		return pickLatestClientSnapshot(snaps);
-	}
-
-	/** 插件无头调用（host.chat 的落地）：外部通道（微信等）把文本投给 agent。
-	 *  每个 (pluginId, accountId) 独立伪客户端——复用 attach 完整链路
-	 *  （会话恢复/持久化/工具注入/快照），无浏览器也能跑；sink 是空函数，
-	 *  快照/notice 发了即丢，不攒内存。fire-and-forget：prompt 投递即返回，
-	 *  运行结果经 onRunEvent(run_end) 按 conversationId 关联。
-	 *  v1 语义：与该服务 cwd 下最近会话共享（单用户视角连续）；peer 名由插件
-	 *  拼进文本前缀，per-peer 会话隔离以后再加。
-	 *  issue #226：对齐定时任务的四件套——conversationId 命中时走 steer 语义
-	 *  投递（网页端实时可见，miss 则回落无头）；cwd 显式 pin 住（不存在/系统
-	 *  目录即拒绝，不默默跑错目录）；model/thinkingLevel 投递前应用（失败即
-	 *  拒绝，不回落，避免账单/效果与预期不符）。 */
-	async chatFromPlugin(pluginId: string, req: PluginChatRequest): Promise<PluginChatResult> {
-		const safe = String(pluginId ?? "plugin").replace(/[^A-Za-z0-9_-]/g, "") || "plugin";
-		const acct = String(req?.accountId ?? "default").replace(/[^A-Za-z0-9_-]/g, "") || "default";
-		const clientId = `plugin:${safe}:${acct}`;
-		const text = String(req?.text ?? "");
-		if (!text.trim()) throw new Error("chatFromPlugin: text 为空");
-		if (this.quiesced) throw new QuiesceRejectedError("插件无头调用被拒绝，请等服务器恢复后重试");
-		// 1. 绑定已有会话：steer 语义投递，网页端实时可见（微信当远程遥控器用）。
-		// miss/已回收时不抛错，回落无头伪客户端（浏览器关着时微信照常可用）。
-		const target = String(req?.conversationId ?? "").trim();
-		if (target) {
-			const w = await this.wakeConversation(target, text);
-			if (w.ok) return { conversationId: target, clientId: w.clientId ?? clientId };
-		}
-		// 2. 工作空间：不传回落伪客户端当前目录；传了必须存在且非系统目录。
-		const cwdReq = String(req?.cwd ?? "").trim();
-		let cwdAbs = "";
-		if (cwdReq) {
-			const chk = checkPluginCwd(cwdReq);
-			if (!chk.ok) throw new Error(`chatFromPlugin: ${chk.error}`);
-			cwdAbs = chk.abs ?? "";
-		}
-		const cs = await this.attach(clientId, () => {});
-		try {
-			if (cwdAbs && cs.cwd !== cwdAbs) await cs.setCwd(cwdAbs);
-		} catch (err) {
-			throw new Error(`chatFromPlugin: 切换工作目录失败（${cwdAbs}）：${(err as Error).message}`);
-		}
-		const model = String(req?.model ?? "").trim();
-		if (model) {
-			try {
-				await cs.switchModelOrThrow(model);
-			} catch (err) {
-				throw new Error(`chatFromPlugin: 切换模型失败（${model}）：${(err as Error).message}`);
-			}
-		}
-		const thinking = String(req?.thinkingLevel ?? "").trim();
-		if (thinking) {
-			try {
-				cs.setThinking(thinking);
-			} catch (err) {
-				throw new Error(`chatFromPlugin: 切换思考强度失败（${thinking}）：${(err as Error).message}`);
-			}
-		}
-		const conversationId = cs.readConversationForPlugins()?.conversationId ?? "";
-		void cs.prompt(text);
-		return { conversationId, clientId };
-	}
-
 	/** 内置定时任务的无头执行（issue #184，server/scheduler-tasks.ts 的 executor）。
 	 *  每个任务独立伪客户端 `scheduler:<taskId>`（专属会话连续、无浏览器也能跑）；
 	 *  cwd 按任务配置 pin 住（不存在即失败，不默默跑错目录）；可选模型/思考强度
@@ -711,7 +567,7 @@ export class AgentService {
 					return { ok: false, error: `切换思考强度失败（${thinking}）：${(err as Error).message}` };
 				}
 			}
-			const conversationId = cs.readConversationForPlugins()?.conversationId ?? "";
+			const conversationId = cs.readConversationForScheduler()?.conversationId ?? "";
 			void cs.prompt(`[定时任务] ${text}`);
 			// 等待运行结束：每 2s 轮询，最长 10 分钟。超时按失败记录（运行继续）。
 			const deadline = Date.now() + 10 * 60 * 1000;
@@ -720,7 +576,7 @@ export class AgentService {
 				let streaming = false;
 				let lastError: string | undefined;
 				try {
-					const snap = cs.readConversationForPlugins();
+					const snap = cs.readConversationForScheduler();
 					streaming = snap?.isStreaming === true;
 					const msgs = snap?.messages ?? [];
 					for (let i = msgs.length - 1; i >= 0; i--) {
@@ -741,39 +597,6 @@ export class AgentService {
 				if (Date.now() >= deadline)
 					return { ok: false, conversationId: conversationId || undefined, error: "运行超时（10 分钟），仍在后台继续" };
 			}
-		} catch (err) {
-			return { ok: false, error: (err as Error).message };
-		}
-	}
-
-	/** 插件直调模型（host.llm.complete 的落地）：孤立无工具的一次性补全。
-	 *  不建对话、不进历史、不碰任何会话状态；花费走用户自己的模型额度。
-	 *  quiesced 时拒绝；无客户端时用进程 cwd + 默认模型照常跑。 */
-	async completeForPlugins(
-		pluginId: string,
-		req: { prompt?: string; system?: string; model?: string; maxChars?: number; timeoutMs?: number },
-	): Promise<{
-		ok: boolean;
-		text?: string;
-		model?: string;
-		usage?: { input: number; output: number };
-		error?: string;
-	}> {
-		try {
-			if (this.quiesced) return { ok: false, error: "插件 LLM 调用被拒绝，请等服务器恢复后重试" };
-			let env: { cwd: string; agentDir: string; fallbackModel?: { provider: string; id: string } };
-			const agentDir = process.env.PI_CODING_AGENT_DIR ?? getAgentDir();
-			try {
-				const cs = this.pluginClient();
-				env = cs?.llmEnvForPlugins() ?? { cwd: this.cwd, agentDir };
-			} catch {
-				env = { cwd: this.cwd, agentDir };
-			}
-			const mod = await import("./plugin-llm.js");
-			const r = await mod.completeWithIsolatedSession(env, { ...req, prompt: String(req?.prompt ?? "") });
-			if (!r.ok) return r;
-			console.log(`[plugin:${pluginId}] llm.complete ok（模型 ${r.model}，输出 ${r.text.length} 字）`);
-			return r;
 		} catch (err) {
 			return { ok: false, error: (err as Error).message };
 		}
@@ -879,7 +702,6 @@ export class AgentService {
 		cs.listExternalRunning = () => this.listExternalRunning(clientId);
 		cs.notifyExternalClients = (msg) => this.notifyClientsExcept(clientId, msg);
 		cs.onRunningChanged = () => this.pokeExternalRunning(clientId);
-		cs.steerConversationElsewhere = (id, text) => this.steerElsewhere(clientId, id, text);
 		cs.schedulerStore = this.schedulerStore;
 	}
 
@@ -1076,8 +898,8 @@ export class AgentService {
 		if (ownerId === targetId) return; // 自己的问卷走本地通道，不需要预告
 		if (AgentService.isPseudoClientId(ownerId)) {
 			fail(
-				"定时任务/插件会话的问卷不支持跨页作答 —— 报告会自动落回绑定的对话，可在后台任务面板查看进度",
-				"Scheduler/plugin session questions cannot be answered cross-page — reports are saved to the bound conversation automatically; check progress in the Background Tasks panel.",
+				"定时任务会话的问卷不支持跨页作答 —— 报告会自动落回绑定的对话，可在后台任务面板查看进度",
+				"Scheduler session questions cannot be answered cross-page — reports are saved to the bound conversation automatically; check progress in the Background Tasks panel.",
 			);
 			return;
 		}
@@ -1137,7 +959,7 @@ export class AgentService {
 				// 流式增量经尾部 attachSink 直接推给新 socket）。
 				// 有其他在线标签时不认领（issue #10 隔离优先）；quiesce 排空期也放行
 				// （这是重连既有工作，不是新工作）。本段无 await，并发 attach 原子。
-				// 伪客户端（scheduler:/plugin:，定时任务/插件的无头调用）绝不认领：
+				// 伪客户端（scheduler:，定时任务的无头调用）绝不认领：
 				// 否则无头会话会改键劫持用户关浏览器留下的残会话。
 				const orphan = AgentService.isPseudoClientId(clientId) ? null : this.findAdoptableOrphan(clientId);
 				if (orphan) {
@@ -1188,7 +1010,7 @@ export class AgentService {
 					let createOpts: { blank?: boolean; blankTitle?: string; idleHeld?: boolean } | undefined;
 					const isPseudo = AgentService.isPseudoClientId(clientId);
 					if (isPseudo) {
-						// 伪客户端（插件无头调用、定时调度任务、Canvas专用通道等）：严禁自动恢复并占有工作区历史会话，强制空白
+						// 伪客户端（定时调度任务等）：严禁自动恢复并占有工作区历史会话，强制空白
 						createOpts = { blank: true };
 					} else if (this.clients.size > 0) {
 						try {
@@ -1240,29 +1062,11 @@ export class AgentService {
 		}
 		// Forward hooks (set once by index.ts) to every session.
 		cs.onQuit = this.onQuit;
-		cs.onToolEvent = this.onToolEvent;
-		cs.toolGuard = this.toolGuard;
-		cs.onRunEvent = this.onRunEvent;
-		cs.onConversationChanged = () => this.onConversationChanged?.();
-		cs.onClientModelChanged = (snap) => this.onClientModelChanged?.(snap);
-		cs.pluginToolsProvider = this.pluginToolsProvider;
-		cs.pluginCommandsProvider = this.pluginCommandsProvider;
-		cs.pluginBgTasksProvider = this.pluginBgTasksProvider;
-		cs.pluginStopBgTask = this.pluginStopBgTask;
 		cs.isQuiesced = () => this.quiesced;
 		// issue #145 跨客户端感知接线（同会话查重 / 同项目并行 / elsewhere 列表）。
 		this.wireClient(cs, clientId);
-		// 插件宿主工作区跟随：初次接入也同步一次（恢复的 lastCwd 可能≠服务启动目录），
-		// notifyCwd 幂等去重；此后 set_cwd 成功时由 cs.onCwdChanged 继续驱动。
-		cs.onCwdChanged = (abs, roots) => this.onClientCwdChanged?.(abs, roots);
-		this.onClientCwdChanged?.(cs.cwd, cs.workspaceRoots);
 		void cs.resumeInterrupted(this.stateStore.takeInterrupted(clientId));
 		return cs;
-	}
-
-	/** 插件 AI 工具集合变化（注册/注销）时由 index.ts 触发：推送到所有客户端的全部会话。 */
-	applyPluginAgentTools(): void {
-		for (const cs of this.clients.values()) cs.refreshPluginTools();
 	}
 
 	/** Browser UI locale report (hello.locale / set_locale): persist per client
@@ -1282,21 +1086,6 @@ export class AgentService {
 				/* attach failed — nothing to apply to */
 			}
 		}
-	}
-
-	/** 插件斜杠命令集合变化时由 index.ts 触发：重推各客户端的命令目录。 */
-	applyPluginCommandCatalog(): void {
-		for (const cs of this.clients.values()) void cs.pushSlashCommands();
-	}
-
-	/** 插件内联标记变化时由 index.ts 触发：重推各客户端 markers 与设置状态。 */
-	applyPluginMarkers(): void {
-		for (const cs of this.clients.values()) cs.refreshPluginMarkers();
-	}
-
-	/** 插件常驻后台任务变化时由 index.ts 触发：重推各客户端的 bg_servers。 */
-	refreshBackgroundServers(): void {
-		for (const cs of this.clients.values()) cs.refreshBgTasks();
 	}
 
 	/** Remove a socket from a client's broadcast set (called on socket close). */
@@ -1328,23 +1117,6 @@ export class AgentService {
 
 	get(clientId: string): ClientSession | undefined {
 		return this.clients.get(clientId);
-	}
-
-	/** 插件扩展点 v2：挑一个最合适的客户端会话供无浏览器调用的插件 API 用
-	 *  （conversationLister/Searcher/Writer、modelLister、runAborter）。
-	 *  有运行中对话的优先，否则任意残留客户端；一个没有时返回 undefined，
-	 *  调用方（index.ts 注入）回退空列表 / {ok:false}，绝不抛错。 */
-	pluginClient(): ClientSession | undefined {
-		let fallback: ClientSession | undefined;
-		for (const cs of this.clients.values()) {
-			if (!fallback) fallback = cs;
-			try {
-				if (cs.activeConversations() > 0) return cs;
-			} catch {
-				// 单客户端坏了不影响挑选
-			}
-		}
-		return fallback;
 	}
 
 	/** Snapshot still-streaming conversations for post-restart resume.

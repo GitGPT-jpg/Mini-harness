@@ -17,11 +17,9 @@
  */
 interface UpdateTarget {
 	name: string;
-	kind: "webui" | "pi-core" | "package" | "git-extension" | "plugin" | "engine";
+	kind: "webui" | "pi-core" | "package" | "git-extension" | "engine";
 	/** git-extension only: `host/path` shorthand carried from update_status_all. */
 	source?: string;
-	/** plugin only: directory/install id, matches pluginId. */
-	pluginId?: string;
 }
 
 export function buildUpdateCommand(targets: UpdateTarget[]): string {
@@ -31,9 +29,7 @@ export function buildUpdateCommand(targets: UpdateTarget[]): string {
 				? `pi update npm:${t.name}`
 				: t.kind === "git-extension"
 					? `pi update ${toGitUpdateArg(t.source ?? t.name)}`
-					: t.kind === "plugin"
-						? `pi-web-ui install ${t.source ?? t.name} --name ${t.pluginId ?? t.name} --force`
-						: `npm i -g ${t.name}@latest`,
+					: `npm i -g ${t.name}@latest`,
 		)
 		.join("; ");
 }

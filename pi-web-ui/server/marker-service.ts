@@ -334,7 +334,6 @@ export class MarkerService {
 			out.push({
 				name: m.name,
 				label: m.label,
-				pluginId: m.pluginId,
 				enabled: this.isMarkerEnabled(m.name),
 				guidance: m.getGuidance?.(this.lang()) ?? m.guidance,
 			});

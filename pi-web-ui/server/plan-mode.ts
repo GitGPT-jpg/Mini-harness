@@ -52,8 +52,6 @@ const BLOCKED_TOOLS = new Set([
 	"eval",
 	// QuickJS 沙箱代码执行（可嵌套调用写工具/命令，计划模式禁止任意代码执行）
 	"codemode",
-	// MCP 服务器配置管理（install/remove 会修改 mcp.json 并拉起新子进程）
-	"mcp_manage",
 	"sandbox",
 	// 形态变换（会重写整个文件树）
 	"format",

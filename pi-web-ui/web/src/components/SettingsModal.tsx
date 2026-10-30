@@ -1,7 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
 	FiArchive,
-	FiBox,
 	FiChevronDown,
 	FiChevronUp,
 	FiClock,
@@ -25,17 +24,14 @@ import {
 	FiUsers,
 	FiX,
 } from "react-icons/fi";
-import { PluginIcon } from "../plugin-icon";
 import { HintTip } from "./HintTip";
 import { sortAgentPresets, presetText } from "./DshPresetBar";
 import { DSH_PERMISSION_ORDER, permDescKey, permLabelKey } from "./DshPermissionBar";
-import { PluginPage } from "./PluginPage";
 import { ToolPromptEditor } from "./ToolPromptEditor";
 import type {
 	CommandDef,
 	DshPatchFileInfo,
 	DshPermissionOption,
-	RemoteMcpServer,
 	RemoteSkillSummary,
 	SchedulerTaskView,
 	UiAgentPreset,
@@ -43,8 +39,6 @@ import type {
 	UiApprovalRule,
 	UiLayoutPrefs,
 	UiSlotId,
-	UiPluginInfo,
-	UiPluginUpdateInfo,
 	UiSettingsState,
 	UiSkillInfo,
 	UiSubagentTemplate,
@@ -74,21 +68,11 @@ import {
 	REQUIRED_TOPBAR_ITEM_IDS,
 	restoreAllUi,
 	restoreUiItem,
-	withPluginViewItems,
 	type UiDiagnostic,
 	type UiSlotEntry,
 } from "../ui-slots";
 import { ICON_EDIT_ALIGNS, sideAlignLabel } from "../ui-layout-edit";
-import type {
-	PluginInstallInspectState,
-	PluginJobState,
-	PresetCatalogState,
-	PresetExportState,
-	PresetImportState,
-	PresetShareState,
-} from "../use-chat";
 import { appSend, useAppGlobals } from "../app-globals";
-import { subscribePluginLogs } from "../plugin-logs";
 import { QUICK_PHRASE_DEFAULTS } from "../quick-phrases";
 import {
 	AGENT_TOOL_CATALOG,
@@ -110,34 +94,6 @@ interface SettingsModalProps {
 	initialSection?: SettingsTab;
 	chat: {
 		settings: UiSettingsState | null;
-		plugins: UiPluginInfo[];
-		/** 插件更新状态表，key = pluginId。 */
-		pluginUpdates?: Record<string, UiPluginUpdateInfo> | null;
-		/** 是否正在检查插件更新。 */
-		checkingPluginUpdates?: boolean;
-		/** 插件后台作业（安装/更新/卸载）的实时状态，key = jobId（issue #152）。 */
-		pluginJobs: Record<string, PluginJobState>;
-		/** 预设分享（server/preset-share.ts）的四条回执状态。 */
-		presetExport: PresetExportState | null;
-		presetImport: PresetImportState | null;
-		presetCatalog: PresetCatalogState | null;
-		presetShare: PresetShareState | null;
-		/** 最近一次「安装前先读 spec」的检查结果（DSH P0-3）。 */
-		installInspect: PluginInstallInspectState | null;
-		/** 插件重载纪元：作为插件 client bundle URL 的 ?e= 缓存击穿参数传给插件页（#146）。 */
-		pluginsEpoch: number;
-		/** 插件目录授权表（设置面板列出 + 可撤销）。 */
-		pluginGrants: { pluginId: string; paths: string[] }[];
-		/** 插件能力授权表（动态授权；设置面板列出 + 可撤销）。 */
-		pluginPermissions: {
-			pluginId: string;
-			family: "net" | "llm";
-			hosts?: string[];
-			models?: string[];
-			reason?: string;
-			grantedAt: number;
-			session?: boolean;
-		}[];
 		/** DSH engine: <dataDir>/dsh-patches user patch files. */
 		dshPatches: { patchDir: string; files: DshPatchFileInfo[] } | null;
 		/** DSH engine: Agent 预设名录（null/空 = legacy，隐藏预设区）。 */
@@ -158,14 +114,6 @@ interface SettingsModalProps {
 		activeConversationId?: string | null;
 		/** 内置定时任务（issue #184，全局列表；DSH 引擎下为空） */
 		schedulerTasks: SchedulerTaskView[];
-		/** 公开远程 MCP 市场检索结果 */
-		mcpMarketResult?: {
-			ok: boolean;
-			servers: RemoteMcpServer[];
-			total?: number;
-			source: string;
-			error?: string;
-		} | null;
 		/** 公开远程 Skill 技能仓库检索结果 */
 		skillMarketResult?: {
 			ok: boolean;
@@ -343,10 +291,7 @@ function PromptOverrideEditor({
 	);
 }
 
-/** 设置弹窗的左侧分组导航（一次只显示一个区块，消灭长滚动）。
- *  插件自定义页（`settings.pages`）复用同一套导航：id 形如 `plugin-page:<条目全局 id>`
- *  —— 条目全局 id 本身是 `<pluginId>:<itemId>`，所以整串是 `plugin-page:<pluginId>:<itemId>`；
- *  一个插件可以贡献多页，故不用 `plugin-page:<pluginId>`（会撞车）。 */
+/** 设置弹窗的左侧分组导航（一次只显示一个区块，消灭长滚动）。 */
 export type SettingsTab =
 	| "models"
 	| "prompt-history"
@@ -362,8 +307,7 @@ export type SettingsTab =
 	| "layout"
 	| "vision"
 	| "dsh-presets"
-	| "subagent-templates"
-	| `plugin-page:${string}`;
+	| "subagent-templates";
 
 /** set_settings 允许的字段（原 setPartial 内联类型提出为具名类型，供乐观合并层复用）。 */
 interface SettingsPatch {
@@ -375,13 +319,10 @@ interface SettingsPatch {
 	toolPromptOverrides?: Record<string, UiToolPromptOverride>;
 	disabledSkills?: string[];
 	disabledExtensions?: string[];
-	disabledPlugins?: string[];
-	/** 宿主 UI 布局偏好（插件 UI 贡献 + 内置条目的隐藏/排序/分组；纯 UI，per-client）。 */
+	/** 宿主 UI 布局偏好（内置条目的隐藏/排序/分组；纯 UI，per-client）。 */
 	uiLayout?: UiLayoutPrefs;
 	/** 统一工具禁用名单（工具 tab 逐工具开关；遗留单开关仍可用，会折回此名单）。 */
 	disabledAgentTools?: string[];
-	/** 插件 AI 工具禁用名单（工具名；live 生效无需 reload）。 */
-	disabledPluginTools?: string[];
 	terminalToolsEnabled?: boolean;
 	terminalBash?: boolean;
 	terminalBashIdleMs?: number;
@@ -635,14 +576,6 @@ export function SettingsModal({
 		const id = window.setTimeout(() => setPhClearConfirm(false), 3000);
 		return () => window.clearTimeout(id);
 	}, [phClearConfirm]);
-	/** 日志 store 变化即重渲（拉取/清空回包到达时刷新列表与条数）。 */
-	const [, bumpLogSeq] = useState(0);
-	useEffect(() => subscribePluginLogs(() => bumpLogSeq((n) => n + 1)), []);
-	// "Add to plugin list" form fields (plugin marketplace).
-	/** 市场安装/更新时先做隔离源码构建（等价 CLI --build，issue #150）。
-	 *  没勾选也不怕：只有源码没有产物的插件服务端会自动构建（issue #165 的 --build 推断）；
-	 *  勾选 = 连产物齐全的也强制重编。 */
-	// 「从目录同步」表单（issue #165）：来源 + 选项 + 等待中的请求 id。
 	// 快捷短语新增输入框草稿（Enter / 添加按钮提交）。
 	const [quickNew, setQuickNew] = useState("");
 	// 快捷短语行内编辑（null = 未在编辑；输入框受控于 value，回显不打断输入）。
@@ -702,35 +635,15 @@ export function SettingsModal({
 	const [newCapModel, setNewCapModel] = useState<string>("");
 	const [newCapTokens, setNewCapTokens] = useState<string>("");
 
-	/** 宿主 UI 布局（issue #146 完整版）：所有挂载点的最终条目 = 内置 + 插件贡献 +
-	 *  插件 arrange + 用户偏好。设置面板与 TopBar 用同一份计算，看到的顺序永远一致。
-	 *  刻意放在 tabs 之前（也就跑在上面的 `if (!settings) return null` 之前）：插件自定义页
-	 *  （settings.pages）也是导航的一项，得先算出来；而引用它的回落 effect 是 hook，
-	 *  不能写在条件 return 之后。 */
-	// 合并诊断（P0-1）：未知 slot / 未知 kind / arrange 目标不存在 / 插件被禁用或激活
-	// 失败都产出一条带归因的记录，布局页顶部横幅展示（按 pluginId 分组，可折叠）。
+	/** 宿主 UI 布局（issue #146）：所有挂载点的最终条目 = 内置 + 用户偏好。
+	 *  设置面板与 TopBar 用同一份计算，看到的顺序永远一致。 */
+	// 合并诊断（P0-1）：被纠正的偏好 / 槽位冲突都产出一条带归因的记录，布局页顶部横幅展示（可折叠）。
 	const uiDiagnostics: UiDiagnostic[] = [];
-	const uiSlots = buildUiSlots(withPluginViewItems(chat.plugins), {
-		locale,
+	const uiSlots = buildUiSlots({
 		t: (key: string) => t(key as Parameters<typeof t>[0]),
-		disabledPlugins: chat.settings?.disabledPlugins ?? [],
 		layout: chat.settings?.uiLayout,
 		diagnostics: uiDiagnostics,
 	});
-
-	/** `settings.pages` 里可渲染的插件页（导航一项 = 一页）。跳过：宿主条目（该槽位按契约是
-	 *  插件专属）、被插件或用户隐藏的、纯分隔线，以及**查不到插件的**（清单还没推来 /
-	 *  插件刚被卸载 / 被禁用）—— 宁可少一页，也不要点开才发现白屏（口径同右栏插件 tab）。
-	 *  顺序严格按 uiSlots 给的结果（那边已按「插件 → arrange → 用户偏好」排好）。 */
-	const pluginPages: { entry: UiSlotEntry; plugin: UiPluginInfo }[] = [];
-	for (const entry of uiSlots["settings.pages"]) {
-		if (entry.source === "host" || entry.hidden || entry.kind === "divider") continue;
-		const plugin = chat.plugins.find((p) => p.id === entry.source.slice("plugin:".length));
-		if (!plugin) continue;
-		pluginPages.push({ entry, plugin });
-	}
-	/** 导航 id ↔ 插件页的换算只写这一处（tab 状态、回落 effect、渲染块共用）。 */
-	const pluginPageTabId = (entryId: string): SettingsTab => `plugin-page:${entryId}`;
 
 	if (!settings) return null;
 
@@ -764,13 +677,6 @@ export function SettingsModal({
 	const blockedPresetCount = piPresetFiltering
 		? AGENT_TOOL_CATALOG.filter((e) => !piPresetAllowed.has(e.name)).length
 		: 0;
-	// 非 standard 预设下插件工具一律不可用（见 tool-manager.ts 语义总表）：
-	// 横幅计数把「实际被拦的已启用插件工具」也算上，行级开关同步置灰。
-	const blockedPluginCount = piPresetFiltering
-		? chat.plugins
-				.flatMap((pp) => pp.agentTools ?? [])
-				.filter((pt) => !(settings.disabledPluginTools ?? []).includes(pt.name)).length
-		: 0;
 
 	// 预设区（合并为一个卡片后）用到的两处「当前值」说明文案：默认 Agent 预设 + 默认权限。
 	// 原来的只读列表被删掉，说明文字改挂在下拉框下方一行（信息不丢、纵向占用大幅缩水）。
@@ -792,11 +698,9 @@ export function SettingsModal({
 		label: string;
 		/** 有计数徽标（与各区块标题里的 set-count 同源）。 */
 		count?: number;
-		/** 状态指示红点（如存在内置插件更新）。 */
+		/** 状态指示红点。 */
 		dot?: boolean;
-		/** 插件自定义页：内容交给 PluginPage 渲染（内置分区没有这一项）。 */
-		pluginPage?: { plugin: UiPluginInfo; entry: UiSlotEntry };
-		/** 悬浮提示（插件条目的 `hint`）。 */
+		/** 悬浮提示。 */
 		hint?: string;
 	}[] = [
 		// 模型与服务商（全引擎通用：统一管理 BaseURL、API Key 与自定义中转模型）
@@ -882,19 +786,6 @@ export function SettingsModal({
 					},
 				]
 			: []),
-		// 插件自定义设置页（全引擎通用）
-		...pluginPages.map((p) => ({
-			id: pluginPageTabId(p.entry.id),
-			icon: p.entry.iconSvg ? (
-				<PluginIcon iconSvg={p.entry.iconSvg} />
-			) : p.entry.icon && !/[a-z]/i.test(p.entry.icon) ? (
-				<span>{p.entry.icon}</span>
-			) : (
-				<FiBox />
-			),
-			label: p.entry.label,
-			pluginPage: { plugin: p.plugin, entry: p.entry },
-		})),
 	];
 
 	// 侧栏搜索与四维分组（方案 1: Linear 风格）
@@ -902,20 +793,15 @@ export function SettingsModal({
 
 	const TAB_GROUPS: Record<string, "core" | "tools" | "ui" | "advanced"> = {
 		models: "core",
-		prompt: "core",
-		presets: "core",
 		"dsh-presets": "core",
 		"subagent-templates": "core",
 
 		tools: "tools",
 		"approval-rules": "tools",
 		question: "tools",
-		mcp: "tools",
 		skills: "tools",
-		extensions: "tools",
 
 		layout: "ui",
-		plugins: "ui",
 		display: "ui",
 		sound: "ui",
 		quick: "ui",
@@ -923,7 +809,6 @@ export function SettingsModal({
 
 		"prompt-history": "advanced",
 		scheduler: "advanced",
-		review: "advanced",
 	};
 
 	const GROUP_LABELS = {
@@ -941,19 +826,13 @@ export function SettingsModal({
 		return tabs.filter((t) => t.label.toLowerCase().includes(q) || t.id.toLowerCase().includes(q));
 	}, [tabs, tabSearchQuery]);
 
-	/** 导航纠偏：若当前 tab 不在当前引擎可用的分区列表（例如切换引擎、或插件被卸载）→ 自动回落到该引擎的首个可用分区。 */
+	/** 导航纠偏：若当前 tab 不在当前引擎可用的分区列表（例如切换引擎）→ 自动回落到该引擎的首个可用分区。 */
 	useEffect(() => {
 		if (tabs.length === 0) return;
 		if (!tabs.some((t) => t.id === tab)) {
 			setTab(tabs[0].id);
 		}
 	}, [tabs, tab]);
-
-	/** 当前选中的插件页（tab 形如 `plugin-page:<条目全局 id>`）。找不到 = null：上面的 effect
-	 *  会把 tab 纠回默认分区，这里先什么都不画，免得白屏时还留着上一页的错误提示。 */
-	const activePluginPage = tab.startsWith("plugin-page:")
-		? (pluginPages.find((p) => pluginPageTabId(p.entry.id) === tab) ?? null)
-		: null;
 
 	const disabledSkills = new Set(settings.disabledSkills);
 
@@ -998,8 +877,6 @@ export function SettingsModal({
 		setPartial({ skillsFullText: [...next] });
 	};
 
-	const disabledPlugins = new Set(settings.disabledPlugins ?? []);
-
 	// 子代理各工具的「?」说明（key 与 tool-manager.ts 的 SUBAGENT_TOOL_NAMES 对齐）。
 	const SUBAGENT_TOOL_TIPS: Record<string, string> = {
 		subagent: t("toolDescSubagent"),
@@ -1029,17 +906,6 @@ export function SettingsModal({
 		else next.add(name);
 		setPartial({ disabledAgentTools: [...next] });
 	};
-	// 插件 AI 工具开关（插件 tab 按插件分组 + 工具 tab 汇总区共用；live 生效）。
-	const disabledPluginTools = new Set(settings.disabledPluginTools ?? []);
-	const togglePluginTool = (name: string) => {
-		const next = new Set(disabledPluginTools);
-		if (next.has(name)) next.delete(name);
-		else next.add(name);
-		setPartial({ disabledPluginTools: [...next] });
-	};
-	const pluginToolGroups = chat.plugins
-		.map((p) => ({ plugin: p, tools: [...(p.agentTools ?? [])].sort((a, b) => a.name.localeCompare(b.name)) }))
-		.filter((g) => g.tools.length > 0);
 
 	// ---- markers ----
 	const markersEnabled = settings.markersEnabled ?? true;
@@ -1104,7 +970,7 @@ export function SettingsModal({
 	};
 	const layout = chat.settings?.uiLayout;
 	const setLayout = (patch: UiLayoutPrefs) => setPartial({ uiLayout: { ...layout, ...patch } });
-	/** 取消勾选＝用户隐藏；勾回＝用户显式显示（覆盖插件声明的 hidden / arrange 的 hide）。 */
+	/** 取消勾选＝用户隐藏；勾回＝用户显式显示（覆盖内置默认的 hidden）。 */
 	const toggleUiHidden = (entry: UiSlotEntry) => {
 		const hidden = new Set(layout?.hidden ?? []);
 		const shown = new Set(layout?.shown ?? []);
@@ -1163,7 +1029,7 @@ export function SettingsModal({
 	};
 	/** 恢复单条：清掉该条目上的全部用户覆盖（隐藏/显示/顺序/分组/文案）。 */
 	const restoreUi = (id: string) => setPartial({ uiLayout: restoreUiItem(layout, id) });
-	/** 一键恢复：插件 arrange 与用户偏好全部作废，回到宿主默认布局。 */
+	/** 一键恢复：用户偏好全部作废，回到宿主默认布局。 */
 	const restoreUiAll = () => setPartial({ uiLayout: restoreAllUi() });
 
 	const handleClose = () => onClose();
@@ -1424,7 +1290,7 @@ export function SettingsModal({
 								</div>
 								{piPresetFiltering && (
 									<p className="set-catalog-hint warn">
-										{t("toolsPresetBanner", { name: piPresetName, count: blockedPresetCount + blockedPluginCount })}{" "}
+										{t("toolsPresetBanner", { name: piPresetName, count: blockedPresetCount })}{" "}
 										<button
 											type="button"
 											className="chip"
@@ -1690,7 +1556,6 @@ export function SettingsModal({
 																? t("markerGroupAction")
 																: m.name
 											}
-											subtitle={m.pluginId ? `[${m.name}] • ${m.pluginId}` : undefined}
 											tip={m.guidance.join("\n")}
 											enabled={m.enabled}
 											onToggle={() => toggleMarker(m.name)}
@@ -1774,48 +1639,6 @@ export function SettingsModal({
 										</div>
 									);
 								})}
-								<div className="set-field-label">
-									{t("toolsSectionPlugin")}
-									<HintTip text={t("toolsPluginHint")} />
-								</div>
-								{pluginToolGroups.length === 0 ? (
-									<p className="set-empty">{chat.plugins.length === 0 ? t("noUiPlugins") : t("pluginToolsEmpty")}</p>
-								) : (
-									pluginToolGroups.map((g) => {
-										const pluginDisabled = disabledPlugins.has(g.plugin.id);
-										return (
-											<div key={g.plugin.id}>
-												<div className="set-row-desc">
-													{g.plugin.icon ? `${g.plugin.icon} ` : ""}
-													{g.plugin.name} · {g.plugin.id}
-													{pluginDisabled ? ` (${t("pluginDisabledInPlugins")})` : ""}
-												</div>
-												{g.tools.map((tool) => (
-													<ToggleRow
-														key={tool.name}
-														title={tool.label && tool.label !== tool.name ? `${tool.label} (${tool.name})` : tool.name}
-														tip={
-															tool.description
-																? `${tool.description}\n${t("pluginToolOffHint")}`
-																: t("pluginToolOffHint")
-														}
-														action={toolEditAction(tool.name)}
-														subtitle={
-															pluginDisabled
-																? t("pluginToolsDisabledByPlugin")
-																: piPresetFiltering
-																	? t("toolsBlockedByPreset", { name: piPresetName })
-																	: undefined
-														}
-														enabled={!pluginDisabled && !piPresetFiltering && !disabledPluginTools.has(tool.name)}
-														disabled={pluginDisabled || piPresetFiltering}
-														onToggle={() => !pluginDisabled && !piPresetFiltering && togglePluginTool(tool.name)}
-													/>
-												))}
-											</div>
-										);
-									})
-								)}
 							</div>
 						)}
 
@@ -2469,12 +2292,7 @@ export function SettingsModal({
 							</div>
 						)}
 
-						{/* ---- 插件市场（可一键安装的插件列表） ------------------------ */}
-						{/* A managed instance installs software through its deploy, not
-						    through this page: the market would only offer an action the
-						    server refuses (server/managed.ts). Plugins already installed
-						    keep working and stay listed above. */}
-						{/* 界面布局（issue #146）：插件能整理任何条目（含宿主内置入口），但用户随时能改回来 ——
+						{/* 界面布局（issue #146）：用户随时能改回来 ——
 							    隐藏的条目仍可在顶栏溢出菜单里点到，改过的条目会显示「恢复」。 */}
 						{tab === "layout" && (
 							<div className="set-section">
@@ -2527,11 +2345,7 @@ export function SettingsModal({
 												</summary>
 												<ul className="set-ui-diag-list">
 													{uiDiagnostics.map((d, i) => (
-														<li
-															key={`${d.pluginId ?? "host"}:${d.entryId ?? i}`}
-															className={`set-ui-diag-item ${d.level}`}
-														>
-															{d.pluginId ? <code>{d.pluginId}</code> : null}
+														<li key={`host:${d.entryId ?? i}`} className={`set-ui-diag-item ${d.level}`}>
 															{d.entryId ? <code>{d.entryId}</code> : null}
 															<span>{d.message}</span>
 														</li>
@@ -2597,11 +2411,6 @@ export function SettingsModal({
 													</span>
 												</label>
 												<div className="set-row-actions">
-													{it.arrangedBy.length > 0 && (
-														<span className="set-ui-source" title={it.arrangedBy.join(", ")}>
-															{t("uiLayoutArranged")}
-														</span>
-													)}
 													{it.movedFrom && (
 														<span className="set-ui-source" title={it.id}>
 															{t("uiLayoutMovedFrom")}: {uiSlotTitle(it.movedFrom)}
@@ -3540,15 +3349,6 @@ export function SettingsModal({
 									</div>
 								)}
 							</div>
-						)}
-						{/* ---- 插件自定义页（settings.pages，issue #146） ------------------- */}
-						{activePluginPage && (
-							<PluginPage
-								plugin={activePluginPage.plugin}
-								epoch={chat.pluginsEpoch}
-								send={appSend}
-								className="set-plugin-page"
-							/>
 						)}
 
 						{/* ---- 逐工具文案编辑器（工具 tab 的「编辑文案」入口） ------------- */}

@@ -5,7 +5,7 @@
  * - 计划模式硬闸门（withPlanModeGate）
  * - 目标审查回合闸门（withGoalReviewGate）
  * - 审查者委派模式闸门（withDelegationGate）
- * - 插件守卫与人机协同审批（withToolGuard / makeLateToolGuard）
+ * - bash/read 的人机协同审批（withToolGuard）
  * - 只读 / 工作区沙箱权限包装器（wrapWriteToolWithPermission / wrapEditToolWithPermission 等）
  *
  * 从 agent-service.ts 抽出为独立模块。
@@ -21,14 +21,7 @@ import { planModeDenial } from "./plan-mode.js";
 import { goalReviewDenial } from "./goal-review-gate.js";
 import { delegationDenial } from "./delegate-mode.js";
 import { isPathInsideRoot, extractTargetPath, type ApprovalRule } from "./approval-rules.js";
-import { checkDangerousToolCall, pluginApprovalCategory, type ToolApprovalResolution } from "./tool-approval.js";
-import {
-	denialText,
-	type GuardedToolName,
-	type ToolPreRequest,
-	type ToolPostRequest,
-	type ToolPostEdit,
-} from "./plugin-tool-guard.js";
+import { checkDangerousToolCall, type ToolApprovalResolution } from "./tool-approval.js";
 import type { UiApprovalCategory, UiApprovalHit } from "./protocol.js";
 import type { AnyToolDefinition } from "./tool-overrides.js";
 import {
@@ -39,26 +32,8 @@ import {
 	restoreWorkspaceUriFromSessionDir,
 } from "./remote-ssh-service.js";
 
-/**
- * 插件工具拦截钩子（P1-5）：index.ts 注入，把 bash/read 的 pre/post 决策委托给
- * PluginManager（evaluateToolPre/evaluateToolPost）。未注入时零开销直通。
- */
-export interface ToolGuardHook {
-	pre: (
-		req: ToolPreRequest,
-		lang: string,
-	) => Promise<{
-		verdict:
-			| { decision: "allow" }
-			| { decision: "deny"; reason?: string; reasonEn?: string }
-			| { decision: "ask"; reason?: string; reasonEn?: string };
-		pluginId?: string;
-	}>;
-	post: (
-		req: ToolPostRequest,
-		lang: string,
-	) => Promise<{ content?: Array<{ type: string; text?: string }>; pluginIds: string[] } | undefined>;
-}
+/** withToolGuard 覆盖的工具（write/edit/edit_soft 各有专门的权限包装）。 */
+export type GuardedToolName = "bash" | "read";
 
 /** 人机协同审批回调（第 7 参数 = 命中的规则档位，供「允许同类」记忆；第 8 参数 = 命中清单，用于高危片段定位）。 */
 export type AskApprovalFn = (
@@ -74,7 +49,7 @@ export type AskApprovalFn = (
 
 /**
  * 计划模式闸门装饰（通用）：套在任何工具定义外层，只在**执行前**判定一次。
- * 与权限沙箱/插件守卫平行且更靠外 —— 计划模式是会话级硬约束，不给任何
+ * 与权限沙箱/审批守卫平行且更靠外 —— 计划模式是会话级硬约束，不给任何
  * 「记住同类/全部允许」的口子（允许了就等于放开了实施）。
  * 关闭时零开销（返回原定义，不包 execute）。
  */
@@ -167,27 +142,13 @@ export function withDelegationGate(
 }
 
 /**
- * 把「可能晚一点才注入」的插件守卫包成**调用时解析**的代理。
- *
- * 为什么需要它（P1-5 的真实缺口）：`withToolGuard` 在建工具定义时就把 `opts.guard`
- * 捕进了闭包，而 runtime 是在 `ClientSession.create()` 里建的、`cs.toolGuard` 却是在
- * `AgentService.attach()` 末尾才赋值 —— 直接传 `this.toolGuard` 会把 `undefined`
- * 永久固化进那条对话的工具里，于是「attach 时恢复出来的那条对话」永远不受
- * 插件 `onToolPre/onToolPost` 约束（只有新建/切换对话才带上）。代理每次调用才解析，
- * 与赋值时序无关；未注入时逐字等价于直通（allow / undefined）。
+ * bash/read 的人机协同审批门禁：内置高危检测与自定义审批规则（deny 直接阻断，
+ * dangerous 弹审批）。未传 askApproval 时零开销直通（返回原定义）。
  */
-export function makeLateToolGuard(get: () => ToolGuardHook | undefined): ToolGuardHook {
-	return {
-		pre: (req, lang) => get()?.pre(req, lang) ?? Promise.resolve({ verdict: { decision: "allow" as const } }),
-		post: (req, lang) => get()?.post(req, lang) ?? Promise.resolve(undefined),
-	};
-}
-
 export function withToolGuard(
 	def: ToolDefinition,
 	opts: {
 		toolName: GuardedToolName;
-		guard?: ToolGuardHook;
 		conversationId?: () => string | undefined;
 		getLang: () => ServerLang;
 		cwd?: string;
@@ -196,23 +157,14 @@ export function withToolGuard(
 		getRules?: () => ApprovalRule[];
 	},
 ): ToolDefinition {
-	const guard = opts.guard;
 	const toolName = opts.toolName;
-	if (!guard && !opts.askApproval) return def;
+	if (!opts.askApproval) return def;
 
 	return {
 		...def,
 		execute: (async (toolCallId: string, params: unknown, signal: unknown, onUpdate: unknown, ctx: unknown) => {
 			const lang = opts.getLang();
 			const conversationId = opts.conversationId?.();
-			let pre: Awaited<ReturnType<ToolGuardHook["pre"]>> | undefined;
-			if (guard) {
-				try {
-					pre = await guard.pre({ toolName, params, conversationId }, lang);
-				} catch {
-					pre = { verdict: { decision: "allow" } };
-				}
-			}
 
 			// 检查是否需要人工协同审批（Human-in-the-Loop）
 			let needApproval = false;
@@ -220,7 +172,7 @@ export function withToolGuard(
 			let approvalReasonEn: string | undefined;
 			let approvalCategory: UiApprovalCategory | undefined;
 
-			// 1. 系统核心安全：内置高危操作检测与自定义审批规则先行（优先级最高，防短路）
+			// 1. 系统核心安全：内置高危操作检测与自定义审批规则
 			let danger: ReturnType<typeof checkDangerousToolCall> | undefined;
 			if (opts.cwd && opts.askApproval) {
 				danger = checkDangerousToolCall(toolName, params, opts.cwd, opts.getRoots?.() ?? [], opts.getRules?.());
@@ -240,17 +192,7 @@ export function withToolGuard(
 				}
 			}
 
-			// 2. 插件前置守卫 deny 拦截（带 isError 标记）
-			if (pre?.verdict.decision === "deny") {
-				const text = denialText(pre.verdict, pre.pluginId ?? "plugin", lang);
-				return {
-					content: [{ type: "text", text }],
-					details: { guardDenied: true, decision: pre.verdict.decision, pluginId: pre.pluginId },
-					isError: true,
-				} as never;
-			}
-
-			// 3. 决定是否需要弹窗审批（系统高危 ask 优先于插件通用 ask，防止恶意或低危插件掩盖高危告警）
+			// 2. 决定是否需要弹窗审批
 			let approvalHits: UiApprovalHit[] | undefined;
 			if (danger?.dangerous) {
 				needApproval = true;
@@ -258,12 +200,6 @@ export function withToolGuard(
 				approvalReasonEn = danger.reasonEn;
 				approvalCategory = danger.category;
 				approvalHits = danger.hits;
-			} else if (pre?.verdict.decision === "ask") {
-				needApproval = true;
-				approvalReason = pre.verdict.reason ?? "插件要求确认本次操作";
-				approvalReasonEn = pre.verdict.reasonEn ?? "Plugin requested confirmation for this operation";
-				// 插件档位按插件 id 分：用户可以「允许同类」= 该插件的确认以后不再问。
-				approvalCategory = pluginApprovalCategory(pre.pluginId ?? "plugin");
 			}
 
 			let effectiveParams = params;
@@ -296,14 +232,6 @@ export function withToolGuard(
 					effectiveParams = res.editedParams ?? params;
 					userEdited = true;
 				}
-			} else if (pre?.verdict.decision === "ask") {
-				// 无审批通道时回落至原先的阻断行为
-				const text = denialText(pre.verdict, pre.pluginId ?? "plugin", lang);
-				return {
-					content: [{ type: "text", text }],
-					details: { guardDenied: true, decision: pre.verdict.decision, pluginId: pre.pluginId },
-					isError: true,
-				} as never;
 			}
 
 			const result = (await (def.execute as (...a: never[]) => Promise<unknown>)(
@@ -327,15 +255,6 @@ export function withToolGuard(
 				};
 			}
 
-			if (guard) {
-				let post: ToolPostEdit | undefined | { content?: Array<{ type: string; text?: string }>; pluginIds: string[] };
-				try {
-					post = await guard.post({ toolName, params: effectiveParams, result, conversationId }, lang);
-				} catch {
-					post = undefined;
-				}
-				if (post?.content) return { ...result, content: post.content } as never;
-			}
 			return result as never;
 		}) as never,
 	} as ToolDefinition;

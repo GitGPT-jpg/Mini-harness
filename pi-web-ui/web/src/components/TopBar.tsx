@@ -25,20 +25,10 @@ import { buildUpdateCommand } from "../update-command";
 import { randomUuid } from "../uuid";
 import { Dropdown, DropdownItem } from "./Dropdown";
 import type { ViewName } from "./BarItem";
-import { BrowserControl } from "./BrowserControl";
-import { BROWSER_PAGE_TOOL_NAME } from "../../../server/tool-manager.js";
-import { PluginIcon } from "../plugin-icon";
 import { formatCostDisplay } from "../cost-format";
 import { isZhLocale, useI18n, localeShort } from "../i18n";
-import {
-	isPluginViewItem,
-	REQUIRED_TOPBAR_ITEM_IDS,
-	restoreUiItem,
-	type UiSlotEntry,
-	type UiSlotId,
-} from "../ui-slots";
+import { REQUIRED_TOPBAR_ITEM_IDS, type UiSlotEntry } from "../ui-slots";
 import { fitTopbar, MOBILE_ASIDE_TOPBAR_IDS, sortOverflowMenuItems } from "../topbar-fit";
-import { openContextMenu } from "../context-menu-state";
 import {
 	appSend,
 	useAppField,
@@ -157,30 +147,17 @@ interface TopBarProps {
 	};
 	view: ViewName;
 	onViewChange: (view: ViewName) => void;
-	/** Installed optional plugins (<dataDir>/plugins) — one view tab each
-	 *  (view:false renderer-only plugins are filtered out by the caller). */
-	plugins: {
-		id: string;
-		name: string;
-		icon?: string;
-		iconSvg?: string;
-		version?: string;
-		description?: string;
-		error?: string;
-		view?: boolean;
-	}[];
-	/** 顶栏主栏条目（内置 + 插件的最终结果，已按用户偏好/插件 arrange 排好；由 App 计算）。 */
+	/** 顶栏主栏条目（内置条目的最终结果，已按用户偏好排好；由 App 计算）。 */
 	uiPrimary?: UiSlotEntry[];
 	/** 溢出菜单条目：被隐藏/被移到 overflow 的条目（用户仍能从这里找回）。 */
 	uiOverflow?: UiSlotEntry[];
-	/** 点击一个条目：view 由宿主切视图，其余（action/select）交给贡献它的插件
-	 *  （select 切选项时第二个参数带选中的 value）。 */
+	/** 点击一个条目：交回 App 分派（view 由宿主切视图；select 切选项时第二个参数带选中的 value）。 */
 	onUiAction?: (item: UiSlotEntry, value?: string) => void;
-	/** 顶栏右键菜单的条目（contextmenu.topbar 槽位；插件可往里加项）。 */
+	/** 顶栏右键菜单的条目（contextmenu.topbar 槽位）。 */
 	uiContextTopbar?: UiSlotEntry[];
 	/** Open a side panel as a mobile drawer ("left" = history). */
 	onOpenPanel: (side: "left" | "right") => void;
-	/** Open the settings panel (system prompt / skills / extensions / presets). */
+	/** Open the settings panel. */
 	onOpenSettings: () => void;
 	/** Open the background-task panel (AI-started servers — stop individually or all). */
 	onOpenBgTasks: () => void;
@@ -210,7 +187,6 @@ export function TopBar({
 	chat,
 	terminal,
 	view,
-	plugins,
 	uiPrimary,
 	uiOverflow,
 	uiContextTopbar,
@@ -228,7 +204,7 @@ export function TopBar({
 	onOpenSandboxModal,
 }: TopBarProps) {
 	const { locale, setLocale, t, packs } = useI18n();
-	// 「⋯」溢出菜单的开关（宿主自己的菜单，插件不碰 DOM；顺序与设置面板里看到的一致）。
+	// 「⋯」溢出菜单的开关（宿主自己的菜单；顺序与设置面板里看到的一致）。
 	const [topbarMenuOpen, setTopbarMenuOpen] = useState(false);
 	/* 「打开项目」按钮（host:open-project）的项目选择器：与左栏 📁+ 同一个组件、同一套行为
 	   （浏览磁盘目录 / 选当前目录 / ＋新建项目后切过去）。cwd 与额外工作区根走全局 store
@@ -263,13 +239,13 @@ export function TopBar({
 	 *  品牌（host:brand）没有动作，进菜单会变成死按钮 —— 直接过滤（布局页仍可勾回来）。
 	 *  另外还有「本断点放不下」的条目，那是实测出来的（见下面的 fitTopbar），不在这里。 */
 	const pinnedOverflowItems = [...(uiOverflow ?? [])].filter(
-		(it) => !(it.source === "host" && (it.id === "host:brand" || isCapabilityGatedOff(it.id))) && !isPluginViewItem(it),
+		(it) => !(it.source === "host" && (it.id === "host:brand" || isCapabilityGatedOff(it.id))),
 	);
 	/**
 	 * 顶栏统一渲染（方案 A：**完全扁平**，桌面与手机同一份 slot 数据）——
 	 * 所有条目都是 `.topbar-flow` 的直接子节点，**没有任何按种类包裹的容器**
 	 * （不再有 .brand / .view-switch / .topbar-desktop，也不再有两端贴边的例外）：
-	 * 宿主条目查 `hostNodes` 节点工厂，插件条目走 `renderPluginEntry` 通用渲染，
+	 * 宿主条目查 `hostNodes` 节点工厂，
 	 * align 只决定它落在两个 spacer 划出的三段（start / center / end）里的哪一段。
 	 * 可见性/顺序/对齐/文案对**每一个**条目都生效（布局页勾选框、↑↓、align）。
 	 *
@@ -283,7 +259,6 @@ export function TopBar({
 		"host:chat",
 		"host:terminal",
 		"host:search",
-		"host:browser",
 		"host:tasks",
 		"host:settings",
 		"host:language",
@@ -297,26 +272,6 @@ export function TopBar({
 		uiPrimary !== undefined
 			? uiPrimary.map((e) => ({ id: e.id, entry: e }))
 			: FALLBACK_TOPBAR_IDS.map((id) => ({ id, entry: null }));
-	/** 报错插件的视图 tab：合并引擎整份丢弃了它们的贡献（含合成的 __view 条目），
-	 *  但 tab 本体仍要置灰可点（与旧版 plugins-prop 直画一致）—— 以伪条目补回条目流尾部。 */
-	const brokenViewEntries: UiSlotEntry[] = (tabOn("plugins") ? plugins : [])
-		.filter((p) => p.view !== false && p.error && !topEntries.some((e) => e.id === `${p.id}:__view`))
-		.map(
-			(p) =>
-				({
-					id: `${p.id}:__view`,
-					slot: "topbar.primary",
-					source: `plugin:${p.id}`,
-					label: p.name,
-					kind: "view",
-					view: `plugin:${p.id}`,
-					order: 23,
-					align: "end",
-					hidden: false,
-					userOverrides: [],
-					arrangedBy: [],
-				}) as UiSlotEntry,
-		);
 	// 视图门禁 / 白名单门禁在统一的条目流里过滤（见下面的 flowItems）。
 	/**
 	 * 溢出菜单里的**宿主内置动作**：点下去得真干活。
@@ -326,7 +281,7 @@ export function TopBar({
 	 * （门禁/条件不满足，如终端视图里的 ☰，扁平行保证找得回来）与 select 行。
 	 * 宿主自己的入口实现全在 TopBar 里（与 T1 的教训一致：`host:*` 的实现留在拥有
 	 * 它的组件内），所以这里按 id 映射到本地处理器；返回 false = 不认识
-	 * 这个 id（比如插件条目、或 kind="view" 的条目）→ 交回 onUiAction。
+	 * 这个 id（比如 kind="view" 的条目）→ 交回 onUiAction。
 	 */
 	const dispatchHostOverflow = (entry: UiSlotEntry): boolean => {
 		if (entry.source !== "host") return false;
@@ -363,123 +318,12 @@ export function TopBar({
 				onOpenSettings();
 				return true;
 			default:
-				// 视图条目（chat/terminal/git/插件视图）与插件动作交给 App 的 onUiAction
-				//（视图由它自己 setView，动作转给贡献插件）；菜单型宿主条目不会走到这里
-				//（它们整块搬进菜单，见 OVERFLOW_AS_NODE_IDS）。
+				// 视图条目（chat/terminal）交给 App 的 onUiAction（视图由它自己 setView）；
+				// 菜单型宿主条目不会走到这里（它们整块搬进菜单，见 OVERFLOW_AS_NODE_IDS）。
 				return false;
 		}
 	};
 
-	/** 右键一个顶栏条目 → 打开 contextmenu.topbar 槽位（支持位置切换 + 插件菜单项）。 */
-	const openItemMenu = (e: React.MouseEvent, id: string, label: string) => {
-		e.preventDefault();
-		e.stopPropagation();
-		const layout = chat.settings?.uiLayout;
-		const setItemSlot = (targetSlot: UiSlotId) => {
-			const slots = { ...layout?.slots, [id]: targetSlot };
-			const align = { ...layout?.align };
-			if ((targetSlot === "sidebar.left" || targetSlot === "sidebar.right") && !align[id]) {
-				align[id] = "center";
-			}
-			appSend({ type: "set_settings", uiLayout: { ...layout, slots, ...(align[id] ? { align } : {}) } });
-		};
-		const hideItem = () => {
-			const hidden = new Set(layout?.hidden ?? []);
-			hidden.add(id);
-			// shown 后于 hidden 生效（见 buildUiSlots）：不清掉 shown，隐藏会被顶掉而无效。
-			const shown = (layout?.shown ?? []).filter((x) => x !== id);
-			appSend({ type: "set_settings", uiLayout: { ...layout, hidden: [...hidden], shown } });
-		};
-		const restoreItem = () => {
-			appSend({ type: "set_settings", uiLayout: restoreUiItem(layout, id) });
-		};
-		const menuEntries: UiSlotEntry[] = [
-			{
-				id: "host:move-bottom",
-				slot: "contextmenu.topbar",
-				source: "host",
-				label: t("moveToBottom"),
-				kind: "action",
-				order: 10,
-				align: "start",
-				hidden: false,
-				userOverrides: [],
-				arrangedBy: [],
-			},
-			{
-				id: "host:move-left",
-				slot: "contextmenu.topbar",
-				source: "host",
-				label: t("moveToLeft"),
-				kind: "action",
-				order: 20,
-				align: "start",
-				hidden: false,
-				userOverrides: [],
-				arrangedBy: [],
-			},
-			{
-				id: "host:move-right",
-				slot: "contextmenu.topbar",
-				source: "host",
-				label: t("moveToRight"),
-				kind: "action",
-				order: 30,
-				align: "start",
-				hidden: false,
-				userOverrides: [],
-				arrangedBy: [],
-			},
-		];
-		if (!REQUIRED_TOPBAR_ITEM_IDS.has(id)) {
-			menuEntries.push({
-				id: "host:hide-item",
-				slot: "contextmenu.topbar",
-				source: "host",
-				label: t("uiLayoutHide"),
-				kind: "action",
-				order: 40,
-				align: "start",
-				hidden: false,
-				userOverrides: [],
-				arrangedBy: [],
-			});
-		}
-		const hasCustomization = Boolean(
-			layout?.slots?.[id] || layout?.labels?.[id] || layout?.align?.[id] || layout?.order?.includes(id),
-		);
-		if (hasCustomization) {
-			menuEntries.push({
-				id: "host:restore-item",
-				slot: "contextmenu.topbar",
-				source: "host",
-				label: t("uiLayoutRestore"),
-				kind: "action",
-				order: 50,
-				align: "start",
-				hidden: false,
-				userOverrides: [],
-				arrangedBy: [],
-			});
-		}
-		if (uiContextTopbar && uiContextTopbar.length > 0) {
-			menuEntries.push(...uiContextTopbar);
-		}
-		openContextMenu({
-			x: e.clientX,
-			y: e.clientY,
-			slot: "contextmenu.topbar",
-			target: { id, label },
-			entries: menuEntries,
-			onHostAction: (entry) => {
-				if (entry.id === "host:move-bottom") setItemSlot("bottombar");
-				else if (entry.id === "host:move-left") setItemSlot("sidebar.left");
-				else if (entry.id === "host:move-right") setItemSlot("sidebar.right");
-				else if (entry.id === "host:hide-item") hideItem();
-				else if (entry.id === "host:restore-item") restoreItem();
-			},
-		});
-	};
 	// 受管标记与自身版本号：走全局（web/src/app-globals.ts），整个连接内不变。
 	const { appVersion } = useAppGlobals();
 	const managed = useIsManaged();
@@ -696,9 +540,7 @@ export function TopBar({
 													? t("kindEngine")
 													: item.kind === "git-extension"
 														? t("kindGitExtension")
-														: item.kind === "plugin"
-															? t("kindPlugin")
-															: t("kindPackage")}
+														: t("kindPackage")}
 									</span>
 									<span
 										className="dd-all-vers"
@@ -721,16 +563,6 @@ export function TopBar({
 										) : item.kind === "git-extension" ? (
 											item.upToDate ? (
 												stripGitSha(item.current)
-											) : (
-												shortGitRange(item.current, item.latest)
-											)
-										) : item.kind === "plugin" ? (
-											item.upToDate ? (
-												item.current.startsWith("v") ? (
-													item.current
-												) : (
-													stripGitSha(item.current)
-												)
 											) : (
 												shortGitRange(item.current, item.latest)
 											)
@@ -874,7 +706,7 @@ export function TopBar({
 				<span className="brand-name">训推引擎组 Harness</span>
 			</span>
 		),
-		// 打开项目：切整个工作区（set_cwd），与视图无关 —— 终端 / Git / 插件视图里同样常驻可点。
+		// 打开项目：切整个工作区（set_cwd），与视图无关 —— 终端 / Git 视图里同样常驻可点。
 		"host:open-project": (
 			<button
 				type="button"
@@ -888,7 +720,7 @@ export function TopBar({
 		),
 		// 面板抽屉开关只在 chat 视图渲染：抽屉节点躺在 chat 视图的面板树里
 		// （App.tsx 的 .panel-drawer 是 `.view-pane` 的子节点，非 chat 视图整棵
-		// display:none），所以终端 / Git / 插件视图里点它只会拉出一层遮罩、
+		// display:none），所以终端 / Git 视图里点它只会拉出一层遮罩、
 		// 抽屉永远不出现 —— 而且顶栏这个 ☰ 会和终端面板自己的 ☰ 并排成两个。
 		"host:history":
 			view === "chat" && tabOn("history") ? (
@@ -978,9 +810,6 @@ export function TopBar({
 				<span className="chip-sub">{t("searchGlobal")}</span>
 			</button>
 		),
-		"host:browser": !(chat.settings?.disabledAgentTools?.includes(BROWSER_PAGE_TOOL_NAME) ?? false) ? (
-			<BrowserControl />
-		) : null,
 		"host:task-desk": (
 			<button type="button" className="chip task-desk-chip" data-tip={t("taskDeskTip")} onClick={openTaskDesk}>
 				<FiList />
@@ -1215,78 +1044,18 @@ export function TopBar({
 	/** 溢出菜单里**整块搬进来**的宿主条目（菜单型：下拉/外链/自带面板）。
 	 *  其余宿主条目（history / files / new-chat / search / tasks / settings）在菜单里是一条扁平
 	 *  菜单项，由 dispatchHostOverflow 分派到本地处理器 —— 扁平的更像菜单，整块的才需要搬组件。 */
-	const OVERFLOW_AS_NODE_IDS = new Set(["host:language", "host:theme", "host:update", "host:browser"]);
+	const OVERFLOW_AS_NODE_IDS = new Set(["host:language", "host:theme", "host:update"]);
 	/** TABS 白名单门禁（历史口径，不扩大）：search/tasks/settings 的显隐还受白名单管，
 	 *  其余宿主入口只看 slot（各节点工厂内部自行判断，见 hostNodes）。 */
 	const isTabGatedOff = (id: string) => TABS_GATED_IDS.has(id) && !tabOn(id.slice("host:".length));
 	/**
-	 * 插件条目的通用渲染（宿主只负责摆位置，插件不碰 DOM）：kind="view" 落成视图 tab，
-	 * kind="select" 落成下拉框（切换回插件，附带选中的 value），其余落成按钮。
-	 * 条件不满足（插件视图要求 plugins tab 开放）返回 null → 该条目连同位置一起不画。
-	 */
-	const renderPluginEntry = (entry: UiSlotEntry): ReactNode => {
-		if (entry.kind === "view") {
-			if (!tabOn("plugins")) return null;
-			const target = entry.view ?? "";
-			const meta = plugins.find((p) => `plugin:${p.id}` === entry.source);
-			const tip = meta?.error ? `${entry.label}: ${meta.error}` : (entry.hint ?? entry.label);
-			return (
-				<button
-					key={entry.id}
-					type="button"
-					role="tab"
-					aria-selected={view === target}
-					className={`tb-tab plugin-tab${view === target ? " active" : ""}${meta?.error ? " broken" : ""}`}
-					data-tip={tip}
-					onClick={() => onViewChange(target as typeof view)}
-					onContextMenu={(e) => openItemMenu(e, entry.id, entry.label)}
-				>
-					<PluginIcon icon={entry.icon} iconSvg={entry.iconSvg} />
-					<span>{entry.label}</span>
-				</button>
-			);
-		}
-		if (entry.kind === "select" && entry.options?.length) {
-			return (
-				<select
-					key={entry.id}
-					className="plugin-topbar-item plugin-topbar-select"
-					title={entry.hint ?? entry.label}
-					aria-label={entry.label}
-					value={entry.options.some((o) => o.value === entry.value) ? (entry.value as string) : entry.options[0]!.value}
-					onChange={(e) => onUiAction?.(entry, e.target.value)}
-					onContextMenu={(e) => openItemMenu(e, entry.id, entry.label)}
-				>
-					{entry.options.map((o) => (
-						<option key={o.value} value={o.value}>
-							{o.label}
-						</option>
-					))}
-				</select>
-			);
-		}
-		return (
-			<button
-				key={entry.id}
-				type="button"
-				className="plugin-topbar-item"
-				data-tip={entry.hint ?? entry.label}
-				onClick={() => onUiAction?.(entry)}
-				onContextMenu={(e) => openItemMenu(e, entry.id, entry.label)}
-			>
-				<PluginIcon icon={entry.icon} iconSvg={entry.iconSvg} />
-				<span>{entry.label}</span>
-			</button>
-		);
-	};
-	/**
 	 * 最终要画的条目，**按 slot 顺序**（= 布局页里看到的顺序）：
-	 * 宿主条目查节点工厂、插件条目通用渲染；门禁（TABS 白名单 / 视图门禁）不满足或节点工厂
+	 * 宿主条目查节点工厂；门禁（TABS 白名单 / 视图门禁）不满足或节点工厂
 	 * 返回 null 的条目**不占位**。这就是顶栏的全部内容 —— 没有第二阶段的分组/重排。
 	 */
 	const flowItems: { id: string; entry: UiSlotEntry | null; node: ReactNode }[] = [];
 	for (const it of topEntries) {
-		if (it.entry?.hidden) continue; // uiPrimary 已滤过 hidden；这里只防脏数据（插件 arrange 会改）
+		if (it.entry?.hidden) continue; // uiPrimary 已滤过 hidden；这里只防脏数据
 		if (isTabGatedOff(it.id) || isCapabilityGatedOff(it.id)) continue;
 		let node: ReactNode = null;
 		if (it.entry) {
@@ -1297,7 +1066,6 @@ export function TopBar({
 					bar="top"
 					chat={chat}
 					view={view}
-					plugins={plugins}
 					onViewChange={onViewChange}
 					onOpenPanel={onOpenPanel}
 					onOpenSettings={onOpenSettings}
@@ -1328,23 +1096,6 @@ export function TopBar({
 		if (!node) continue;
 		flowItems.push({ id: it.id, entry: it.entry, node });
 	}
-	// 报错插件的视图 tab（合并引擎整份丢弃了它们的贡献）以伪条目补回尾部。
-	for (const b of brokenViewEntries) {
-		const node = (
-			<BarItem
-				key={b.id}
-				entry={b}
-				bar="top"
-				chat={chat}
-				view={view}
-				plugins={plugins}
-				onViewChange={onViewChange}
-				onUiAction={onUiAction}
-				uiContextEntries={uiContextTopbar}
-			/>
-		);
-		if (node) flowItems.push({ id: b.id, entry: b, node });
-	}
 	/** 条目自己的对齐段（脏值回落 start，与合并引擎同口径）。 */
 	const zoneOf = (it: { entry: UiSlotEntry | null }): "start" | "center" | "end" => it.entry?.align ?? "start";
 	/** 本断点放不下的条目（实测宽度算出来的，见 web/src/topbar-fit.ts）：退进「⋯」菜单。 */
@@ -1354,7 +1105,7 @@ export function TopBar({
 	 *  实测值，窗口变宽时它们才能按真实宽度回来（否则会「一旦被丢就再也回不来」）。 */
 	const widthCacheRef = useRef(new Map<string, number>());
 	/** 桌面与手机同一套实测溢出：放不下的条目（droppedIds）退进「⋯」，放得下全留
-	 *  （手机端不再按名单强制折叠 —— 搜索/插件 tab 等能放下就直接显示）。 */
+	 *  （手机端不再按名单强制折叠 —— 搜索等能放下就直接显示）。 */
 	const keptItems = flowItems.filter((it) => !droppedIds.has(it.id));
 	/** 手机端固定位（MOBILE_ASIDE_TOPBAR_IDS）：移出主直流、渲染在 ⋯ 右边最右，
 	 *  不参与实测溢出。桌面端为空，直流保持单一扁平（slot 顺序直排，不动）。 */
@@ -1504,7 +1255,7 @@ export function TopBar({
 					{/* issue #162：菜单 portal 到 body（fixed），不再挂在会被祖先 overflow 裁剪的容器里。 */}
 					<TopbarOverflowMenu anchorRef={moreBtnRef} open={topbarMenuOpen} onClose={() => setTopbarMenuOpen(false)}>
 						{overflowMenuItems.map((it) => {
-							// 被隐藏的**宿主菜单型**条目（声音/语言/主题/版本/GitHub/浏览器操作）：
+							// 被隐藏的**宿主菜单型**条目（声音/语言/主题/版本/GitHub）：
 							// 它们不是一次性动作，扁平按钮点了没意义 —— 把整块组件搬进溢出菜单，
 							// 这样「隐藏」只是换了个位置，功能一点不少（与内建条目的实现留在组件内一致）。
 							const asNode = it.source === "host" && OVERFLOW_AS_NODE_IDS.has(it.id) ? hostNodes[it.id] : undefined;
@@ -1512,20 +1263,11 @@ export function TopBar({
 								return <Fragment key={it.id}>{asNode}</Fragment>;
 							}
 							// 折叠按钮保持折叠前样式（只统一宽度顶满菜单，不重绘成扁平行）：
-							// 宿主走 hostNodes（与顶栏同一套 chip/tab/panel-toggle），插件走通用渲染。
+							// 宿主走 hostNodes（与顶栏同一套 chip/tab/panel-toggle）。
 							// 包一层关菜单（点后关 ⋯，与扁平行一致）。节点为 null（门禁/条件不满足，
 							// 如终端视图里的 ☰）才回落扁平行，保证条目找得回来。
 							if (it.source === "host") {
 								const node = hostNodes[it.id];
-								if (node) {
-									return (
-										<div key={it.id} className="plugin-topbar-menu-keep" onClick={() => setTopbarMenuOpen(false)}>
-											{node}
-										</div>
-									);
-								}
-							} else {
-								const node = renderPluginEntry(it);
 								if (node) {
 									return (
 										<div key={it.id} className="plugin-topbar-menu-keep" onClick={() => setTopbarMenuOpen(false)}>

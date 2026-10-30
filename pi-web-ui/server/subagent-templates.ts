@@ -56,8 +56,7 @@ export interface SubagentTemplate {
 	/** 技能白名单：非空 → 子代理只启用这些技能；空 → 跟随主会话技能开关。 */
 	enabledSkills: string[];
 	/** 扩展白名单（extensionKey：npm:<pkg> / 入口路径）：非空 → 只加载这些；空 → 跟随主会话。
-	 *  非空时插件/MCP 自定义工具也不进子代理（它们没有 SDK extensionKey 身份，无法参与
-	 *  匹配，放行等于白名单没关门），只想限技能/提示词时用 append + 空扩展白名单。 */
+	 *  只想限技能/提示词时用 append + 空扩展白名单。 */
 	enabledExtensions: string[];
 	/** 子代理模型 ("provider/id"，与 subagent_spawn 的 model 参数同格式)；空 = 跟随主对话。 */
 	model: string;

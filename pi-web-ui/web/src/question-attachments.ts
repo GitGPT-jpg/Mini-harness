@@ -20,7 +20,7 @@ import { readTextQuote } from "../../server/text-quote.js";
 /** PromptAttachment 的结构化镜像（与 server/protocol.ts 一致）。 */
 export interface EditPromptAttachment {
 	path: string;
-	mode?: "inline" | "reference" | "lines" | "page" | "conversation" | "quote";
+	mode?: "inline" | "reference" | "lines" | "conversation" | "quote";
 	quote?: import("../../server/protocol.js").TextQuote;
 	conversationId?: string;
 	sessionPath?: string;
@@ -93,11 +93,9 @@ function parseFileCardAttachment(msg: { content: readonly unknown[]; details?: u
 			size: details.size,
 		};
 	}
-	// 3) Granted web page (page-picker 的「引用到对话」)：`path` 是页面 origin、
-	//    name 是标题；扩展的授权表与工作区无关，所以原样重发即可，服务端不读文件。
-	if (details.mode === "page" && details.path) {
-		return { path: details.path, mode: "page", name: details.name ?? details.path };
-	}
+	// 3) 旧版网页引用卡（已删除的 page-picker 扩展）：path 是页面 origin 而不是工作区路径，
+	//    不能当路径引用重发，直接丢弃。
+	if (details.mode === "page") return null;
 	// 3b) Quoted conversation（对话引用 chip）：path 是 id/path 展示串，
 	//     真引用走 conversationId/sessionPath；重发即重新读取最新转录。
 	if (details.mode === "conversation") {
@@ -137,9 +135,6 @@ function attachmentDedupKey(att: EditPromptAttachment): string {
 	}
 	if (att.mode === "conversation") {
 		return `conv:${att.conversationId ?? ""}:${att.sessionPath ?? ""}:${att.name ?? ""}`;
-	}
-	if (att.mode === "page") {
-		return `page:${att.path}`;
 	}
 	if (att.imageData) {
 		return `img:${att.name ?? ""}:${att.imageData.length}:${att.imageData.slice(0, 64)}`;

@@ -303,19 +303,18 @@ describe("FooterBar 连接状态", () => {
 		}
 	});
 
-	it("手机端极窄状态栏规则：插件底栏条目（如 sol-savings-badge）被移动端隐藏规则匹配，而核心指标不被隐藏", () => {
+	it("手机端极窄状态栏规则：非核心底栏条目（如 sol-savings-badge）被移动端隐藏规则匹配，而核心指标不被隐藏", () => {
 		const chat = makeChatState();
-		const pluginItem: import("../../web/src/ui-slots.js").UiSlotEntry = {
+		const extraItem: import("../../web/src/ui-slots.js").UiSlotEntry = {
 			id: "sol-savings-badge",
 			slot: "bottombar",
-			source: "plugin:sol-savings",
+			source: "host",
 			label: "SoL-Pi",
 			kind: "action",
 			order: 14,
 			align: "start",
 			hidden: false,
 			userOverrides: [],
-			arrangedBy: [],
 		};
 		const defaultItems: import("../../web/src/ui-slots.js").UiSlotEntry[] = [
 			{
@@ -328,7 +327,6 @@ describe("FooterBar 连接状态", () => {
 				align: "start",
 				hidden: false,
 				userOverrides: [],
-				arrangedBy: [],
 			},
 			{
 				id: "host:ctx",
@@ -340,7 +338,6 @@ describe("FooterBar 连接状态", () => {
 				align: "start",
 				hidden: false,
 				userOverrides: [],
-				arrangedBy: [],
 			},
 			{
 				id: "host:cost",
@@ -352,7 +349,6 @@ describe("FooterBar 连接状态", () => {
 				align: "start",
 				hidden: false,
 				userOverrides: [],
-				arrangedBy: [],
 			},
 			{
 				id: "host:cache",
@@ -364,9 +360,8 @@ describe("FooterBar 连接状态", () => {
 				align: "start",
 				hidden: false,
 				userOverrides: [],
-				arrangedBy: [],
 			},
-			pluginItem,
+			extraItem,
 			{
 				id: "host:cwd",
 				slot: "bottombar",
@@ -377,7 +372,6 @@ describe("FooterBar 连接状态", () => {
 				align: "end",
 				hidden: false,
 				userOverrides: [],
-				arrangedBy: [],
 			},
 		];
 		const { container } = mountFooter(chat, defaultItems);
@@ -388,7 +382,7 @@ describe("FooterBar 连接状态", () => {
 		const hideSelector =
 			".statusbar .bar-item:not(.status-conn):not(.status-ctx):not(.status-cost):not(.status-cache):not(.status-rate):not(.status-host-metrics):not(.status-cwd):not(.working):not(.bar-item-working)";
 
-		// 插件条目匹配该隐藏规则（手机端自动隐藏，绝不变成被压缩的空条）
+		// 非核心条目匹配该隐藏规则（手机端自动隐藏，绝不变成被压缩的空条）
 		expect(solItem?.matches(hideSelector)).toBe(true);
 
 		// 核心状态条目不匹配隐藏规则（手机端正常保留显示）

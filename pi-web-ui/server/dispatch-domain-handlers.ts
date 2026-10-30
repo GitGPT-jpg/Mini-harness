@@ -5,7 +5,7 @@
  * - handleFileMessage: 文件树浏览、读写、检索、创建/重命名/删除/复制/路径补全、工作区根设置
  * - handleScmMessage: Git 状态查询、提交历史、文件差异、AI 提交信息生成
  * - handleBgServerMessage: 后台常驻服务管理与端口清理
- * - handlePresetAndDshMessage: 预设管理与分享、DSH 预设/补丁切换、审批规则与子代理模板持久化
+ * - handlePresetAndDshMessage: DSH 预设/补丁切换、审批规则与子代理模板持久化
  */
 import type { ClientMessage, ServerMessage } from "./protocol.js";
 import type { DispatchSession } from "./index.js";
@@ -162,7 +162,7 @@ export function handleScmMessage(msg: ClientMessage, cs: DispatchSession, send: 
 export function handleBgServerMessage(msg: ClientMessage, cs: DispatchSession): boolean {
 	switch (msg.type) {
 		case "kill_background_server":
-			void cs.killBackgroundServer(msg.port, msg.taskId);
+			void cs.killBackgroundServer(msg.port);
 			return true;
 		case "kill_background_servers":
 			void cs.killAllBackgroundServers();
@@ -181,7 +181,7 @@ export function handleBgServerMessage(msg: ClientMessage, cs: DispatchSession): 
 	}
 }
 
-/** 预设分享、DSH 预设与补丁、审批规则及模板持久化 */
+/** DSH 预设与补丁、审批规则及模板持久化 */
 export function handlePresetAndDshMessage(msg: ClientMessage, cs: DispatchSession): boolean {
 	switch (msg.type) {
 		case "dsh_patches_list":
@@ -214,24 +214,6 @@ export function handlePresetAndDshMessage(msg: ClientMessage, cs: DispatchSessio
 		case "dsh_patch_delete":
 			void cs.deleteDshPatch?.(msg.name);
 			return true;
-		case "save_preset":
-			void cs.savePreset(msg.name);
-			return true;
-		case "preset_export":
-			void cs.exportPreset(msg);
-			return true;
-		case "preset_import":
-			void cs.importPreset(msg);
-			return true;
-		case "preset_import_url":
-			void cs.importPresetFromUrl(msg);
-			return true;
-		case "preset_catalog":
-			void cs.pushPresetCatalog(msg);
-			return true;
-		case "preset_share":
-			void cs.sharePreset(msg);
-			return true;
 		case "save_subagent_template":
 			void cs.saveSubagentTemplate(msg.template);
 			return true;
@@ -249,12 +231,6 @@ export function handlePresetAndDshMessage(msg: ClientMessage, cs: DispatchSessio
 			return true;
 		case "reset_builtin_approval_rule":
 			void cs.resetBuiltinApprovalRule?.(msg.id);
-			return true;
-		case "apply_preset":
-			void cs.applyPreset(msg.name);
-			return true;
-		case "delete_preset":
-			void cs.deletePreset(msg.name);
 			return true;
 		default:
 			return false;
@@ -645,8 +621,6 @@ export function handleSettingsMessage(msg: ClientMessage, cs: DispatchSession): 
 				disabledSkills: msg.disabledSkills,
 				disabledExtensions: msg.disabledExtensions,
 				disabledAgentTools: msg.disabledAgentTools,
-				disabledPluginTools: (msg as { disabledPluginTools?: string[] }).disabledPluginTools,
-				disabledPlugins: msg.disabledPlugins,
 				terminalToolsEnabled: msg.terminalToolsEnabled,
 				terminalBash: msg.terminalBash,
 				terminalBashIdleMs: msg.terminalBashIdleMs,
@@ -695,18 +669,6 @@ export function handleSettingsMessage(msg: ClientMessage, cs: DispatchSession): 
 			return true;
 		case "extensions_reload":
 			void cs.reloadExtensions();
-			return true;
-		case "save_mcp_server":
-			void cs.saveMcpServer?.(msg.server, msg.prevName, msg.prevScope);
-			return true;
-		case "delete_mcp_server":
-			void cs.deleteMcpServer?.(msg.name, msg.scope);
-			return true;
-		case "toggle_mcp_server":
-			void cs.toggleMcpServer?.(msg.name, msg.scope, msg.enabled);
-			return true;
-		case "reload_mcp":
-			void cs.reloadMcp?.();
 			return true;
 		case "install_skill":
 			void cs.installSkill?.(msg.name, msg.scope, msg.content);
@@ -782,11 +744,6 @@ export function handleInteractiveResponseMessage(
 				allowAll: msg.allowAll,
 				categories: msg.categories,
 			});
-			return true;
-		case "page_response":
-			// 浏览器（page-picker 扩展经前端）对 browser_page 的回包：恢复挂起的
-			// pageCall；id 不匹配（超时后迟到/页面刷新）由 resolvePageCall 静默忽略。
-			cs.resolvePageCall?.(msg.id, msg.ok, msg.result, msg.error);
 			return true;
 		default:
 			return false;

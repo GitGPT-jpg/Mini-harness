@@ -3,10 +3,9 @@
  *
  * pi-web-ui can update itself: the top bar shows an updates badge and a panel
  * whose buttons run `npm i -g pi-web-ui@latest` in a visible terminal and
- * restart the server. The plugin market installs plugins from the network the
- * same way. On a developer's laptop both are conveniences.
+ * restart the server. On a developer's laptop that is a convenience.
  *
- * Behind a deploy pipeline they are not. A Docker image, a distribution
+ * Behind a deploy pipeline it is not. A Docker image, a distribution
  * package, or a release script that also checks the reverse proxy, the service
  * unit and the environment variables a new version needs — for all of those,
  * an in-app self-update leaves the machine in a state nothing describes, until
@@ -19,9 +18,9 @@
  * - **The server refuses, the client only hides.** Hiding a button while the
  *   socket still accepts the message is hiding, not disabling: anything that
  *   can open the WebSocket can still send it.
- * - **Nothing else changes.** Chatting, plugins already installed, git,
- *   terminal, settings are untouched — this switch is about who installs
- *   software on the machine, not about what the interface can do.
+ * - **Nothing else changes.** Chatting, git, terminal, settings are
+ *   untouched — this switch is about who installs software on the machine,
+ *   not about what the interface can do.
  */
 
 /** The client messages that install or replace software on the machine. */
@@ -34,10 +33,6 @@ export const MANAGED_MESSAGES = [
 	"install_pi_agent",
 	/** Updates an agent engine package via background process. */
 	"update_engine",
-	/** Plugin market: fetches and installs a plugin from the network. */
-	/** Plugin install/update/uninstall run as a background job (issue #152). */
-	"plugin_job",
-	/** Catalog sync can install/update entries too (issue #148). */
 ] as const;
 
 /**
@@ -62,5 +57,5 @@ export function isManaged(env: NodeJS.ProcessEnv = process.env): boolean {
 export function managedRefusal(type: string, managed: boolean): string | null {
 	if (!managed) return null;
 	if (!(MANAGED_MESSAGES as readonly string[]).includes(type)) return null;
-	return "This instance is managed: updates and plugin installs are handled by whoever deploys it (PI_WEB_MANAGED=1).";
+	return "This instance is managed: updates are handled by whoever deploys it (PI_WEB_MANAGED=1).";
 }

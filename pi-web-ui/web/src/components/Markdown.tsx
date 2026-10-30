@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { memo, useMemo, type ReactNode } from "react";
 import type { JSX } from "react";
 import ReactMarkdown from "react-markdown";
 import type { PluggableList } from "unified";
@@ -13,18 +13,7 @@ import rehypeSanitize from "rehype-sanitize";
 import "katex/dist/katex.min.css";
 import { CopyButton } from "./copy-button";
 import { splitCodeLines } from "../code-lines";
-import { childrenText, fenceLanguage } from "./mermaid";
-import {
-	getFenceRegistryVersion,
-	hasFenceRenderer,
-	hasMessageWidget,
-	loadMessageWidget,
-	subscribeFenceRegistry,
-	widgetRegistry,
-} from "../plugin-fence";
-import type { FenceRenderContext } from "../plugin-loader";
 import { isZhLocale, useLocale } from "../i18n";
-import { PluginFenceBlock } from "./PluginFenceBlock";
 import { openFilePreview } from "../file-preview-bridge";
 
 interface MarkdownProps {
@@ -169,24 +158,10 @@ function MdLink({ node: _node, href, children, ...rest }: JSX.IntrinsicElements[
 }
 
 function PreWithCopy({ children, ...props }: JSX.IntrinsicElements["pre"]) {
-	// fenced-code 渲染插件机制：有插件认领 ```lang 时交给它渲染（mermaid → SVG
-	// 等），否则回退普通代码块（高亮 + 行号）。认领表由 server 的 plugins 清单 +
-	// plugin-fence.ts 维护，插件命中才懒加载。
-	//
-	// 订阅注册表版本：attach 时历史消息快照先于 plugins 清单到达，清单一到版本
-	// 变化 → 本组件（及整条渲染树）重渲染 → 未命中的 mermaid 围栏补挂插件宿主。
-	// useSyncExternalStore 会绕过外层 memo 的 props 比较，无需穿透传参。
-	// 第三参数提供同步 getServerSnapshot（= 当前版本），使 SSR/服务端渲染（renderToStaticMarkup）
-	// 不因缺 getServerSnapshot 抛错 —— 提问对话框/预览的代码块在服务端渲染时也能正常出图。
-	useSyncExternalStore(subscribeFenceRegistry, getFenceRegistryVersion, getFenceRegistryVersion);
-	const lang = fenceLanguage(children);
-	if (lang && hasFenceRenderer(lang)) {
-		return <PluginFenceBlock lang={lang} code={childrenText(children)} />;
-	}
 	return <PlainCodeBlock children={children} {...props} />;
 }
 
-/** 普通代码块（高亮 + 行号 + 复制按钮）——无插件认领语言的默认展示。 */
+/** 普通代码块（高亮 + 行号 + 复制按钮）。 */
 function PlainCodeBlock({ children, ...props }: JSX.IntrinsicElements["pre"]) {
 	// react-markdown 传进来的是 <pre><code …>…</code></pre> 里的 code 元素；
 	// 按逻辑行切分的是它内部的 span/文本 children，而不是 code 元素本身
@@ -225,50 +200,4 @@ function codeText(children: unknown): string {
 		return codeText(props?.children);
 	}
 	return "";
-}
-
-/**
- * 自定义消息类型（UiMessage.customType）的插件渲染宿主（messageWidget 泛化，
- * 见 plugin-fence.ts 的 loadMessageWidget/hasMessageWidget）。
- *
- * 仿 PluginFenceBlock 的懒加载模式：命中类型时才动态 import 插件 bundle，
- * 平常零开销。无认领 / 加载中 / 加载失败 / renderer 返回 null 时一律回退
- * children（原文默认渲染），绝不空白。fence 逻辑一字不改。
- */
-export function PluginWidgetBlock({ type, code, children }: { type: string; code: string; children: ReactNode }) {
-	const holderRef = useRef<HTMLDivElement>(null);
-	const [el, setEl] = useState<HTMLElement | null>(null);
-	useEffect(() => {
-		let cancelled = false;
-		setEl(null);
-		if (!hasMessageWidget(type)) return;
-		void loadMessageWidget(type).then(async (renderer) => {
-			if (cancelled || !renderer) return;
-			try {
-				// 与 fence 同一套窄上下文；上行 send 暂为 no-op（fence 的 wsSend
-				// 在 plugin-fence.ts 模块内，渲染层不碰它，后续收编时再接线）。
-				const ctx: FenceRenderContext = {
-					pluginId: widgetRegistry.get(type) ?? type,
-					send: () => undefined,
-					onData: () => () => undefined,
-				};
-				const result = await renderer(code, ctx);
-				if (!cancelled && result instanceof HTMLElement) setEl(result);
-			} catch (err) {
-				console.error(`[plugin-widget:${type}] 渲染失败:`, err);
-			}
-		});
-		return () => {
-			cancelled = true;
-		};
-	}, [type, code]);
-	useEffect(() => {
-		const holder = holderRef.current;
-		if (holder) {
-			holder.replaceChildren();
-			if (el) holder.appendChild(el);
-		}
-	}, [el]);
-	if (!el) return <>{children}</>;
-	return <div className="plugin-widget" ref={holderRef} />;
 }

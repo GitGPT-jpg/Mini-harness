@@ -12,7 +12,7 @@ import { normalizePathKey } from "./client-state.js";
 /**
  * 浏览器重启认领（orphan adoption）的候选快照 —— 纯数据，决策逻辑见
  * pickAdoptableOrphan（纯函数，可单测）。live = 还有浏览器连着（sinkCount>0）；
- * pseudo = 插件/调度伪客户端（sink 常驻，不能按浏览器存活判断，永远不参与认领）。
+ * pseudo = 调度伪客户端（sink 常驻，不能按浏览器存活判断，永远不参与认领）。
  */
 export interface OrphanCandidate {
 	id: string;

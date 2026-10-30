@@ -128,19 +128,15 @@ const rows = () =>
 		return Math.round((el.scrollHeight - pad) / lh);
 	});
 
-/** 把一段文本塞进输入框（走宿主 compose 桥：React 状态更新，不逐字敲键盘）。光标落在末尾。 */
+/** 把一段文本塞进输入框：Playwright `fill` 整段替换（一次 input 事件 → React onChange →
+ *  setText，同时退出历史导航；不逐字敲键盘），等受控值提交后再把光标显式放到文末。 */
 const setDraft = async (text) => {
-	await ta.fill("");
-	// fill("") 到 React 提交之间有一帧空窗，这期间 compose 会按「追加」合并 → 等到真清空再注入。
-	await page.waitForFunction(() => document.querySelector(".inputbox textarea")?.value === "", null, {
-		timeout: 3000,
-	});
-	const ok = await page.evaluate((t) => globalThis.__piWebUiHost.compose({ text: t }), text);
-	if (!ok) throw new Error("compose 注入失败");
+	await ta.fill(text);
 	await page.waitForFunction((t) => document.querySelector(".inputbox textarea")?.value === t, text, {
 		timeout: 3000,
 	});
-	await page.waitForTimeout(120); // 光标由 setText 之后的 rAF 设置
+	await ta.evaluate((el) => el.setSelectionRange(el.value.length, el.value.length));
+	await page.waitForTimeout(120); // 让 React 提交后的 effect / rAF 跑完，再开始按键
 };
 
 // ── 1) 折行草稿里 ↑ 只移动光标 ────────────────────────────────────────────────
@@ -150,6 +146,11 @@ check("草稿确实自动折行（≥3 个视觉行）", draftRows >= 3, `rows=$
 
 const before = await caret();
 check("草稿里没有换行符（问题场景）", !LONG.includes("\n") && before.value === LONG);
+check(
+	"注入后光标在文末、无选区（逐行上移的计数以末视觉行为起点）",
+	before.start === LONG.length && before.end === LONG.length,
+	`start=${before.start} end=${before.end} len=${LONG.length}`,
+);
 
 await ta.press("ArrowUp");
 let after = await caret();
@@ -194,10 +195,12 @@ after = await caret();
 check("↓ 从历史切回未发送的草稿", after.value === LONG, JSON.stringify(after.value.slice(0, 12)));
 
 // ── 4) 真实换行的多行草稿：首行边界行为与改动前一致 ──────────────────────────
+// 「到文首」的系统快捷键：macOS 是 ⌘↑（Ctrl+Home 在 mac 的 Chrome 里不移动光标），其余平台 Ctrl+Home。
+const DOC_START_KEY = process.platform === "darwin" ? "Meta+ArrowUp" : "Control+Home";
 await setDraft("第一行\n第二行");
-await ta.press("Control+Home");
+await ta.press(DOC_START_KEY);
 after = await caret();
-check("Ctrl+Home 把光标放到文首", after.start === 0, `start=${after.start}`);
+check(`${DOC_START_KEY} 把光标放到文首`, after.start === 0, `start=${after.start}`);
 await ta.press("ArrowUp");
 after = await caret();
 check("换行草稿的光标在首行时 ↑ 仍然切历史（老行为不变）", after.value === OLDER[1], JSON.stringify(after.value));

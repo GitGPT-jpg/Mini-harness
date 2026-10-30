@@ -24,7 +24,6 @@ const costEntry: UiSlotEntry = {
 	align: "start",
 	hidden: false,
 	userOverrides: [],
-	arrangedBy: [],
 };
 
 const chatStub = {

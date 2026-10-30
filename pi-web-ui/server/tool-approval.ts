@@ -56,7 +56,7 @@ export function isApprovalPolicyEmpty(policy: ApprovalPolicy | undefined): boole
 
 /**
  * 三档放行的纯判定：返回 null = 需要弹审批，否则返回放行的原因。
- * - `disabled`：全局开关关（设置 →「工具」页）→ 一切审批都不弹（插件显式 ask 也放行）；
+ * - `disabled`：全局开关关（设置 →「工具」页）→ 一切审批都不弹；
  * - `allow-all`：本对话已「全部允许」；
  * - `category`：本对话已记住该同类档位。
  */
@@ -70,15 +70,6 @@ export function approvalSuppressionReason(
 	if (policy.allowAll) return "allow-all";
 	if (categoryId && policy.categories.has(categoryId)) return "category";
 	return null;
-}
-
-/** 插件显式要求确认（pre guard 的 ask）对应的档位：按插件 id 分档，可「允许同类」。 */
-export function pluginApprovalCategory(pluginId: string): UiApprovalCategory {
-	return {
-		id: `plugin:${pluginId}`,
-		label: `插件 ${pluginId} 要求确认`,
-		labelEn: `Plugin ${pluginId} requested confirmation`,
-	};
 }
 
 /** 审批解决结果。 */

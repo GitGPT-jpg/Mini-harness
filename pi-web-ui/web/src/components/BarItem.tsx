@@ -25,18 +25,15 @@ import type { ChatState } from "../use-chat";
 import { useFormattedCost } from "../cost-format";
 import { isZhLocale, useT, useI18n, type Translate } from "../i18n";
 import { useAppGlobals, appSend } from "../app-globals";
-import { PluginIcon } from "../plugin-icon";
 import { focusComposer } from "../composer-bridge";
 import { openContextMenu } from "../context-menu-state";
 import { cacheMetrics, estimateStreamTokens, streamRate, trimRateSamples, type RateSample } from "../cache-stats";
 import { Dropdown, DropdownItem } from "./Dropdown";
-import { BrowserControl } from "./BrowserControl";
-import { BROWSER_PAGE_TOOL_NAME } from "../../../server/tool-manager.js";
 import { appUrl } from "../base-url";
 import { openTaskDesk } from "../loop-cockpit";
 import { ClusterStatusItem } from "./ClusterControls";
 
-export type ViewName = "chat" | "terminal" | `plugin:${string}`;
+export type ViewName = "chat" | "terminal";
 
 /** Loop 耗时：1m05s / 1h03m（active 时随秒级 tick 刷新）。 */
 export function formatLoopElapsed(ms: number): string {
@@ -80,7 +77,6 @@ export interface BarItemProps {
 	bar: "top" | "bottom" | "left" | "right";
 	chat: ChatState;
 	view?: ViewName;
-	plugins?: { id: string; name?: string; error?: string; icon?: string; iconSvg?: string }[];
 	onViewChange?: (view: ViewName) => void;
 	onOpenPanel?: (side: "left" | "right") => void;
 	onOpenSettings?: (initialSection?: string) => void;
@@ -136,7 +132,6 @@ export function BarItem({
 	bar,
 	chat,
 	view,
-	plugins,
 	onViewChange,
 	onOpenPanel,
 	onOpenSettings,
@@ -234,7 +229,6 @@ export function BarItem({
 				align: "start",
 				hidden: false,
 				userOverrides: [],
-				arrangedBy: [],
 			});
 		}
 		if (bar !== "bottom") {
@@ -248,7 +242,6 @@ export function BarItem({
 				align: "start",
 				hidden: false,
 				userOverrides: [],
-				arrangedBy: [],
 			});
 		}
 		if (bar !== "left") {
@@ -262,7 +255,6 @@ export function BarItem({
 				align: "start",
 				hidden: false,
 				userOverrides: [],
-				arrangedBy: [],
 			});
 		}
 		if (bar !== "right") {
@@ -276,7 +268,6 @@ export function BarItem({
 				align: "start",
 				hidden: false,
 				userOverrides: [],
-				arrangedBy: [],
 			});
 		}
 		if (!REQUIRED_TOPBAR_ITEM_IDS.has(entry.id)) {
@@ -290,7 +281,6 @@ export function BarItem({
 				align: "start",
 				hidden: false,
 				userOverrides: [],
-				arrangedBy: [],
 			});
 		}
 		const hasOverrides =
@@ -312,7 +302,6 @@ export function BarItem({
 				align: "start",
 				hidden: false,
 				userOverrides: [],
-				arrangedBy: [],
 			});
 		}
 		if (uiContextEntries && uiContextEntries.length > 0) {
@@ -337,7 +326,7 @@ export function BarItem({
 	};
 
 	const id = entry.id;
-	/** 显式文案（用户布局页改名 / 插件 arrange 改名，见 UiSlotEntry.labelExplicit）。内置条目一直画
+	/** 显式文案（用户布局页改名，见 UiSlotEntry.labelExplicit）。内置条目一直画
 	 *  的是自己写死的 i18n 文案与实时数值，所以只有文案被显式指定时才让位 —— 不然布局页的改名
 	 *  框就是「假承诺」：改了没人理（issue #555）。没置旗时渲染结果与旧版逐字节一致。 */
 	const custom = entry.labelExplicit ? entry.label : "";
@@ -646,16 +635,6 @@ export function BarItem({
 		);
 	}
 
-	// 浏览器控制条目
-	if (id === "host:browser") {
-		if (chat.settings?.disabledAgentTools?.includes(BROWSER_PAGE_TOOL_NAME)) return null;
-		return (
-			<span className="bar-item-wrap" onContextMenu={handleContextMenu} data-bar-item={id}>
-				<BrowserControl />
-			</span>
-		);
-	}
-
 	// 9. 下拉面板类条目
 	const dropdownDirection: "down" | "up" | "left" | "right" =
 		bar === "bottom" ? "up" : bar === "left" ? "right" : bar === "right" ? "left" : "down";
@@ -847,7 +826,6 @@ export function BarItem({
 	let isActive = false;
 	let isTab = false;
 	let extraClasses = "";
-	let tipOverride: string | undefined = undefined;
 	let onClick: ((e: ReactMouseEvent<HTMLButtonElement>) => void) | undefined = undefined;
 	let onDoubleClick: ((e: ReactMouseEvent<HTMLButtonElement>) => void) | undefined = undefined;
 
@@ -966,46 +944,20 @@ export function BarItem({
 			labelText = withName(chat.statuses.map((st) => st.text).join(" · "));
 			extraClasses = "status-item ext-status";
 			break;
-		default:
-			// 插件视图（kind === "view"）或常规插件 action
-			if (entry.kind === "view") {
-				const target = entry.view ?? "";
-				isActive = view === target;
-				isTab = true;
-				const pluginList = plugins ?? chat.plugins ?? [];
-				const meta = pluginList.find((p) => `plugin:${p.id}` === entry.source);
-				const isBroken = Boolean(meta?.error);
-				extraClasses = `plugin-tab${isBroken ? " broken" : ""}`;
-				if (meta?.error) {
-					tipOverride = `${entry.label}: ${meta.error}`;
-				}
-				// 优先展示插件定义的线性矢量 SVG 图标（iconSvg），无 SVG 时才回退到 emoji（icon）
-				const svg = entry.iconSvg || meta?.iconSvg;
-				const glyph = entry.icon || meta?.icon;
-				iconNode = svg ? (
-					<PluginIcon icon={glyph} iconSvg={svg} className="bar-item-icon plugin-icon-svg" />
-				) : glyph ? (
-					<span className="bar-item-icon bar-item-glyph">{glyph}</span>
-				) : null;
-				onClick = () => onViewChange?.(target as ViewName);
-			} else {
-				const svg = entry.iconSvg;
-				const glyph = entry.icon;
-				extraClasses = bar === "bottom" ? "status-item status-action chip" : "chip";
-				iconNode = svg ? (
-					<PluginIcon icon={glyph} iconSvg={svg} className="bar-item-icon plugin-icon-svg" />
-				) : glyph ? (
-					<span className="bar-item-icon bar-item-glyph">{glyph}</span>
-				) : null;
-				if (entry.badge) {
-					badgeNode = <span className="bar-item-badge">{entry.badge}</span>;
-				}
-				onClick = () => onUiAction?.(entry);
+		default: {
+			// 其余条目：通用按钮（点击交回 onUiAction，由 App 分派）。
+			const glyph = entry.icon;
+			extraClasses = bar === "bottom" ? "status-item status-action chip" : "chip";
+			iconNode = glyph ? <span className="bar-item-icon bar-item-glyph">{glyph}</span> : null;
+			if (entry.badge) {
+				badgeNode = <span className="bar-item-badge">{entry.badge}</span>;
 			}
+			onClick = () => onUiAction?.(entry);
 			break;
+		}
 	}
 
-	const tip = tipOverride ?? entry.hint ?? labelText;
+	const tip = entry.hint ?? labelText;
 	const tabClass = isTab ? `tb-tab${isActive ? " active" : ""}` : "";
 	const combinedClass = ["bar-item", tabClass, extraClasses, isActive && !isTab ? "active" : ""]
 		.filter(Boolean)

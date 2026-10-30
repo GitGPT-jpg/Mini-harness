@@ -31,32 +31,12 @@ import { DshQuestionDialog } from "./components/DshQuestionDialog";
 import { presetText } from "./components/DshPresetBar";
 // 终端视图懒加载：xterm.js 体积大且只在切到终端时才需要，拆出主包
 const TerminalPanel = lazy(() => import("./components/TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
-import { PluginView } from "./components/PluginView";
-import { PluginViewFallback } from "./components/PluginViewFallback";
-import {
-	createPluginHostApi,
-	emitPluginHostLocale,
-	emitPluginHostTheme,
-	emitPluginHostView,
-	emitPluginHostModel,
-	installPluginHostApi,
-	triggerPluginUiAction,
-} from "./plugin-host";
-import {
-	buildUiSlots,
-	withPluginViewItems,
-	HIDDEN_FROM_LAYOUT_ITEM_IDS,
-	type UiDiagnostic,
-	type UiSlotEntry,
-} from "./ui-slots";
+import { buildUiSlots, HIDDEN_FROM_LAYOUT_ITEM_IDS, type UiDiagnostic, type UiSlotEntry } from "./ui-slots";
 import { renderSlotToolbar } from "./slot-toolbar";
 import { ContextMenu } from "./components/ContextMenu";
-import { openContextMenu } from "./context-menu-state";
-import { isExtractableArchive } from "./file-transfer";
 import { BannerContainer } from "./components/BannerContainer";
 import { IconEditor } from "./components/IconEditor";
 import { showBanner, dismissBanner, dismissBannersWhere } from "./banner-notice";
-import { ensurePluginViewLoaded } from "./plugin-loader";
 import {
 	registerAttachmentSink,
 	insertTextAtCursor,
@@ -66,22 +46,11 @@ import {
 import { appendDraftAttachments } from "./composer-draft";
 import { useComposerSessionReset } from "./use-composer-session";
 import { splitQuotedPrompt } from "../../server/text-quote.js";
-import {
-	syncPluginViews,
-	subscribeLoadedPluginViews,
-	subscribePluginLoadFailed,
-	type LoadedPluginView,
-} from "./plugin-loader";
-import { setFenceSend, syncFenceRenderers, syncMessageWidgets } from "./plugin-fence";
-import { findFileHandler, syncFileHandlers, type FileHandlerPlugin } from "./plugin-file-handlers";
 import { PiSetupModal } from "./components/PiSetupModal";
 import { ModelConfigModal } from "./components/ModelConfigModal";
-import { DirectoryBrowser } from "./components/DirectoryBrowser";
-import { ModelPickerModal } from "./components/ModelPickerModal";
 
 import { SettingsModal, type SettingsTab } from "./components/SettingsModal";
 import { BgTasksModal } from "./components/BgTasksModal";
-import { PluginPage } from "./components/PluginPage";
 import { RollbackDialog } from "./components/RollbackDialog";
 import { openRollbackDialog } from "./rollback-state";
 import { ToolApprovalDialog } from "./components/ToolApprovalDialog";
@@ -91,14 +60,12 @@ import { TuiOverlayModal } from "./components/TuiOverlayModal";
 import { ToolInfoDialog } from "./components/ToolInfoDialog";
 import { ToolInspectorModal } from "./components/ToolInspectorModal";
 import { GlobalSearchModal } from "./components/GlobalSearchModal";
-import { PluginModal } from "./components/PluginModal";
 import { TemplateProvider } from "./components/PromptTemplates";
 import { FilePreview, type PreviewFile } from "./components/FilePreview";
-import { PluginFilePreview } from "./components/PluginFilePreview";
 import { useChat } from "./use-chat";
 import { useSwipeDrawer } from "./use-swipe-drawer";
 import { appUrl } from "./base-url";
-import type { ClientMessage, CommandDef, PromptAttachment, UiMessage } from "./types";
+import type { ClientMessage, PromptAttachment, UiMessage } from "./types";
 import { isZhLocale, useT, useI18n } from "./i18n";
 import { QUICK_PHRASE_DEFAULTS } from "./quick-phrases";
 import {
@@ -132,14 +99,12 @@ import { useWallpaperEffect } from "./wallpaper";
 export interface PendingAttachment {
 	path: string;
 	name: string;
-	/** "page" = 已授权给 AI 的网页（page-picker 扩展）：path 是页面 origin，
-	 *  name 是页面标题，不会被当工作区路径处理。
-	 *  "conversation" = 引用的另一个对话：path 不用，引用走 conversationId
+	/** "conversation" = 引用的另一个对话：path 不用，引用走 conversationId
 	 *  （运行中，含子代理）或 sessionPath（历史转录），AI 经 conversation_read 读取。
 	 *  "reference"/"lines" = 工作区路径引用（文件内容不进 prompt）。
 	 *  "inline" = 旧版「全文注入」的遗留值（服务端按 reference 处理）；粘贴图片 /
 	 *  上传文件没有 mode（path 为空，模式对它们无意义）。 */
-	mode?: "inline" | "reference" | "lines" | "page" | "conversation" | "quote";
+	mode?: "inline" | "reference" | "lines" | "conversation" | "quote";
 	quote?: import("./types").TextQuote;
 	/** mode "conversation" + 引用运行中对话的 id（如 "c3"）。 */
 	conversationId?: string;
@@ -281,57 +246,8 @@ function PanelRail({ side, onClick }: { side: PanelSide; onClick: () => void }) 
 	);
 }
 
-/** 顶栏视图：内置三个 + 每个已装插件一个 `plugin:<id>`。 */
-type ViewName = "chat" | "terminal" | `plugin:${string}`;
-
-/**
- * 插件项目会话的目录授权（issue #146）：插件经 host.openSession 打开一个新目录的会话前，
- * 宿主必须先让用户点头；确认过的目录记在这里（localStorage，按浏览器），下次不再问。
- * 已在「最近项目」里的目录视为用户自己用过的，也不问。
- *
- * 键按插件隔离：旧版所有插件共用一个全局键，A 插件拿到的授权对 B 插件天然生效（一次
- * 确认全网通行）。带 pluginId 的读写走 `pi-web-ui:plugin-path-grants:<pluginId>`；
- * 该插件首读且只有旧全局键时，把旧记录**迁移**到它名下（保住升级前「确认过不再问」的
- * 体验，之后各插件的授权各自演化）；宿主桥归因不了调用方时回退旧全局键（见
- * plugin-host.ts 的 pluginApiCaller）。
- */
-const PLUGIN_PATH_GRANTS_KEY = "pi-web-ui:plugin-path-grants";
-const pluginPathGrantsKey = (pluginId?: string) =>
-	pluginId ? `${PLUGIN_PATH_GRANTS_KEY}:${pluginId}` : PLUGIN_PATH_GRANTS_KEY;
-
-function parseGrants(raw: string | null): string[] {
-	if (raw === null) return [];
-	try {
-		const arr = JSON.parse(raw) as unknown;
-		return Array.isArray(arr) ? arr.filter((x): x is string => typeof x === "string") : [];
-	} catch {
-		return [];
-	}
-}
-
-function readPluginPathGrants(pluginId?: string): string[] {
-	try {
-		const key = pluginPathGrantsKey(pluginId);
-		if (localStorage.getItem(key) !== null) return parseGrants(localStorage.getItem(key));
-		if (!pluginId) return [];
-		// 迁移：该插件还没有自己的授权记录时，接管旧全局键（升级前所有插件共用），
-		// 用户在旧版确认过的目录不因升级重新弹框。
-		const grants = parseGrants(localStorage.getItem(PLUGIN_PATH_GRANTS_KEY));
-		localStorage.setItem(key, JSON.stringify(grants));
-		return grants;
-	} catch {
-		return [];
-	}
-}
-
-function addPluginPathGrant(path: string, pluginId?: string): void {
-	try {
-		const next = [...new Set([...readPluginPathGrants(pluginId), path])];
-		localStorage.setItem(pluginPathGrantsKey(pluginId), JSON.stringify(next));
-	} catch {
-		/* 隐私模式等：授权只在本次会话内有效 */
-	}
-}
+/** 顶栏视图：对话 / 终端。 */
+type ViewName = "chat" | "terminal";
 
 export function App() {
 	const t = useT();
@@ -363,41 +279,27 @@ export function App() {
 		document.title = name ? `${name} — 训推引擎组 Harness` : t("docTitle");
 	}, [cwd, projectTitle, t]);
 	const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
-	// 宿主注入的待发附件（浏览器元素拾取扩展的截图 → window.__piWebUiHost.compose）：
+	// 宿主注入的待发附件（composeToComposer：对话引用等）：
 	// 只追加不覆盖，判重口径与下面的 attach() 一致（见 composer-draft.ts）。
 	useEffect(() => {
 		registerAttachmentSink((items) => setAttachments((prev) => appendDraftAttachments(prev, items)));
 		return () => registerAttachmentSink(null);
 	}, []);
 	const [previewFile, setPreviewFile] = useState<PreviewFile | null>(null);
-	const [pluginFile, setPluginFile] = useState<{
-		file: PreviewFile;
-		plugin: FileHandlerPlugin;
-		declaration: import("./plugin-file-handlers").FileHandlerDeclaration;
-	} | null>(null);
 	// 文件预览桥（present_files 卡片 → 预览弹窗）：弹窗的开关状态在本组件，
 	// 而调用方在消息流最深处的工具卡片，中间隔好几层。同 composer-bridge 的做法，
 	// 只走一个模块级 sink；ref 给 isOpen 用，避免 effect 依赖 previewFile 而反复重注册。
 	const previewOpenRef = useRef(false);
-	const pluginFileOpenRef = useRef<typeof pluginFile>(null);
 	useEffect(() => {
 		previewOpenRef.current = previewFile !== null;
-		pluginFileOpenRef.current = pluginFile;
-	}, [previewFile, pluginFile]);
+	}, [previewFile]);
 	const openFile = useCallback((path: string, name: string) => {
-		const entry = findFileHandler(name);
-		if (entry) {
-			setPreviewFile(null);
-			setPluginFile({ file: { path, name }, plugin: entry.plugin, declaration: entry.declaration });
-			return;
-		}
-		setPluginFile(null);
 		setPreviewFile({ path, name });
 	}, []);
 	useEffect(() => {
 		registerFilePreviewHost({
 			open: (f) => openFile(f.path, f.name),
-			isOpen: () => previewOpenRef.current || pluginFileOpenRef.current !== null,
+			isOpen: () => previewOpenRef.current,
 		});
 		return () => registerFilePreviewHost(null);
 	}, [openFile]);
@@ -415,45 +317,33 @@ export function App() {
 	}, []);
 	const [viewChosen, setView] = useState<ViewName>("chat");
 	/* PI_WEB_TABS: a tab this instance does not offer cannot be shown, even if
-	   something else asks for it — a plugin firing pi-web-ui:plugin-run-command,
-	   or a panel's "open this in a terminal" button. The server refuses those
-	   messages anyway, so the pane would sit there empty. No list means every
-	   tab, which is the default. */
+	   something else asks for it — a panel's "open this in a terminal" button.
+	   The server refuses those messages anyway, so the pane would sit there
+	   empty. No list means every tab, which is the default. */
 	const tabOn = (tab: string) => !chat.tabs || tab === "chat" || chat.tabs.includes(tab);
-	const viewTab = viewChosen.startsWith("plugin:") ? "plugins" : viewChosen;
-	const view: ViewName = tabOn(viewTab) ? viewChosen : "chat";
-	// 已安装且未在设置面板禁用的插件（决定 tab 与视图加载）。
-	const enabledPlugins = useMemo(
-		() => chat.plugins.filter((p) => !chat.settings?.disabledPlugins?.includes(p.id)),
-		[chat.plugins, chat.settings?.disabledPlugins],
-	);
-	// 插件贡献的顶栏条目（issue #146）：插件只声明，宿主渲染/排序/溢出；用户可在设置
-	// 面板隐藏或调序（偏好 per-client 持久化）。顺序与设置面板里看到的一致。
-	// 宿主 UI 扩展点全量计算（issue #146 完整版）：内置条目 + 插件贡献 + 插件 arrange
-	// + 用户偏好（最高优先级）→ 每个 slot 的最终条目。渲染层只负责摆位置。
+	const view: ViewName = tabOn(viewChosen) ? viewChosen : "chat";
+	// 宿主 UI 扩展点全量计算（issue #146）：内置条目 + 用户偏好（最高优先级）→ 每个 slot 的
+	// 最终条目。渲染层只负责摆位置；顺序与设置面板里看到的一致。
 	const [uiSlots, uiDiagnostics] = useMemo(() => {
-		// 合并诊断（P0-1：失败不许静默）：未知 slot / 未知 kind / arrange 目标不存在 /
-		// 插件被禁用或激活失败 → 带归因的 diagnostics，
+		// 合并诊断（P0-1：失败不许静默）：被纠正的偏好 / 槽位冲突 → 带归因的 diagnostics，
 		// 设置面板「界面布局」页展示给用户，控制台按级别分流输出（避免无意义的黄色警告与重复刷屏）。
 		const diagnostics: UiDiagnostic[] = [];
-		const slots = buildUiSlots(withPluginViewItems(chat.plugins), {
-			locale,
+		const slots = buildUiSlots({
 			// Translate 的 key 是字面量联合类型，ui-slots 收的是 (key: string) => string
 			t: (key: string) => t(key as Parameters<typeof t>[0]),
-			disabledPlugins: chat.settings?.disabledPlugins ?? [],
 			layout: chat.settings?.uiLayout,
 			diagnostics,
 		});
 		return [slots, diagnostics] as const;
-	}, [chat.plugins, chat.settings?.disabledPlugins, chat.settings?.uiLayout, locale, t]);
+	}, [chat.settings?.uiLayout, t]);
 
 	const lastUiDiagFingerprintRef = useRef("");
 	useEffect(() => {
-		const fp = uiDiagnostics.map((d) => `${d.level}:${d.pluginId ?? ""}:${d.entryId ?? ""}:${d.message}`).join("\n");
+		const fp = uiDiagnostics.map((d) => `${d.level}:${d.entryId ?? ""}:${d.message}`).join("\n");
 		if (fp === lastUiDiagFingerprintRef.current) return;
 		lastUiDiagFingerprintRef.current = fp;
 		for (const d of uiDiagnostics) {
-			const prefix = `[ui-slot] ${d.pluginId ? `[${d.pluginId}] ` : ""}`;
+			const prefix = "[ui-slot] ";
 			if (d.level === "error") {
 				console.error(`${prefix}${d.message}`);
 			} else if (d.level === "warn") {
@@ -464,7 +354,7 @@ export function App() {
 		}
 	}, [uiDiagnostics]);
 	// 顶栏：主栏 = 非 hidden 的 topbar.primary；溢出 = hidden 的 primary + topbar.overflow。
-	// 这样插件把宿主条目 hide 掉之后，它仍在溢出菜单/布局页里找得回来（锁不死用户）。
+	// 这样被隐藏的条目仍在溢出菜单/布局页里找得回来（锁不死用户）。
 	const uiPrimary = useMemo(() => uiSlots["topbar.primary"].filter((e) => !e.hidden), [uiSlots]);
 	const uiOverflow = useMemo(
 		() => [...uiSlots["topbar.primary"].filter((e) => e.hidden), ...uiSlots["topbar.overflow"]],
@@ -486,7 +376,7 @@ export function App() {
 	const uiLeftHistory = useMemo(() => uiSlots["leftpanel.history"].filter((e) => !e.hidden), [uiSlots]);
 	const uiTerminalToolbar = useMemo(() => uiSlots["terminal.toolbar"].filter((e) => !e.hidden), [uiSlots]);
 	const uiGoalbarActions = useMemo(() => uiSlots["goalbar.actions"].filter((e) => !e.hidden), [uiSlots]);
-	// P0 幽灵槽位接线：纯插件新增位，无条目时各渲染层返回 null，DOM 与旧版一致。
+	// P0 幽灵槽位接线：无宿主内置条目，无条目时各渲染层返回 null，DOM 与旧版一致。
 	const uiChatHeader = useMemo(() => uiSlots["chat.header"].filter((e) => !e.hidden), [uiSlots]);
 	const uiChatEmpty = useMemo(() => uiSlots["chat.empty"].filter((e) => !e.hidden), [uiSlots]);
 	const uiFilePreviewToolbar = useMemo(() => uiSlots["file.preview.toolbar"].filter((e) => !e.hidden), [uiSlots]);
@@ -501,11 +391,10 @@ export function App() {
 	const uiNoticeActions = useMemo(() => uiSlots["notice.actions"].filter((e) => !e.hidden), [uiSlots]);
 	const uiSidebarLeft = useMemo(() => uiSlots["sidebar.left"] ?? [], [uiSlots]);
 	const uiSidebarRight = useMemo(() => uiSlots["sidebar.right"] ?? [], [uiSlots]);
-	/** 点一个插件顶栏条目：缺省 action（或 "view"）由宿主切成插件视图；其余交给插件
-	 *  （按需加载它的客户端 bundle；没人接管就提示一句，不让按钮看起来"点了没用"）。
-	 *  kind="select" 的渲染层把选中的 value 经第二个参数传进来，转给插件 handler。 */
+	/** 点一个槽位条目：消息右键菜单的分叉 / 回滚，与 kind="view" 的视图切换由宿主处理；
+	 *  其余宿主条目由各自的渲染层就地实现，不经过这里。 */
 	const onUiAction = useCallback(
-		(item: UiSlotEntry, value?: string, target?: { id: string; kind?: string; label?: string }) => {
+		(item: UiSlotEntry, _value?: string, target?: { id: string; kind?: string; label?: string }) => {
 			if (item.id === "host:msg-fork") {
 				if (target?.id) {
 					send({ type: "fork_session", messageId: target.id, position: "before" });
@@ -518,377 +407,13 @@ export function App() {
 				}
 				return;
 			}
-			const action = (item.action ?? "").trim();
-			// kind="view"（或缺省 action）：宿主自己切视图。
-			if (item.kind === "view" || ((!action || action === "view") && item.source !== "host")) {
-				setView((item.view ?? `plugin:${item.source.startsWith("plugin:") ? item.source.slice(7) : ""}`) as ViewName);
-				return;
+			// kind="view"：宿主自己切视图。
+			if (item.kind === "view" && (item.view === "chat" || item.view === "terminal")) {
+				setView(item.view);
 			}
-			if (!action) return;
-			const pluginId = item.source.startsWith("plugin:") ? item.source.slice(7) : "";
-			void triggerPluginUiAction(pluginId, action, item.id, {
-				...(value !== undefined ? { value } : {}),
-				...(target !== undefined ? { target } : {}),
-				loadBundle: async (pid) => {
-					const info = chatRefForPlugins.current.plugins.find((x) => x.id === pid);
-					if (!info) return false;
-					return ensurePluginViewLoaded(info, chatRefForPlugins.current.pluginsEpoch);
-				},
-			}).then((handled) => {
-				if (!handled) pushNotice("info", t("pluginUiNoHandler"));
-			});
 		},
-		[t, pushNotice],
+		[send],
 	);
-	/** P4：左栏插件自定义分区的正文：由 PluginPage 挂插件 bundle（与后台任务面板同口径）。
-	 *  插件不存在 / 无客户端脚本时返回 null（PluginPage 自己会给出明确占位）。 */
-	const renderLeftPluginSectionBody = useCallback(
-		(entry: UiSlotEntry) => {
-			const plugin = chat.plugins.find((p) => p.id === entry.source.slice("plugin:".length));
-			if (!plugin) return null;
-			return <PluginPage plugin={plugin} epoch={chat.pluginsEpoch} send={send} className="lp-plugin-page" />;
-		},
-		[chat.plugins, chat.pluginsEpoch, send],
-	);
-	/** P3：点左栏「运行的对话」里的插件运行条目 → 交给贡献它的插件 bundle（与 onUiAction 同通道；
-	 *  target 带条目 id/标题，kind="plugin-running"）。没有 action 的条目点击无效果。 */
-	const onPluginRunningAction = useCallback(
-		(group: { pluginId: string }, item: { id: string; title: string; action?: string }) => {
-			if (!item.action) return;
-			void triggerPluginUiAction(group.pluginId, item.action, item.id, {
-				target: { id: item.id, kind: "plugin-running", label: item.title },
-				loadBundle: async (pid) => {
-					const info = chatRefForPlugins.current.plugins.find((x) => x.id === pid);
-					if (!info) return false;
-					return ensurePluginViewLoaded(info, chatRefForPlugins.current.pluginsEpoch);
-				},
-			}).then((handled) => {
-				if (!handled) pushNotice("info", t("pluginUiNoHandler"));
-			});
-		},
-		[t, pushNotice],
-	);
-	// 已加载的插件视图（bundle 动态 import 完成后出现）。
-	const [pluginViews, setPluginViews] = useState<LoadedPluginView[]>([]);
-	useEffect(() => subscribeLoadedPluginViews(setPluginViews), []);
-	// issue #225：加载失败的插件视图 id —— 当前视图是没加载出来的插件时给明确占位，不再静默空白。
-	const [failedPluginViews, setFailedPluginViews] = useState<string[]>([]);
-	useEffect(() => subscribePluginLoadFailed(setFailedPluginViews), []);
-	/** 插件弹窗（modal.dialog 槽位）：打开中的条目全局 id，同一时刻只开一个。
-	 *  条目被隐藏/卸载后 openModalEntry 即 undefined，弹窗自动消失。 */
-	const [openModalId, setOpenModalId] = useState<string | null>(null);
-	/** 供插件调起的系统级目录选择弹窗。 */
-	const [pluginDirPicker, setPluginDirPicker] = useState<{
-		initialPath?: string;
-		resolve: (res: { ok: boolean; path?: string; canceled?: boolean }) => void;
-	} | null>(null);
-	/** 供插件调起的系统级模型选择弹窗。 */
-	const [pluginModelPicker, setPluginModelPicker] = useState<{
-		currentModelId?: string | null;
-		resolve: (res: { ok: boolean; modelId?: string; name?: string; provider?: string; canceled?: boolean }) => void;
-	} | null>(null);
-	/** 当前打开的弹窗条目：id 对不上 / 被隐藏后即 undefined，弹窗自动消失。 */
-	const openModalEntry = openModalId
-		? uiSlots["modal.dialog"].find((e) => e.id === openModalId && !e.hidden)
-		: undefined;
-	/** 弹窗条目归属的插件 id（view 显式指定优先，否则取贡献方）。 */
-	const openModalPluginId = useMemo(() => {
-		if (!openModalEntry || openModalEntry.kind !== "view") return "";
-		const view = openModalEntry.view ?? "";
-		if (view.startsWith("plugin:")) return view.slice("plugin:".length);
-		if (openModalEntry.source.startsWith("plugin:")) return openModalEntry.source.slice("plugin:".length);
-		return "";
-	}, [openModalEntry]);
-	// 弹窗里的 kind="view"：复用顶栏动作的按需加载（bundle 没进来先拉，好了重渲染即挂上）。
-	useEffect(() => {
-		if (!openModalEntry || !openModalPluginId) return;
-		if (pluginViews.some((v) => v.info.id === openModalPluginId)) return;
-		const info = chatRefForPlugins.current.plugins.find((x) => x.id === openModalPluginId);
-		if (!info) return;
-		void ensurePluginViewLoaded(info, chatRefForPlugins.current.pluginsEpoch);
-	}, [openModalEntry, openModalPluginId, pluginViews, chat.pluginsEpoch]);
-	// 目录清单/禁用集合/epoch 变化 → 同步注册表：新增的拉取、消失的清理
-	// （React 卸载对应 PluginView 时调用插件的 cleanup）、服务端 reload 后重拉。
-	// fenced-code 渲染插件：注入底层 send + 同步「语言→插件」注册表（renderer
-	// 插件是命中了才懒加载，见 plugin-fence.ts / PluginFenceBlock.tsx）。
-	useEffect(() => {
-		setFenceSend(send);
-		syncFenceRenderers(enabledPlugins, chat.pluginsEpoch);
-		syncMessageWidgets(enabledPlugins, chat.pluginsEpoch);
-		syncFileHandlers(enabledPlugins, chat.pluginsEpoch);
-		void syncPluginViews(enabledPlugins, chat.pluginsEpoch);
-	}, [enabledPlugins, chat.pluginsEpoch, send]);
-	// 插件宿主动作桥（window.__piWebUiHost）：插件 client bundle 拿不到 React 实例，
-	// 需要「切视图 / 新建对话 + 自动发一段话」这类动作时走它（见 plugin-host.ts）。
-	// deps 读的是 ref（挂载时装一次，不能把每次渲染的闭包困在里面）。
-	const chatRefForPlugins = useRef(chat);
-	chatRefForPlugins.current = chat;
-	const setViewRefForPlugins = useRef(setView);
-	setViewRefForPlugins.current = setView;
-	// modal.dialog 的 openModal 校验要读最新合并结果（bridge deps 只装一次，走 ref）。
-	const uiSlotsRef = useRef(uiSlots);
-	uiSlotsRef.current = uiSlots;
-	useEffect(() => {
-		installPluginHostApi(
-			createPluginHostApi({
-				send,
-				isReady: () => Boolean(chatRefForPlugins.current.state),
-				setView: (v) => setViewRefForPlugins.current(v as ViewName),
-				getCwd: () => chatRefForPlugins.current.state?.cwd ?? "",
-				getWorkspaceRoots: () => chatRefForPlugins.current.state?.workspaceRoots ?? [],
-				// host.sessions.list：只报「本会话现在能打开的东西」——运行中的对话 + 当前项目的历史会话。
-				// 历史会话的 cwd 就是当前 cwd（服务端的 session 列表是按 cwd 扫的，见 sessions 快照）。
-				listSessions: () => {
-					const c = chatRefForPlugins.current;
-					const cwd = c.state?.cwd ?? "";
-					return [
-						...c.conversations.map((x) => ({
-							id: x.id,
-							title: x.title,
-							cwd: x.cwd || cwd,
-							kind: "running" as const,
-							isStreaming: x.isStreaming,
-						})),
-						...(c.elsewhere ?? [])
-							.filter((w) => Boolean(w.convId && w.owner))
-							.map((w) => ({
-								id: w.convId!,
-								title: w.title,
-								cwd: w.cwd || cwd,
-								kind: "elsewhere" as const,
-								owner: w.owner,
-								isStreaming: w.isStreaming,
-							})),
-						...c.sessions.map((s) => ({
-							id: s.path,
-							title: s.displayName || s.name || s.firstMessage?.trim() || s.path,
-							cwd,
-							kind: "history" as const,
-						})),
-					];
-				},
-				getConversationId: () => chatRefForPlugins.current.state?.conversationId ?? null,
-				isConversationBlank: () => (chatRefForPlugins.current.state?.messages.length ?? 0) === 0,
-				// issue #188：浏览器插件的模型目录 + 当前模型（startChat/openSession 的 model 选项用）。
-				listModels: () =>
-					chatRefForPlugins.current.models.map((m) => ({
-						id: m.id,
-						provider: m.provider,
-						name: m.name,
-						vision: m.vision,
-						reasoning: m.reasoning,
-					})),
-				getCurrentModelId: () => {
-					const m = chatRefForPlugins.current.state?.model;
-					return m ? `${m.provider}/${m.id}` : null;
-				},
-				// #146：目录授权（最近项目 = 用户已知；其余弹一次确认）+ 顶栏动作按需加载
-				listProjects: () => chatRefForPlugins.current.projects.map((p) => p.path),
-				grantedPaths: readPluginPathGrants,
-				grantPath: addPluginPathGrant,
-				confirm: (opts) =>
-					new Promise<boolean>((resolve) => {
-						if (pluginPathConfirmRef.current) {
-							resolve(false);
-							return;
-						}
-						const req = { path: opts.path, resolve };
-						pluginPathConfirmRef.current = req;
-						setPluginPathConfirm(req);
-					}),
-				// 宿主 API v10 弹窗（modal.dialog 槽位）：条目必须存在且未被隐藏，否则拒绝。
-				openModal: (id) => {
-					const target = String(id ?? "").trim();
-					if (!target) return false;
-					const entry = uiSlotsRef.current["modal.dialog"].find((e) => e.id === target);
-					if (!entry || entry.hidden) return false;
-					setOpenModalId(target);
-					return true;
-				},
-				closeModal: () => setOpenModalId(null),
-				pickDirectory: (opts) =>
-					new Promise((resolve) => {
-						setPluginDirPicker({ initialPath: opts?.initialPath, resolve });
-					}),
-				pickModel: (opts) =>
-					new Promise((resolve) => {
-						setPluginModelPicker({ currentModelId: opts?.currentModelId, resolve });
-					}),
-				// 宿主 API v8 对话框（本地插件对话框态撑起；已有未决直接回绝，不排队）。
-				dialogConfirm: (opts) =>
-					new Promise<boolean>((resolve) => {
-						if (pluginDialogRef.current) {
-							resolve(false);
-							return;
-						}
-						const d = { kind: "confirm" as const, title: opts.title, resolve: resolve as (v: any) => void };
-						pluginDialogRef.current = d;
-						setPluginDialog(d);
-					}),
-				select: (opts) =>
-					new Promise<{ ok: boolean; selected?: string[]; error?: string }>((resolve) => {
-						if (pluginDialogRef.current) {
-							resolve({ ok: false, error: "busy" });
-							return;
-						}
-						const d = {
-							kind: "select" as const,
-							title: opts.title,
-							options: opts.options,
-							...(opts.multi ? { multi: true as const } : {}),
-							resolve: resolve as (v: any) => void,
-						};
-						pluginDialogRef.current = d;
-						setPluginDialogSel([]);
-						setPluginDialog(d);
-					}),
-				input: (opts) =>
-					new Promise<{ ok: boolean; value?: string; error?: string }>((resolve) => {
-						if (pluginDialogRef.current) {
-							resolve({ ok: false, error: "busy" });
-							return;
-						}
-						const d = {
-							kind: "input" as const,
-							title: opts.title,
-							...(typeof opts.placeholder === "string" ? { placeholder: opts.placeholder } : {}),
-							...(typeof opts.initial === "string" ? { initial: opts.initial } : {}),
-							resolve: resolve as (v: any) => void,
-						};
-						pluginDialogRef.current = d;
-						setPluginDialogInput(opts.initial ?? "");
-						setPluginDialog(d);
-					}),
-				// 宿主 API v8 动作通知（notice 区里多一行按钮；抛错一律 resolve null，不阻塞）。
-				notifyAction: (opts) =>
-					new Promise<string | null>((resolve) => {
-						try {
-							const prev = pluginNotifyRef.current;
-							pluginNotifyRef.current = null;
-							setPluginNotify(null);
-							try {
-								prev?.resolve(null);
-							} catch {
-								/* 忽略 */
-							}
-							const row = { text: opts.text, actions: opts.actions, resolve };
-							pluginNotifyRef.current = row;
-							setPluginNotify(row);
-						} catch {
-							resolve(null);
-						}
-					}),
-				loadPluginBundle: (pluginId) => {
-					const info = chatRefForPlugins.current.plugins.find((x) => x.id === pluginId);
-					if (!info) return Promise.resolve(false);
-					return ensurePluginViewLoaded(info, chatRefForPlugins.current.pluginsEpoch);
-				},
-				openFileContextMenu: (opts) => {
-					const cleanPath = String(opts.path ?? "")
-						.replace(/\\/g, "/")
-						.replace(/^\/+|\/+$/g, "");
-					const isRoot = !cleanPath;
-					const kind = opts.kind ?? (opts.path.endsWith("/") || isRoot ? "dir" : "file");
-					const label = opts.label ?? (cleanPath ? (cleanPath.split("/").pop() ?? cleanPath) : "workspace");
-					const target = { id: cleanPath, kind, label };
-
-					const isFile = kind === "file";
-					const isDir = kind === "dir" || isRoot;
-					const isList = kind === "list";
-
-					const entries = (uiSlotsRef.current["contextmenu.file"] ?? []).map((entry) => {
-						if (entry.source !== "host") {
-							// 插件条目的肯定形 when：如果明确是 file 专属但当前是 dir，或 dir 专属但当前是 file，直接隐藏，避免菜单膨胀
-							if (isDir && entry.when?.includes("file.isFile")) return { ...entry, hidden: true };
-							if (isFile && entry.when?.includes("file.isDir")) return { ...entry, hidden: true };
-							return entry;
-						}
-						switch (entry.id) {
-							case "host:file-compress":
-							case "host:file-compress-download":
-								return !isList ? entry : { ...entry, hidden: true };
-							case "host:file-extract":
-								return isFile && isExtractableArchive(label) ? entry : { ...entry, hidden: true };
-							case "host:file-upload":
-								return isDir || isList ? { ...entry, label: t("uploadToFolder") } : { ...entry, hidden: true };
-							case "host:file-upload-folder":
-								return isDir || isList ? entry : { ...entry, hidden: true };
-							case "host:file-open":
-							case "host:file-download":
-							case "host:file-open-default":
-								return isFile ? entry : { ...entry, hidden: true };
-							case "host:file-attach-ref":
-								return isFile ? entry : { ...entry, hidden: true };
-							case "host:file-attach-folder":
-								return isDir ? entry : { ...entry, hidden: true };
-							case "host:file-reveal":
-								return !isList ? entry : { ...entry, hidden: true };
-							case "host:file-enter":
-							case "host:file-open-project":
-							case "host:file-add-root":
-								return { ...entry, hidden: true };
-							case "host:file-new-file":
-							case "host:file-new-dir":
-							case "host:file-paste":
-								return isDir || isList ? entry : { ...entry, hidden: true };
-							case "host:file-rename":
-							case "host:file-duplicate":
-							case "host:file-cut":
-							case "host:file-copy":
-							case "host:file-delete":
-								return !isList && !isRoot ? entry : { ...entry, hidden: true };
-							case "host:file-copy-name":
-							case "host:file-copy-path":
-							case "host:file-copy-rel":
-								return !isList ? entry : { ...entry, hidden: true };
-							case "host:file-refresh":
-								return isList ? entry : { ...entry, hidden: true };
-							default:
-								return entry;
-						}
-					});
-
-					openContextMenu({
-						x: opts.x,
-						y: opts.y,
-						slot: "contextmenu.file",
-						target,
-						entries,
-						onHostAction: (entry, tg) => {
-							if (opts.onHostAction) {
-								const res = opts.onHostAction(entry.id, tg);
-								if (res !== undefined) return res;
-							}
-							switch (entry.id) {
-								case "host:file-reveal":
-									send({ type: "file_reveal", path: tg.id });
-									break;
-								case "host:file-open-default":
-									if (tg.kind === "file") send({ type: "file_open_default", path: tg.id });
-									break;
-								case "host:file-copy-name":
-									void navigator.clipboard?.writeText(tg.label ?? tg.id);
-									pushNotice("info", t("copied"));
-									break;
-								case "host:file-copy-rel":
-									void navigator.clipboard?.writeText(tg.id);
-									pushNotice("info", t("copied"));
-									break;
-								case "host:file-copy-path": {
-									const cwd = chatRefForPlugins.current.state?.cwd ?? "";
-									const full = cwd ? `${cwd.replace(/\\/g, "/").replace(/\/+$/, "")}/${tg.id}` : tg.id;
-									void navigator.clipboard?.writeText(full);
-									pushNotice("info", t("copied"));
-									break;
-								}
-							}
-						},
-					});
-				},
-			}),
-		);
-		return () => installPluginHostApi(null);
-	}, [send]);
 	// 左栏可拖拽宽度（桌面端）：localStorage 持久化，双击手柄复位。
 	const [leftWidth, setLeftWidth] = useState(() => readPanelWidth("left"));
 	const resizeLeft = useCallback((w: number) => setLeftWidth(w), []);
@@ -949,53 +474,10 @@ export function App() {
 	};
 	// Custom model config panel (model dropdown → 管理模型).
 	const [manageModelsOpen, setManageModelsOpen] = useState(false);
-	// Settings panel (system prompt / skills / extensions / presets).
+	// Settings panel (skills / tools / layout …).
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsTab | undefined>();
 	const [sandboxModalMode, setSandboxModalMode] = useState<"create" | "promote" | "apply" | null>(null);
-	// 插件请求目录授权时的确认（host.openSession，issue #146）——非模态 inline 面板。
-	const [pluginPathConfirm, setPluginPathConfirm] = useState<{ path: string; resolve: (ok: boolean) => void } | null>(
-		null,
-	);
-	const pluginPathConfirmRef = useRef<typeof pluginPathConfirm>(null);
-	// 插件宿主对话框（host.dialogs.*，API v8）：同一时刻只允许一个，
-	// 已有未决时新请求直接回绝（confirm 回 false，select/input 回 {ok:false,error:"busy"}）。
-	const [pluginDialog, setPluginDialog] = useState<{
-		kind: "select" | "confirm" | "input";
-		title: string;
-		options?: { label: string; description?: string }[];
-		multi?: boolean;
-		placeholder?: string;
-		initial?: string;
-		resolve: (v: any) => void;
-	} | null>(null);
-	const pluginDialogRef = useRef<typeof pluginDialog>(null);
-	const [pluginDialogSel, setPluginDialogSel] = useState<number[]>([]);
-	const [pluginDialogInput, setPluginDialogInput] = useState("");
-	// 插件动作通知（host.notifyAction，API v8）：notice 区追加一行动作按钮，
-	// 点谁 resolve 谁的 id，8s 超时 resolve null；新通知挤掉旧未决（旧的 resolve null）。
-	const [pluginNotify, setPluginNotify] = useState<{
-		text: string;
-		actions: { id: string; label: string }[];
-		resolve: (v: string | null) => void;
-	} | null>(null);
-	const pluginNotifyRef = useRef<typeof pluginNotify>(null);
-	// 服务端驱动的目录授权请求（host.fs.requestAccess / host.project）已在本地答过的 id：
-	// 答完就地隐藏，服务端那边由它自己的 pending 表收尾（不需要额外回包）。
-	const [answeredPathRequests, setAnsweredPathRequests] = useState<Set<string>>(() => new Set());
-	const answerPathRequest = (id: string, ok: boolean) => {
-		send({ type: "plugin_path_response", id, ok });
-		setAnsweredPathRequests((prev) => new Set(prev).add(id));
-	};
-	const pendingPathRequest = chat.pathRequests.find((r) => !answeredPathRequests.has(r.id)) ?? null;
-	// 服务端驱动的能力授权请求（host.requestPermission）：同目录授权的问答口径，
-	// 多一个“记住”档（remember=true 落盘，否则只记内存本次有效）。
-	const [answeredPermRequests, setAnsweredPermRequests] = useState<Set<string>>(() => new Set());
-	const answerPermRequest = (id: string, ok: boolean, remember = false) => {
-		send({ type: "plugin_permission_response", id, ok, ...(remember ? { remember: true } : {}) });
-		setAnsweredPermRequests((prev) => new Set(prev).add(id));
-	};
-	const pendingPermRequest = chat.permRequests.find((r) => !answeredPermRequests.has(r.id)) ?? null;
 	// Wide chat column (client-local, default off).
 	const wide = useWideChat();
 	const hideModelRow = useHideModelRow();
@@ -1110,43 +592,7 @@ export function App() {
 		}
 	}, [chat.ready, activeSessionId, send]);
 
-	// 插件视图桥：插件无 chat 上下文，通过窗口事件请求在可见终端执行命令
-	// （与 SCM 面板同款：已有同名 tab 原地重跑，否则新建并自动切到终端视图）。
 	useEffect(() => {
-		const onPluginRunCommand = (e: Event) => {
-			const detail = (e as CustomEvent<{ title?: string; command?: string }>).detail;
-			const title = detail?.title || t("pluginCommandFallback");
-			const command = detail?.command;
-			if (!command || !chat.ready) return;
-			const def: CommandDef = { name: title, command, cwd: "${pwd}" };
-			const existing = chat.terminals.find((tm) => tm.title === title);
-			if (existing) {
-				terminal.restart(existing.id);
-				send({
-					type: "run_command",
-					terminalId: existing.id,
-					conversationId: existing.conversationId,
-					command: def,
-					cols: 80,
-					rows: 24,
-				});
-			} else {
-				const id = randomUuid();
-				terminal.create({
-					id,
-					conversationId: chat.activeConversationId || chat.state?.conversationId || "",
-					title,
-					cwd: chat.state?.cwd ?? "",
-					cols: 80,
-					rows: 24,
-					running: true,
-					exitCode: null,
-					command: def,
-				});
-			}
-			setView("terminal");
-		};
-		window.addEventListener("pi-web-ui:plugin-run-command", onPluginRunCommand);
 		// 派单卡片的「查看子代理」按钮：切到对应的子代理对话（与左栏点击同效果）。
 		const onSwitchConversation = (e: Event) => {
 			const id = (e as CustomEvent<string>).detail;
@@ -1158,10 +604,9 @@ export function App() {
 		};
 		window.addEventListener("pi-web-ui:switch-conversation", onSwitchConversation);
 		return () => {
-			window.removeEventListener("pi-web-ui:plugin-run-command", onPluginRunCommand);
 			window.removeEventListener("pi-web-ui:switch-conversation", onSwitchConversation);
 		};
-	}, [chat, terminal, send]);
+	}, [send]);
 
 	// Ctrl+K / Cmd+K opens global search (also reachable via the topbar button).
 	useEffect(() => {
@@ -1231,72 +676,6 @@ export function App() {
 	const { themes, theme, switchTheme, reloadThemes } = useTheme();
 	// -- chat wallpaper (message-list background image, issue #100) -------------
 	useWallpaperEffect();
-	// 插件宿主桥 v8：主题/语言/视图变化通知插件（各是独立 effect，按值触发；
-	// 无订阅者时零开销，单个监听抛错不影响其余——见 plugin-host.ts 的 emit*）。
-	useEffect(() => {
-		try {
-			if (typeof emitPluginHostTheme === "function") emitPluginHostTheme(theme ?? "");
-		} catch {
-			/* 插件监听抛错不影响宿主 */
-		}
-	}, [theme]);
-	useEffect(() => {
-		try {
-			if (typeof emitPluginHostLocale === "function") emitPluginHostLocale(locale);
-		} catch {
-			/* 插件监听抛错不影响宿主 */
-		}
-	}, [locale]);
-	useEffect(() => {
-		try {
-			if (typeof emitPluginHostView === "function") emitPluginHostView(view);
-		} catch {
-			/* 插件监听抛错不影响宿主 */
-		}
-	}, [view]);
-	useEffect(() => {
-		try {
-			const m = chat.state?.model;
-			const mid = m ? `${m.provider}/${m.id}` : null;
-			if (typeof emitPluginHostModel === "function") emitPluginHostModel(mid);
-		} catch {
-			/* 插件监听抛错不影响宿主 */
-		}
-	}, [chat.state?.model?.provider, chat.state?.model?.id]);
-	// 插件对话框 Esc 取消（按 kind 回取消值，绝不悬挂未决 promise）。
-	useEffect(() => {
-		if (!pluginDialog) return;
-		const onKey = (e: KeyboardEvent) => {
-			if (e.key !== "Escape") return;
-			const cur = pluginDialogRef.current;
-			pluginDialogRef.current = null;
-			setPluginDialog(null);
-			try {
-				if (!cur) return;
-				if (cur.kind === "confirm") cur.resolve(false);
-				else cur.resolve({ ok: false });
-			} catch {
-				/* 忽略 */
-			}
-		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [pluginDialog]);
-	// 动作通知 8s 超时：无人点就 resolve null 并撤下（绝不阻塞插件）。
-	useEffect(() => {
-		if (!pluginNotify) return;
-		const timer = setTimeout(() => {
-			const cur = pluginNotifyRef.current;
-			pluginNotifyRef.current = null;
-			setPluginNotify(null);
-			try {
-				cur?.resolve(null);
-			} catch {
-				/* 忽略 */
-			}
-		}, 8000);
-		return () => clearTimeout(timer);
-	}, [pluginNotify]);
 	const prevStreamingMapRef = useRef<Map<string, boolean> | null>(null);
 	const prevActiveIdRef = useRef<string | null>(null);
 	const latestMessagesRef = useRef(chat.state?.messages);
@@ -1310,9 +689,8 @@ export function App() {
 	// Previous terminal list — drives the uninstall-finished watcher below.
 	const prevTerminalsRef = useRef(chat.terminals);
 
-	// Maintenance watcher: when a `pi remove …` / `pi-web-ui install|uninstall …`
-	// command tab transitions running → exited, re-discover extensions/skills
-	// (extensions_reload) or re-scan the UI-plugin dir (plugins_reload).
+	// Maintenance watcher: when a `pi remove …` / `npm i -g …` command tab
+	// transitions running → exited, re-discover extensions/skills (extensions_reload).
 	useEffect(() => {
 		const prev = prevTerminalsRef.current;
 		prevTerminalsRef.current = chat.terminals;
@@ -1322,14 +700,11 @@ export function App() {
 			if (!before?.running || tm.running) continue;
 			if (cmd.startsWith("pi remove ")) {
 				send({ type: "extensions_reload" });
-			} else if (cmd.startsWith("pi-web-ui install ") || cmd.startsWith("pi-web-ui uninstall ")) {
-				send({ type: "plugins_reload" });
 			} else if (cmd.startsWith("npm i -g ")) {
 				// A component update ran in the visible terminal (per-row "更新"
-				// or "全部更新" buttons): re-discover extensions + UI plugins and
-				// re-check versions so the dropdown reflects the new state.
+				// or "全部更新" buttons): re-discover extensions and re-check
+				// versions so the dropdown reflects the new state.
 				send({ type: "extensions_reload" });
-				send({ type: "plugins_reload" });
 				send({ type: "check_updates_all", force: true });
 			}
 		}
@@ -1482,7 +857,7 @@ export function App() {
 	const attach = (
 		path: string,
 		name: string,
-		mode: "inline" | "reference" | "lines" | "page",
+		mode: "inline" | "reference" | "lines",
 		isDir = false,
 		lines?: { start: number; end: number },
 		silent = false,
@@ -1499,9 +874,8 @@ export function App() {
 		// silent（@ 选单 acceptAt）：正文已由 ChatInput 亲自插好，这里不再插；
 		// 重复点同一文件：ChatInput 的 insert sink 会判正文已有该 @提及而跳过。
 		// 文件/目录类引用正文写相对路径而非 basename：同名条目（根目录 报告/ 与
-		// 方案/报告/）靠路径才能区分，linkify 也按相对路径渲染文件药丸；
-		// page 无文件路径语义，保持标题形式。
-		const mention = mode === "page" ? name : path;
+		// 方案/报告/）靠路径才能区分，linkify 也按相对路径渲染文件药丸。
+		const mention = path;
 		if (!silent && mention) {
 			insertTextAtCursor(`@${mention} `);
 		}
@@ -1515,8 +889,8 @@ export function App() {
 					: a.mode === "conversation"
 						? `conv|${a.conversationId ?? ""}|${a.sessionPath ?? ""}` === pathOrKey
 						: a.path === pathOrKey;
-				// 移除口径与 attach 插入一致：文件类提及正文是相对路径，page/conversation 是标题。
-				if (isHit && !removedName) removedName = a.mode === "page" || a.mode === "conversation" ? a.name : a.path;
+				// 移除口径与 attach 插入一致：文件类提及正文是相对路径，conversation 是标题。
+				if (isHit && !removedName) removedName = a.mode === "conversation" ? a.name : a.path;
 				return !isHit;
 			}),
 		);
@@ -1745,13 +1119,11 @@ export function App() {
 					.map((att) => ({
 						path: att.path || att.url || "",
 						name: att.name,
-						mode: (att.type === "page"
-							? "page"
-							: att.type === "conversation"
-								? "conversation"
-								: att.lines
-									? "lines"
-									: "reference") as PromptAttachment["mode"],
+						mode: (att.type === "conversation"
+							? "conversation"
+							: att.lines
+								? "lines"
+								: "reference") as PromptAttachment["mode"],
 						lines: att.lines,
 						key: randomUuid(),
 					}));
@@ -1790,7 +1162,7 @@ export function App() {
 		(a: {
 			path: string;
 			name: string;
-			mode?: "inline" | "reference" | "lines" | "page";
+			mode?: "inline" | "reference" | "lines";
 			isDir?: boolean;
 			lines?: { start: number; end: number };
 			silent?: boolean;
@@ -1898,7 +1270,6 @@ export function App() {
 				chat={chat}
 				terminal={terminal}
 				view={view}
-				plugins={enabledPlugins}
 				uiPrimary={uiPrimary}
 				uiOverflow={uiOverflow}
 				uiContextTopbar={uiSlots["contextmenu.topbar"]}
@@ -1940,49 +1311,7 @@ export function App() {
 				{chat.notices.map((n) => (
 					<NoticeToast key={n.id} notice={n} onDismiss={dismissNotice} />
 				))}
-				{/* 插件动作通知（host.notifyAction）：复用 notice 渲染位置，点谁 resolve 谁的 id */}
-				{pluginNotify && (
-					<div className="notice notice-info" role="status">
-						<span className="notice-text">{pluginNotify.text}</span>
-						{pluginNotify.actions.map((a) => (
-							<button
-								key={a.id}
-								type="button"
-								className="btn"
-								onClick={() => {
-									const cur = pluginNotifyRef.current;
-									pluginNotifyRef.current = null;
-									setPluginNotify(null);
-									try {
-										cur?.resolve(a.id);
-									} catch {
-										/* 忽略 */
-									}
-								}}
-							>
-								{a.label}
-							</button>
-						))}
-						<button
-							type="button"
-							className="notice-close"
-							title={t("close")}
-							onClick={() => {
-								const cur = pluginNotifyRef.current;
-								pluginNotifyRef.current = null;
-								setPluginNotify(null);
-								try {
-									cur?.resolve(null);
-								} catch {
-									/* 忽略 */
-								}
-							}}
-						>
-							<FiX />
-						</button>
-					</div>
-				)}
-				{/* 插件通知条目（notice.actions 槽位）：常驻快捷按钮，无条目时不渲染。select 落成小下拉。 */}
+				{/* 通知条目（notice.actions 槽位）：常驻快捷按钮，无条目时不渲染。select 落成小下拉。 */}
 				{uiNoticeActions.length > 0 && (
 					<div className="notice-actions" role="toolbar">
 						{uiNoticeActions.map((entry) =>
@@ -2038,7 +1367,6 @@ export function App() {
 						items={uiSidebarLeft}
 						chat={chat}
 						view={view}
-						plugins={enabledPlugins}
 						dropdownProps={{
 							theme,
 							themes,
@@ -2093,11 +1421,8 @@ export function App() {
 								uiRunningActions={uiLeftRunningActions}
 								uiHistoryActions={uiLeftHistoryActions}
 								uiSections={uiLeftSections}
-								renderPluginSectionBody={renderLeftPluginSectionBody}
 								uiLeftRunning={uiLeftRunning}
 								uiLeftHistory={uiLeftHistory}
-								uiPluginRunning={chat.pluginPanelGroups}
-								onPluginRunningAction={onPluginRunningAction}
 								onUiAction={onUiAction}
 								presetNames={presetNames}
 								transition={chat.transition}
@@ -2131,7 +1456,7 @@ export function App() {
 									</div>
 								</div>
 							)}
-							{/* 对话头部条（chat.header 槽位）：纯插件新增位，无条目时不渲染。 */}
+							{/* 对话头部条（chat.header 槽位）：无条目时不渲染。 */}
 							{uiChatHeader.length > 0 && (
 								<div className="chat-header" role="toolbar">
 									{renderSlotToolbar(uiChatHeader, onUiAction)}
@@ -2316,186 +1641,6 @@ export function App() {
 							{/* 通用右键菜单（contextmenu.* 槽位）：各处的 onContextMenu 打开它。 */}
 							<ContextMenu onAction={(entry, target, value) => onUiAction(entry, value, target)} />
 							{chat.dialog && <Dialog dialog={chat.dialog} />}
-							{/* 本地插件对话框（host.dialogs.*）：复用 .dialog-inline 样式，按钮 resolve 后清态 */}
-							{pluginDialog && (
-								<div className="dialog-inline" data-dialog-kind={pluginDialog.kind}>
-									<div className="dialog-head">
-										<span className="dialog-badge">{t("pluginRequest")}</span>
-										{pluginDialog.title && <span className="dialog-title">{pluginDialog.title}</span>}
-										<button
-											type="button"
-											className="dialog-dismiss"
-											title={t("cancel")}
-											onClick={() => {
-												const cur = pluginDialogRef.current;
-												pluginDialogRef.current = null;
-												setPluginDialog(null);
-												try {
-													if (cur?.kind === "confirm") cur.resolve(false);
-													else cur?.resolve({ ok: false });
-												} catch {
-													/* 忽略 */
-												}
-											}}
-										>
-											✕
-										</button>
-									</div>
-									{pluginDialog.kind === "select" && (
-										<div className="dialog-options">
-											{(pluginDialog.options ?? []).map((opt, i) => {
-												const sel = pluginDialog.multi ? pluginDialogSel.includes(i) : false;
-												return (
-													<button
-														type="button"
-														key={i}
-														className={`dialog-option ${sel ? "sel" : ""}`}
-														title={opt.description}
-														onClick={() => {
-															if (pluginDialog.multi) {
-																setPluginDialogSel((prev) =>
-																	prev.includes(i) ? prev.filter((x) => x !== i) : [...prev, i],
-																);
-																return;
-															}
-															const cur = pluginDialogRef.current;
-															pluginDialogRef.current = null;
-															setPluginDialog(null);
-															try {
-																cur?.resolve({ ok: true, selected: [opt.label] });
-															} catch {
-																/* 忽略 */
-															}
-														}}
-													>
-														{opt.label}
-														{opt.description && <span className="dialog-hint">{opt.description}</span>}
-													</button>
-												);
-											})}
-											{(pluginDialog.options ?? []).length === 0 && <div className="dialog-hint">{t("noOptions")}</div>}
-											{pluginDialog.multi && (
-												<div className="dialog-actions">
-													<button
-														type="button"
-														className="btn primary"
-														onClick={() => {
-															const cur = pluginDialogRef.current;
-															const labels = (cur?.options ?? [])
-																.filter((_, idx) => pluginDialogSel.includes(idx))
-																.map((o) => o.label);
-															pluginDialogRef.current = null;
-															setPluginDialog(null);
-															try {
-																cur?.resolve({ ok: true, selected: labels });
-															} catch {
-																/* 忽略 */
-															}
-														}}
-													>
-														{t("ok")}
-													</button>
-												</div>
-											)}
-										</div>
-									)}
-									{pluginDialog.kind === "confirm" && (
-										<div className="dialog-body">
-											<div className="dialog-actions">
-												<button
-													type="button"
-													className="btn"
-													onClick={() => {
-														const cur = pluginDialogRef.current;
-														pluginDialogRef.current = null;
-														setPluginDialog(null);
-														try {
-															cur?.resolve(false);
-														} catch {
-															/* 忽略 */
-														}
-													}}
-												>
-													{t("cancel")}
-												</button>
-												<button
-													type="button"
-													className="btn primary"
-													onClick={() => {
-														const cur = pluginDialogRef.current;
-														pluginDialogRef.current = null;
-														setPluginDialog(null);
-														try {
-															cur?.resolve(true);
-														} catch {
-															/* 忽略 */
-														}
-													}}
-												>
-													{t("ok")}
-												</button>
-											</div>
-										</div>
-									)}
-									{pluginDialog.kind === "input" && (
-										<div className="dialog-body">
-											<input
-												className="dialog-input"
-												value={pluginDialogInput}
-												placeholder={pluginDialog.placeholder || t("inputPlaceholder")}
-												autoFocus
-												onChange={(e) => setPluginDialogInput(e.target.value)}
-												onKeyDown={(e) => {
-													if (e.key === "Enter" && !e.nativeEvent.isComposing) {
-														const cur = pluginDialogRef.current;
-														pluginDialogRef.current = null;
-														setPluginDialog(null);
-														try {
-															cur?.resolve({ ok: true, value: pluginDialogInput });
-														} catch {
-															/* 忽略 */
-														}
-													}
-												}}
-											/>
-											<div className="dialog-actions">
-												<button
-													type="button"
-													className="btn"
-													onClick={() => {
-														const cur = pluginDialogRef.current;
-														pluginDialogRef.current = null;
-														setPluginDialog(null);
-														try {
-															cur?.resolve({ ok: false });
-														} catch {
-															/* 忽略 */
-														}
-													}}
-												>
-													{t("cancel")}
-												</button>
-												<button
-													type="button"
-													className="btn primary"
-													onClick={() => {
-														const cur = pluginDialogRef.current;
-														pluginDialogRef.current = null;
-														setPluginDialog(null);
-														try {
-															cur?.resolve({ ok: true, value: pluginDialogInput });
-														} catch {
-															/* 忽略 */
-														}
-													}}
-												>
-													{t("ok")}
-												</button>
-											</div>
-										</div>
-									)}
-								</div>
-							)}
 							{chat.question && (
 								<DshQuestionDialog
 									question={chat.question}
@@ -2517,9 +1662,7 @@ export function App() {
 								/>
 							)}
 							<ChatInput
-								composerLeading={uiSlots["composer.leading"]}
 								composerActions={uiSlots["composer.actions"]}
-								onUiAction={onUiAction}
 								streaming={chat.state?.isStreaming ?? false}
 								planMode={chat.state?.planMode ?? false}
 								messages={chat.state?.messages ?? EMPTY_MESSAGES}
@@ -2573,29 +1716,11 @@ export function App() {
 							/>
 						</Suspense>
 					</div>
-					{pluginViews.map((entry) => {
-						const name = `plugin:${entry.info.id}` as ViewName;
-						return (
-							<div key={entry.info.id} className={`view-pane ${view === name ? "" : "hidden"}`}>
-								<PluginView entry={entry} />
-							</div>
-						);
-					})}
-					{/* issue #225：当前视图是没加载出来的插件 → 明确占位（加载中/失败+重试），不再整片空白。 */}
-					{view.startsWith("plugin:") && !pluginViews.some((v) => `plugin:${v.info.id}` === view) && (
-						<PluginViewFallback
-							pluginId={view.slice("plugin:".length)}
-							info={chat.plugins.find((p) => `plugin:${p.id}` === view)}
-							epoch={chat.pluginsEpoch}
-							failed={failedPluginViews.includes(view.slice("plugin:".length))}
-						/>
-					)}
 					<SideDock
 						side="right"
 						items={uiSidebarRight}
 						chat={chat}
 						view={view}
-						plugins={enabledPlugins}
 						dropdownProps={{
 							theme,
 							themes,
@@ -2653,20 +1778,6 @@ export function App() {
 					onUiAction={onUiAction}
 				/>
 			)}
-			{pluginFile && (
-				<PluginFilePreview
-					file={pluginFile.file}
-					plugin={pluginFile.plugin}
-					declaration={pluginFile.declaration}
-					epoch={chat.pluginsEpoch}
-					send={send}
-					onClose={() => setPluginFile(null)}
-					onFallback={() => {
-						setPluginFile(null);
-						setPreviewFile(pluginFile.file);
-					}}
-				/>
-			)}
 			{chat.ready && chat.state && chat.state.piConfigured === false && !setupDismissed && !manageModelsOpen && (
 				<PiSetupModal
 					piConfigured={chat.state.piConfigured}
@@ -2712,10 +1823,6 @@ export function App() {
 			{bgTasksOpen && (
 				<BgTasksModal
 					servers={chat.bgServers}
-					plugins={chat.plugins}
-					epoch={chat.pluginsEpoch}
-					send={send}
-					onUiAction={onUiAction}
 					autoCleanupMin={chat.settings?.bgAutoCleanupMin ?? 0}
 					onClose={() => setBgTasksOpen(false)}
 				/>
@@ -2730,18 +1837,6 @@ export function App() {
 			<ToolApprovalDialog approval={chat.approval} />
 			{/* TUI 扩展模态弹窗（ctx.ui.custom 虚拟终端桥） */}
 			{chat.tuiOverlay && <TuiOverlayModal overlay={chat.tuiOverlay} />}
-			{/* 插件弹窗（modal.dialog 槽位）：action 点即分发 + 关弹窗，view 挂插件视图。 */}
-			{openModalEntry && (
-				<PluginModal
-					entry={openModalEntry}
-					pluginView={openModalPluginId ? pluginViews.find((v) => v.info.id === openModalPluginId) : undefined}
-					onUiAction={(item, value) => {
-						onUiAction(item, value);
-						setOpenModalId(null);
-					}}
-					onClose={() => setOpenModalId(null)}
-				/>
-			)}
 			<GlobalSearchModal
 				open={globalSearchOpen}
 				projects={chat.projects}
@@ -2761,186 +1856,6 @@ export function App() {
 					openFile(path, name);
 				}}
 			/>
-			{pluginDirPicker && (
-				<DirectoryBrowser
-					currentCwd={pluginDirPicker.initialPath || chat.state?.cwd || ""}
-					pathCompletions={chat.pathCompletions}
-					workspaceRoots={chat.state?.workspaceRoots ?? []}
-					onClose={() => {
-						pluginDirPicker.resolve({ ok: false, canceled: true });
-						setPluginDirPicker(null);
-					}}
-					onSelectDirectory={(path) => {
-						pluginDirPicker.resolve({ ok: true, path });
-						setPluginDirPicker(null);
-					}}
-					onCreateProject={(path) => {
-						void send({ type: "make_dir", path });
-						pluginDirPicker.resolve({ ok: true, path });
-						setPluginDirPicker(null);
-					}}
-					mode="project"
-					className="project-picker"
-					backdropClassName="project-picker-backdrop"
-					role="dialog"
-					ariaLabel={t("projectPickerTitle")}
-				/>
-			)}
-			{pluginModelPicker && (
-				<ModelPickerModal
-					currentModelId={pluginModelPicker.currentModelId}
-					models={chat.models}
-					modelsLoading={chat.modelsLoading}
-					providerKeys={chat.providerKeys}
-					onManageModels={() => setManageModelsOpen(true)}
-					defaultModel={chat.defaultModel}
-					onClose={() => {
-						pluginModelPicker.resolve({ ok: false, canceled: true });
-						setPluginModelPicker(null);
-					}}
-					onSelect={(modelId, model) => {
-						pluginModelPicker.resolve({
-							ok: true,
-							modelId,
-							name: model?.name,
-							provider: model?.provider,
-						});
-						setPluginModelPicker(null);
-					}}
-				/>
-			)}
-			{/* 插件能力授权 / 目录访问确认顶层浮层：必须高于设置等弹窗（z-index > 300），确保安装插件或跨视图调用时无需叉掉设置页 */}
-			{(pendingPermRequest || pendingPathRequest || pluginPathConfirm) && (
-				<div className="modal-backdrop perm-modal-backdrop">
-					{pendingPermRequest && (
-						<div className="dialog-inline perm-dialog-card" data-dialog-kind="confirm">
-							<div className="dialog-head">
-								<span className="dialog-badge">{t("pluginRequest")}</span>
-								<span className="dialog-title">{t("pluginPermTitle")}</span>
-								<button
-									type="button"
-									className="dialog-dismiss"
-									title={t("cancel")}
-									onClick={() => answerPermRequest(pendingPermRequest.id, false)}
-								>
-									✕
-								</button>
-							</div>
-							<div className="dialog-body">
-								{pendingPermRequest.family === "net"
-									? t("pluginPermBodyNet")
-											.replace("{plugin}", pendingPermRequest.pluginId)
-											.replace("{hosts}", (pendingPermRequest.hosts ?? []).join(", "))
-									: t("pluginPermBodyLlm")
-											.replace("{plugin}", pendingPermRequest.pluginId)
-											.replace(
-												"{models}",
-												(pendingPermRequest.models ?? []).length > 0
-													? ` ${(pendingPermRequest.models ?? []).join(", ")}`
-													: "",
-											)}
-								{pendingPermRequest.reason && <div className="dialog-hint">{pendingPermRequest.reason}</div>}
-								<div className="dialog-actions">
-									<button type="button" className="btn" onClick={() => answerPermRequest(pendingPermRequest.id, false)}>
-										{t("pluginGrantDeny")}
-									</button>
-									<button type="button" className="btn" onClick={() => answerPermRequest(pendingPermRequest.id, true)}>
-										{t("pluginPermOnce")}
-									</button>
-									<button
-										type="button"
-										className="btn primary"
-										onClick={() => answerPermRequest(pendingPermRequest.id, true, true)}
-									>
-										{t("pluginPermAlways")}
-									</button>
-								</div>
-							</div>
-						</div>
-					)}
-					{pendingPathRequest && (
-						<div className="dialog-inline perm-dialog-card" data-dialog-kind="confirm">
-							<div className="dialog-head">
-								<span className="dialog-badge">{t("pluginRequest")}</span>
-								<span className="dialog-title">{t("pluginGrantRequestTitle")}</span>
-								<button
-									type="button"
-									className="dialog-dismiss"
-									title={t("cancel")}
-									onClick={() => answerPathRequest(pendingPathRequest.id, false)}
-								>
-									✕
-								</button>
-							</div>
-							<div className="dialog-body">
-								{t("pluginGrantRequestBody")
-									.replace("{plugin}", pendingPathRequest.pluginId)
-									.replace("{path}", pendingPathRequest.path)}
-								{pendingPathRequest.reason && <div className="dialog-hint">{pendingPathRequest.reason}</div>}
-								<div className="dialog-actions">
-									<button type="button" className="btn" onClick={() => answerPathRequest(pendingPathRequest.id, false)}>
-										{t("pluginGrantDeny")}
-									</button>
-									<button
-										type="button"
-										className="btn primary"
-										onClick={() => answerPathRequest(pendingPathRequest.id, true)}
-									>
-										{t("pluginGrantAllow")}
-									</button>
-								</div>
-							</div>
-						</div>
-					)}
-					{pluginPathConfirm && (
-						<div className="dialog-inline perm-dialog-card" data-dialog-kind="confirm">
-							<div className="dialog-head">
-								<span className="dialog-badge">{t("pluginRequest")}</span>
-								<span className="dialog-title">{t("pluginSessionGrantTitle")}</span>
-								<button
-									type="button"
-									className="dialog-dismiss"
-									title={t("cancel")}
-									onClick={() => {
-										pluginPathConfirmRef.current = null;
-										pluginPathConfirm.resolve(false);
-										setPluginPathConfirm(null);
-									}}
-								>
-									✕
-								</button>
-							</div>
-							<div className="dialog-body">
-								{t("pluginSessionGrantBody").replace("{path}", pluginPathConfirm.path)}
-								<div className="dialog-actions">
-									<button
-										type="button"
-										className="btn"
-										onClick={() => {
-											pluginPathConfirmRef.current = null;
-											pluginPathConfirm.resolve(false);
-											setPluginPathConfirm(null);
-										}}
-									>
-										{t("cancel")}
-									</button>
-									<button
-										type="button"
-										className="btn primary"
-										onClick={() => {
-											pluginPathConfirmRef.current = null;
-											pluginPathConfirm.resolve(true);
-											setPluginPathConfirm(null);
-										}}
-									>
-										{t("ok")}
-									</button>
-								</div>
-							</div>
-						</div>
-					)}
-				</div>
-			)}
 			{sandboxModalMode && (
 				<SandboxModal
 					mode={sandboxModalMode}

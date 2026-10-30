@@ -11,16 +11,15 @@
  *
  * 本测试是**静态**体检（零端口、零浏览器，CI 必跑），两道关：
  *   1. 每套主题：6 个 `--on-*` 令牌在各自语义色实底上对比度 >= 3.0（灾难性地板）；
- *   2. styles.css 与所有内置插件：不得出现「语义色实底 + 硬编码白字」。
+ *   2. styles.css：不得出现「语义色实底 + 硬编码白字」。
  */
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const THEMES_DIR = join(ROOT, "themes");
-const PLUGINS_DIR = join(ROOT, "plugins");
 const STYLES_PATH = join(ROOT, "web", "src", "styles.css");
 
 /** 灾难性不可读的地板（与 accent-contrast / theme-inline-code 同口径）。 */
@@ -93,17 +92,6 @@ function findViolations(text: string): string[] {
 	return bad;
 }
 
-function walk(dir: string, out: string[] = []): string[] {
-	for (const entry of readdirSync(dir)) {
-		if (entry === "node_modules" || entry === "vendor" || entry.startsWith(".")) continue;
-		const p = join(dir, entry);
-		const st = statSync(p);
-		if (st.isDirectory()) walk(p, out);
-		else out.push(p);
-	}
-	return out;
-}
-
 // ---------------------------------------------------------------- 用例
 
 describe("语义色实底的前景对比度", () => {
@@ -138,19 +126,4 @@ describe("语义色实底的前景对比度", () => {
 		const bad = findViolations(stylesCss);
 		expect(bad, `styles.css 违规：\n${bad.join("\n")}`).toEqual([]);
 	});
-
-	it("内置插件不再出现「语义色实底 + 硬编码白字」", () => {
-		const files = walk(PLUGINS_DIR).filter((f) => /\.(mjs|js|cjs|css)$/.test(f));
-		// 精简发行版：官方 UI 插件已删光（0 个），跳过插件面检查
-		if (files.length === 0) return;
-		const bad: string[] = [];
-		for (const f of files) {
-			if (statSync(f).size > 4_000_000) continue;
-			const text = readFileSync(f, "utf8");
-			if (!/var\(--(green|red|amber|blue|send-blue|stop-red)/.test(text)) continue;
-			const rel = relative(ROOT, f).replace(/\\/g, "/");
-			for (const v of findViolations(text)) bad.push(`${rel}: ${v}`);
-		}
-		expect(bad, `插件违规：\n${bad.join("\n")}`).toEqual([]);
-	}, 30_000);
 });

@@ -35,7 +35,7 @@ import type {
 import { readTextQuote } from "../../../server/text-quote.js";
 import { renderHighlightedCommand } from "../bash-danger.js";
 import { TextQuoteCard } from "./TextQuoteCard";
-import { Markdown, PluginWidgetBlock } from "./Markdown";
+import { Markdown } from "./Markdown";
 import { StreamMarkdown } from "./StreamMarkdown";
 import { CollapsibleHead } from "./CollapsibleHead";
 import { appUrl } from "../base-url";
@@ -51,7 +51,6 @@ import { messageMarkdown, messagePlainText } from "../copy-text";
 import { formatSize } from "../format-bytes";
 import { copyTextToClipboard, useCopyFeedback } from "../use-copy-feedback";
 import { openExportImage, toggleExportImageSelect, useExportImage } from "../export-image-state";
-import { hasMessageWidget } from "../plugin-fence";
 import { openRollbackDialog } from "../rollback-state";
 import { BUILTIN_UI_ITEMS, type UiSlotEntry } from "../ui-slots";
 import { appSend } from "../app-globals";
@@ -182,7 +181,6 @@ function editAttLabel(att: PromptAttachment, t: Translate): string {
 			start: att.lines.start,
 			end: att.lines.end,
 		});
-	if (att.mode === "page") return t("attachPage", { name: att.name ?? att.path });
 	if (att.mode === "conversation") return t("attachConversation", { name: att.name ?? att.path });
 	if (att.mode === "reference") return t("refOnly", { path: base });
 	return t("attachContent", { path: base });
@@ -582,7 +580,6 @@ export const Message = memo(function Message({
 			align: b.align ?? "start",
 			hidden: b.hidden ?? false,
 			userOverrides: [],
-			arrangedBy: [],
 		}));
 
 	/**
@@ -600,7 +597,6 @@ export const Message = memo(function Message({
 			uiContextMessage && uiContextMessage.length > 0 ? uiContextMessage : msgCtxFallback();
 
 		const entries = rawEntries.map((entry) => {
-			if (entry.source !== "host") return entry;
 			switch (entry.id) {
 				case "host:msg-ctx-copy-markdown":
 				case "host:msg-ctx-copy-text":
@@ -913,22 +909,10 @@ export const Message = memo(function Message({
 
 	// Goal-review verdict cards (server customType "goal-review") and wizard
 	// progress cards ("goal-wizard") get a distinct frame so they read as goal
-	// feedback rather than a plain plugin message.
+	// feedback rather than a plain custom message.
 	const isGoalReview =
 		message.role === "custom" && (message.customType === "goal-review" || message.customType === "goal-wizard");
 	const isGoalWizard = message.role === "custom" && message.customType === "goal-wizard";
-	// 插件认领的自定义消息类型（messageWidget 泛化）：file / goal-review /
-	// goal-wizard 走上面的专属卡片，其余 customType 有插件认领时交 PluginWidgetBlock
-	// 渲染（载荷 JSON.stringify({customType, details})），原文做回退 children。
-	const isCustomWidget =
-		message.role === "custom" &&
-		!!message.customType &&
-		message.customType !== "file" &&
-		!isGoalReview &&
-		hasMessageWidget(message.customType);
-	const widgetPayload = isCustomWidget
-		? JSON.stringify({ customType: message.customType, details: message.details ?? {} })
-		: "";
 
 	const exportSelected = exportImage.open && exportImage.selectedIds.includes(message.id);
 	const showExportCheck = exportImage.open && canCopyWhole;
@@ -1054,13 +1038,7 @@ export const Message = memo(function Message({
 											) : (
 												<span className="msg-editor-file">
 													<span className="msg-editor-file-icon">
-														{kind === "path"
-															? att.mode === "page"
-																? "🌐"
-																: att.mode === "reference"
-																	? "🔗"
-																	: "📎"
-															: "📄"}
+														{kind === "path" ? (att.mode === "reference" ? "🔗" : "📎") : "📄"}
 													</span>
 													<span className="msg-editor-file-name">{att.name ?? att.path?.split("/").pop()}</span>
 												</span>
@@ -1158,11 +1136,9 @@ export const Message = memo(function Message({
 												? "🖼️"
 												: att.type === "folder"
 													? "📁"
-													: att.type === "page"
-														? "🌐"
-														: att.type === "conversation"
-															? "💬"
-															: "📎"}
+													: att.type === "conversation"
+														? "💬"
+														: "📎"}
 										</span>
 										<span className="queued-att-name">{att.name}</span>
 									</span>
@@ -1207,32 +1183,6 @@ export const Message = memo(function Message({
 									),
 								)}
 							</>
-						) : isCustomWidget ? (
-							<PluginWidgetBlock type={message.customType ?? ""} code={widgetPayload}>
-								{message.content.map((block, i) => (
-									<Block
-										key={`${message.id}-${i}`}
-										block={block}
-										toolResults={toolResults}
-										liveOutputs={liveOutputs}
-										toolStatuses={toolStatuses}
-										streaming={streaming}
-										isLast={isLast}
-										isTrailingBlock={i === message.content.length - 1}
-										onKillBash={onKillBash}
-										toolsWrap={toolsWrap}
-										toolImages={toolImages}
-										thinkingWrap={thinkingWrap}
-										searchActive={searchActive}
-										forceThinking={exportForceThinking}
-										forceTools={exportForceTools}
-										role={message.role}
-										showCopy={copyAllowed}
-										uiContextToolCall={uiContextToolCall}
-										onUiAction={onUiAction}
-									/>
-								))}
-							</PluginWidgetBlock>
 						) : (
 							message.content.map((block, i) => (
 								<Fragment key={`${message.id}-${i}`}>
@@ -1288,7 +1238,7 @@ function AttachmentCard({ message, forceOpen = false }: { message: UiMessage; fo
 	const details = (message.details ?? {}) as {
 		name?: string;
 		path?: string;
-		mode?: "inline" | "reference" | "lines" | "image" | "bridged" | "page" | "conversation";
+		mode?: "inline" | "reference" | "lines" | "image" | "bridged" | "conversation";
 		size?: number;
 		lines?: number;
 		startLine?: number;
@@ -1299,11 +1249,7 @@ function AttachmentCard({ message, forceOpen = false }: { message: UiMessage; fo
 	const isFolder = details.type === "folder";
 	const isReference = details.mode === "reference";
 	const isBridged = details.mode === "bridged";
-	const isPage = details.mode === "page";
 	const isConversation = details.mode === "conversation";
-	// href 协议白名单（审查 #3）：网页附件的链接只放行 http/https，
-	// javascript:/data:/vbscript: 等危险 scheme 一律回落纯文本渲染。
-	const safePageHref = details.path && /^https?:\/\//i.test(details.path.trim()) ? details.path.trim() : null;
 
 	const text = message.content
 		.filter((b): b is { type: "text"; text: string } => b.type === "text")
@@ -1312,56 +1258,45 @@ function AttachmentCard({ message, forceOpen = false }: { message: UiMessage; fo
 	const clean = stripFileWrapper(text);
 	const image = message.content.find((b) => b.type === "image") as { type: "image"; dataUrl?: string } | undefined;
 	const lines = clean.split("\n").length;
-	const canCopy = !isReference && !isPage && !isConversation && clean.length > 0;
+	const canCopy = !isReference && !isConversation && clean.length > 0;
 
 	return (
-		<div
-			className={`attachcard ${isReference ? "reference" : ""}${isPage ? " page" : ""}${isConversation ? " conversation" : ""}`}
-		>
+		<div className={`attachcard ${isReference ? "reference" : ""}${isConversation ? " conversation" : ""}`}>
 			<CollapsibleHead
 				open={shown}
 				headClassName="attachcard-head"
 				titleText={shown ? t("collapseMsg") : t("expandMsg")}
 				onToggle={() => setOpen((v) => (forceOpen ? true : !v))}
 				toggle={
-					!isReference && !isPage && !isConversation ? (
+					!isReference && !isConversation ? (
 						<span className="chead-toggle">{shown ? <FiChevronDown /> : <FiChevronRight />}</span>
 					) : null
 				}
-				icon={isFolder ? "📁" : isPage ? "🌐" : isConversation ? "💬" : "📎"}
+				icon={isFolder ? "📁" : isConversation ? "💬" : "📎"}
 				iconClassName="attachcard-icon"
 				titleClassName="attachcard-name"
 				after={
 					<>
-						{details.path &&
-							(isPage && safePageHref ? (
-								<a className="attachcard-path attachcard-link" href={safePageHref} target="_blank" rel="noreferrer">
-									{details.path}
-								</a>
-							) : (
-								<span className="attachcard-path">{details.path}</span>
-							))}
+						{details.path && <span className="attachcard-path">{details.path}</span>}
 						<span
-							className={`attachcard-mode ${details.mode === "lines" ? "lines" : isReference ? "ref" : isPage ? "page" : isConversation ? "conversation" : isBridged ? "bridged" : "inline"}`}
+							className={`attachcard-mode ${details.mode === "lines" ? "lines" : isReference ? "ref" : isConversation ? "conversation" : isBridged ? "bridged" : "inline"}`}
 						>
-							{isPage
-								? t("attachPageShort")
-								: isConversation
-									? t("attachConversationShort")
-									: isReference
-										? isFolder
-											? t("folderRefShort")
-											: `${t("refOnlyShort")} · ${formatSize(details.size)}`
-										: isBridged
-											? t("bridgedVision")
-											: image
-												? t("image")
-												: details.mode === "lines"
-													? t("inlineLinesRange", {
-															start: details.startLine ?? 1,
-															end: details.endLine ?? details.lines ?? 1,
-														})
-													: t("inlineLines", { n: details.lines ?? lines })}
+							{isConversation
+								? t("attachConversationShort")
+								: isReference
+									? isFolder
+										? t("folderRefShort")
+										: `${t("refOnlyShort")} · ${formatSize(details.size)}`
+									: isBridged
+										? t("bridgedVision")
+										: image
+											? t("image")
+											: details.mode === "lines"
+												? t("inlineLinesRange", {
+														start: details.startLine ?? 1,
+														end: details.endLine ?? details.lines ?? 1,
+													})
+												: t("inlineLines", { n: details.lines ?? lines })}
 						</span>
 						{canCopy && (
 							<button

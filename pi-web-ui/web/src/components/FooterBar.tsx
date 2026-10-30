@@ -6,9 +6,9 @@ import { ProjectPicker } from "./ProjectPicker.js";
 import { BarItem, type ViewName } from "./BarItem";
 
 interface FooterBarProps {
-	/** 底栏条目（bottombar 槽位：内置 + 插件的最终结果，宿主已排好序）。 */
+	/** 底栏条目（bottombar 槽位：内置条目的最终结果，宿主已排好序）。 */
 	bottombarItems?: import("../ui-slots").UiSlotEntry[];
-	/** 点击一个条目：view 由宿主切视图，其余（action）交给贡献它的插件。 */
+	/** 点击一个条目：交回 App 分派（view 由宿主切视图）。 */
 	onUiAction?: (item: import("../ui-slots").UiSlotEntry, value?: string) => void;
 	chat: ChatState;
 	onOpenSettings?: () => void;
@@ -78,7 +78,6 @@ export function FooterBar({
 			align: fallbackAlign,
 			hidden: false,
 			userOverrides: [],
-			arrangedBy: [],
 		};
 
 		const node = (

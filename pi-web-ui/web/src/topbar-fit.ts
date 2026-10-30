@@ -16,7 +16,7 @@
  */
 
 interface TopbarFitItem {
-	/** 条目的全局 id（`host:*` / `<pluginId>:*`）。 */
+	/** 条目的全局 id（`host:*`）。 */
 	id: string;
 	/** 实测宽度（`offsetWidth`）。0 = 当前断点下被 CSS 藏起来的条目（见下）。 */
 	width: number;

@@ -17,10 +17,10 @@ interface Props {
 	models: ModelInfo[];
 	modelsLoading: boolean;
 	activeConversationId: string;
-	/** `goalbar.actions` 槽位的最终条目（全量，含 hidden；宿主 chrome + 插件按槽位顺序合并渲染）。
+	/** `goalbar.actions` 槽位的最终条目（全量，含 hidden；宿主 chrome 按槽位顺序渲染）。
 	 *  不传 = 未接线，回落默认顺序（与旧硬编码一致）。 */
 	uiGoalbarActions?: UiSlotEntry[];
-	/** 点击一条目标条动作：交回 App 分发给贡献它的插件（与顶栏 onUiAction 同通道）。 */
+	/** 点击一条目标条动作：交回 App 分派（与顶栏 onUiAction 同通道）。 */
 	onUiAction?: (item: UiSlotEntry) => void;
 	/** 主对话当前模型（LLM loop 的评审者就是主对话；快照里是稳定引用）。 */
 	mainModel?: { id: string; name: string; provider: string } | null;
@@ -184,12 +184,12 @@ export const GoalBar = memo(function GoalBar({
 		uiGoalbarActions === undefined
 			? GOAL_DEFAULT_ORDER.map((id) => ({ id, source: "host" }) as UiSlotEntry)
 			: uiGoalbarActions.filter((e) => !e.hidden);
-	/** 取某行要画的条目：该行宿主 id + 全部插件条目（插件跟随每行，与旧版 renderSlotToolbar 四处都画一致），按槽位顺序。 */
+	/** 取某行要画的条目：该行宿主 id，按槽位顺序。 */
 	const goalZone = (ids: string[]): UiSlotEntry[] => {
 		const set = new Set(ids);
-		return allGoalEntries.filter((e) => set.has(e.id) || e.source !== "host");
+		return allGoalEntries.filter((e) => set.has(e.id));
 	};
-	/** 布局页改名 / 插件 arrange 指定过文案（`labelExplicit`）→ 用那一条，否则内置 i18n 文案。 */
+	/** 布局页改名指定过文案（`labelExplicit`）→ 用那一条，否则内置 i18n 文案。 */
 	const goalLabel = (id: string, fallback: string): string => {
 		const e = allGoalEntries.find((x) => x.id === id);
 		return e?.labelExplicit ? e.label : fallback;
@@ -543,11 +543,9 @@ export const GoalBar = memo(function GoalBar({
 				)}
 			</div>
 			<div className="goalbar-opts">
-				{goalZone(["host:goal-model", "host:goal-execmodel", "host:goal-rounds"])
-					.filter((e) => e.source === "host")
-					.map((e) => (
-						<Fragment key={e.id}>{goalHostNodes[e.id]}</Fragment>
-					))}
+				{goalZone(["host:goal-model", "host:goal-execmodel", "host:goal-rounds"]).map((e) => (
+					<Fragment key={e.id}>{goalHostNodes[e.id]}</Fragment>
+				))}
 
 				{goal.history && goal.history.length > 0 && (
 					<Dropdown

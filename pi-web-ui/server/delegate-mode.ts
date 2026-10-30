@@ -51,7 +51,6 @@ const BLOCKED_TOOLS = new Set([
 	// 代码求值（eval 沙箱可写真实文件系统 —— 主对话只审阅不施工，#436）
 	"eval",
 	"codemode",
-	"mcp_manage",
 	"sandbox",
 	"format",
 	"prettier",

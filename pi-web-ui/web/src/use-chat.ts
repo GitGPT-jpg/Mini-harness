@@ -34,11 +34,6 @@ import type {
 	UiModelConfigEntry,
 	UiEnrichResult,
 	UiPendingQuestion,
-	UiPluginCatalogEntry,
-	UiPluginInfo,
-	UiPluginUpdateInfo,
-	UiPresetCatalogEntry,
-	UiPresetImportPreview,
 	UiProviderConfig,
 	UiQuestion,
 	UiServiceInfo,
@@ -46,11 +41,8 @@ import type {
 	UiState,
 	UiMessage,
 	UiToolApproval,
-	UiMcpServer,
-	RemoteMcpServer,
 	RemoteSkillSummary,
 	DshPatchFileInfo,
-	DshMarketPlugin,
 	UpdateItemKind,
 } from "./types";
 
@@ -76,8 +68,6 @@ import { receiveToolInfo } from "./tool-info-state";
 import { receiveToolPrompt } from "./tool-prompt-state";
 // 被上下文压缩折叠的历史消息（issue #398）：按需获取后回模块级 store 供卡片展开。
 import { receiveCompactedMessages } from "./compacted-history-state";
-import { emitPluginData } from "./plugin-loader";
-import { ingestPluginLogsData } from "./plugin-logs";
 import { PROTOCOL_VERSION } from "./protocol-version";
 import { mergeEarlierPage } from "./history-window";
 import { enqueueNotice } from "./notice-policy";
@@ -87,7 +77,7 @@ import {
 	type ProviderOAuthResultState,
 	type ProviderOAuthServerMessage,
 } from "./provider-oauth-state";
-import type { ConnStatus, PluginPanelGroup, SchedulerTaskView } from "./types";
+import type { ConnStatus, SchedulerTaskView } from "./types";
 
 export type { ConnStatus };
 
@@ -117,9 +107,8 @@ export interface UpdateAllItem {
 	latestPublishedAt?: string | null;
 	upToDate: boolean;
 	error?: string;
-	/** git-extension / plugin only: `host/path` shorthand (prepend `git:` for the `pi update` command). */
+	/** git-extension only: `host/path` shorthand (prepend `git:` for the `pi update` command). */
 	source?: string;
-	pluginId?: string;
 	builtin?: boolean;
 }
 
@@ -134,90 +123,6 @@ export interface Notice {
  * (via the terminal bridge) — this is just the tab metadata. */
 export interface TerminalMeta extends TerminalInfo {
 	conversationId: string;
-}
-
-/** 插件后台作业（安装/更新/卸载）的实时状态（issue #152）。
- *  由服务端的 `plugin_job` 即时通道消息驱动；只在发起它的客户端上看得到。 */
-export interface PluginJobState {
-	jobId: string;
-	action: "install" | "update" | "uninstall";
-	pluginId: string;
-	phase: "start" | "log" | "done";
-	/** phase="done"：作业是否成功。 */
-	ok?: boolean;
-	/** phase="done" 且失败：可读原因。 */
-	error?: string;
-	/** phase="done"：输出尾部（就地展开看详情）。 */
-	output?: string;
-	/** 最近的输出行（滚动显示最后一行）。 */
-	lines: string[];
-	/** 本地收到 start 的时间（算耗时；作业在服务端）。 */
-	startedAt: number;
-}
-
-/** 预设导出结果（`preset_export_result`）：json = 可复制/下载的交换文档文本。 */
-export interface PresetExportState {
-	requestId?: string;
-	ok: boolean;
-	name?: string;
-	/** 建议的下载文件名（<slug>-<短哈希>.json）。 */
-	fileName?: string;
-	json?: string;
-	error?: string;
-	receivedAt: number;
-}
-
-/** 预设导入结果（`preset_import_result`）：dryRun=true 时只有预览，没有落盘。
- *  source 是前端记的（“粘贴/文件/网址”），用于预览头部提示。 */
-export interface PresetImportState {
-	requestId?: string;
-	ok: boolean;
-	dryRun: boolean;
-	preview?: UiPresetImportPreview;
-	applied?: boolean;
-	error?: string;
-	source: "paste" | "file" | "url";
-	receivedAt: number;
-}
-
-/** 社区共享预设目录（`preset_catalog_result`）：失败时 entries 是上一次成功的缓存。 */
-export interface PresetCatalogState {
-	requestId?: string;
-	ok: boolean;
-	entries: UiPresetCatalogEntry[];
-	/** 目录来源地址（关闭时为空串）。 */
-	source: string;
-	cached: boolean;
-	fetchedAt: number;
-	error?: string;
-	receivedAt: number;
-}
-
-/** 预设分享结果（`preset_share_result`）：method=gh|api 时 url 是新 Issue（直接打开）；
- *  method=browser 时前端复制 json 后打开 url（预填正文/标题的建 Issue 页）。 */
-export interface PresetShareState {
-	requestId?: string;
-	ok: boolean;
-	method?: "gh" | "api" | "browser";
-	url?: string;
-	name?: string;
-	json?: string;
-	error?: string;
-	receivedAt: number;
-}
-
-/** 「安装前先读 spec」结果（DSH P0-3）：形状分类 + 已装判定 + 远端 manifest 探测。
- *  由 `plugin_install_inspect_result` 驱动；problem 非空时设置面板在输入框下显示一句话。 */
-export interface PluginInstallInspectState {
-	requestId: string;
-	source: string;
-	kind: "npm" | "github" | "url" | "path" | "invalid";
-	suggestedId: string;
-	installed: boolean;
-	problem?:
-		"invalid-spec" | "already-installed" | "not-found" | "not-a-package" | "not-a-bundle" | "network" | "unknown";
-	detail?: string;
-	manifest?: { id?: string; name?: string; version?: string; description?: string; permissions?: string[] };
 }
 
 export interface ChatState {
@@ -242,7 +147,7 @@ export interface ChatState {
 	serverVersion?: string;
 	/** 引擎标识（pi | dsh）—— ready 消息携带，底栏显示徽标。 */
 	engine?: string;
-	/** PI_WEB_MANAGED=1 on the server: updates and plugin installs come from
+	/** PI_WEB_MANAGED=1 on the server: updates come from
 	 *  whoever deploys this instance, so the interface does not offer them.
 	 *  The server refuses those messages regardless (server/managed.ts). */
 	/** pi-web-ui's own version, from `ready`. `serverVersion` is the pi SDK's,
@@ -351,15 +256,13 @@ export interface ChatState {
 	terminalActiveId: string | null;
 	/** Goal / review status (set via the goal bar). */
 	goal: GoalStatus;
-	/** Settings-panel state (system prompt, skill/extension toggles, presets). */
+	/** Settings-panel state (skill/extension toggles, tools, layout …). */
 	settings: UiSettingsState | null;
 	/** AI-started background servers (managed from the 后台任务 panel). The
 	 *  list lives on the client session, so it survives conversation ends. */
 	bgServers: BgServer[];
 	/** Built-in scheduled tasks (issue #184, global list, all projects). */
 	schedulerTasks: SchedulerTaskView[];
-	/** P3：左栏「运行的对话」里的插件运行条目（全量，服务端节流推送）。 */
-	pluginPanelGroups: PluginPanelGroup[];
 	/** Last fetch_models probe result (custom-provider model list), matched by
 	 *  reqId in the model config modal. */
 	fetchModelsResult: {
@@ -440,46 +343,6 @@ export interface ChatState {
 		ok: boolean;
 		results: SessionSearchResult[];
 	} | null;
-	/** Installed optional plugins (<dataDir>/plugins). Empty = none installed. */
-	plugins: UiPluginInfo[];
-	/** Server-side plugin reload counter (import-cache buster, see plugins msg). */
-	pluginsEpoch: number;
-	/** 已装插件的更新状态（key = pluginId）。 */
-	pluginUpdates: Record<string, UiPluginUpdateInfo> | null;
-	/** 正在检查插件更新 */
-	checkingPluginUpdates: boolean;
-	/** 插件后台作业的实时状态，key = jobId（即时通道消息：刷新即丢，作业在服务端继续跑）。 */
-	pluginJobs: Record<string, PluginJobState>;
-	/** 预设分享（server/preset-share.ts）：导出结果 / 导入预览 / 社区目录（刷新即丢）。 */
-	presetExport: PresetExportState | null;
-	presetImport: PresetImportState | null;
-	presetCatalog: PresetCatalogState | null;
-	presetShare: PresetShareState | null;
-	/** 最近一次「安装前先读 spec」的检查结果（设置面板输入框下展示；刷新即丢）。 */
-	installInspect: PluginInstallInspectState | null;
-	/** 插件目录授权表（issue #146）：设置面板列出 + 可撤销。 */
-	pluginGrants: { pluginId: string; paths: string[] }[];
-	/** 插件能力授权表（动态授权）：设置面板列出 + 可撤销；session 授权只在本次运行有效。 */
-	pluginPermissions: {
-		pluginId: string;
-		family: "net" | "llm";
-		hosts?: string[];
-		models?: string[];
-		reason?: string;
-		grantedAt: number;
-		session?: boolean;
-	}[];
-	/** 等待用户答复的「插件请求访问目录」（队列；服务端 120s 未答复视为拒绝）。 */
-	pathRequests: { id: string; pluginId: string; path: string; reason?: string }[];
-	/** 等待用户答复的「插件请求能力授权」（队列；语义与 pathRequests 同）。 */
-	permRequests: {
-		id: string;
-		pluginId: string;
-		family: "net" | "llm";
-		hosts?: string[];
-		models?: string[];
-		reason?: string;
-	}[];
 	/** DSH engine: <dataDir>/dsh-patches user patch files (list + dir). */
 	dshPatches: { patchDir: string; files: DshPatchFileInfo[] } | null;
 	/** DSH engine: Agent 预设名录（null = 未加载/legacy，UI 隐藏预设条）。 */
@@ -695,61 +558,8 @@ type Action =
 	| { type: "goal_status"; status: GoalStatus }
 	| { type: "plan_updated"; conversationId?: string; plan: PlanState | null }
 	| { type: "settings"; settings: UiSettingsState }
-	| {
-			type: "mcp_servers";
-			servers: UiMcpServer[];
-			globalConfigPath?: string;
-			projectConfigPath?: string;
-	  }
 	| { type: "bg_servers"; servers: BgServer[] }
 	| { type: "scheduler_tasks"; tasks: SchedulerTaskView[] }
-	| { type: "plugin_panel_items"; groups: PluginPanelGroup[] }
-	| { type: "plugins"; plugins: UiPluginInfo[]; epoch: number }
-	| { type: "plugin_updates"; updates: UiPluginUpdateInfo[] }
-	| { type: "plugin_updates_check_started" }
-	/** 插件后台作业进度（安装/更新/卸载）：line 为该次新增的一行输出。 */
-	| { type: "plugin_job"; job: Omit<PluginJobState, "lines" | "startedAt">; line?: string }
-	/** 预设分享（server/preset-share.ts）：导出/导入/目录/一键分享回执。 */
-	| { type: "preset_export_result"; result: Omit<PresetExportState, "receivedAt"> }
-	| {
-			type: "preset_import_result";
-			result: Omit<PresetImportState, "receivedAt" | "source">;
-			source: PresetImportState["source"];
-	  }
-	| { type: "preset_catalog_result"; result: Omit<PresetCatalogState, "receivedAt"> }
-	| { type: "preset_share_result"; result: Omit<PresetShareState, "receivedAt"> }
-	| { type: "plugin_install_inspect_result"; result: PluginInstallInspectState }
-	/** 插件目录授权表（服务端推）。 */
-	| { type: "plugin_grants"; grants: { pluginId: string; paths: string[] }[] }
-	/** 插件能力授权表（服务端推；session 授权只在本次运行有效）。 */
-	| {
-			type: "plugin_permissions";
-			grants: {
-				pluginId: string;
-				family: "net" | "llm";
-				hosts?: string[];
-				models?: string[];
-				reason?: string;
-				grantedAt: number;
-				session?: boolean;
-			}[];
-	  }
-	/** 插件请求能力授权（等用户答复；答复/超时后服务端推 resolved，本地移除）。 */
-	| {
-			type: "plugin_permission_request";
-			req: {
-				id: string;
-				pluginId: string;
-				family: "net" | "llm";
-				hosts?: string[];
-				models?: string[];
-				reason?: string;
-			};
-	  }
-	| { type: "plugin_permission_resolved"; id: string }
-	/** 插件请求访问某个目录（等用户答复；答复后本地移除）。 */
-	| { type: "plugin_path_request"; req: { id: string; pluginId: string; path: string; reason?: string } }
-	| { type: "plugin_path_resolved"; id: string }
 	| {
 			type: "dsh_patches";
 			patchDir: string;
@@ -1250,91 +1060,10 @@ function reducer(state: ChatState, action: Action): ChatState {
 		}
 		case "settings":
 			return { ...state, settings: action.settings };
-		case "mcp_servers": {
-			if (!state.settings) return state;
-			return {
-				...state,
-				settings: {
-					...state.settings,
-					mcpServers: action.servers,
-					mcpGlobalConfigPath: action.globalConfigPath ?? state.settings.mcpGlobalConfigPath,
-					mcpProjectConfigPath: action.projectConfigPath ?? state.settings.mcpProjectConfigPath,
-				},
-			};
-		}
 		case "bg_servers":
 			return { ...state, bgServers: action.servers };
 		case "scheduler_tasks":
 			return { ...state, schedulerTasks: action.tasks };
-		case "plugin_panel_items":
-			return { ...state, pluginPanelGroups: action.groups };
-		case "plugins":
-			return { ...state, plugins: action.plugins, pluginsEpoch: action.epoch };
-		case "plugin_updates_check_started":
-			return { ...state, checkingPluginUpdates: true };
-		case "plugin_updates": {
-			const map: Record<string, UiPluginUpdateInfo> = {};
-			for (const u of action.updates) {
-				map[u.id] = u;
-			}
-			return { ...state, pluginUpdates: map, checkingPluginUpdates: false };
-		}
-		case "plugin_grants":
-			return { ...state, pluginGrants: action.grants };
-		case "plugin_permissions":
-			return { ...state, pluginPermissions: action.grants };
-		case "plugin_path_request":
-			return {
-				...state,
-				pathRequests: [...state.pathRequests.filter((r) => r.id !== action.req.id), action.req],
-			};
-		case "plugin_path_resolved":
-			return { ...state, pathRequests: state.pathRequests.filter((r) => r.id !== action.id) };
-		case "plugin_permission_request":
-			return {
-				...state,
-				permRequests: [...state.permRequests.filter((r) => r.id !== action.req.id), action.req],
-			};
-		case "plugin_permission_resolved":
-			return { ...state, permRequests: state.permRequests.filter((r) => r.id !== action.id) };
-		case "plugin_job": {
-			// 插件后台作业的进度（安装/更新/卸载）——即时通道，不进快照。
-			const { pluginId, phase, ok, action: jobAction } = action.job;
-			let nextUpdates = state.pluginUpdates;
-			if (jobAction === "update" && phase === "done" && ok && state.pluginUpdates?.[pluginId]) {
-				nextUpdates = {
-					...state.pluginUpdates,
-					[pluginId]: {
-						...state.pluginUpdates[pluginId],
-						updatable: false,
-					},
-				};
-			}
-			const prev = state.pluginJobs[action.job.jobId];
-			const lines = action.line ? [...(prev?.lines ?? []), action.line].slice(-40) : (prev?.lines ?? []);
-			const next: PluginJobState = {
-				...prev,
-				...action.job,
-				lines,
-				startedAt: prev?.startedAt ?? Date.now(),
-			};
-			return {
-				...state,
-				pluginUpdates: nextUpdates,
-				pluginJobs: { ...state.pluginJobs, [action.job.jobId]: next },
-			};
-		}
-		case "preset_export_result":
-			return { ...state, presetExport: { ...action.result, receivedAt: Date.now() } };
-		case "preset_import_result":
-			return { ...state, presetImport: { ...action.result, source: action.source, receivedAt: Date.now() } };
-		case "preset_catalog_result":
-			return { ...state, presetCatalog: { ...action.result, receivedAt: Date.now() } };
-		case "preset_share_result":
-			return { ...state, presetShare: { ...action.result, receivedAt: Date.now() } };
-		case "plugin_install_inspect_result":
-			// 只留最近一次（输入框下面的那一句话），旧的直接丢掉。
-			return { ...state, installInspect: action.result };
 		case "dsh_patches":
 			return { ...state, dshPatches: { patchDir: action.patchDir, files: action.files } };
 		case "dsh_presets":
@@ -1739,7 +1468,6 @@ export function useChat() {
 		goal: DEFAULT_GOAL,
 		bgServers: [],
 		schedulerTasks: [],
-		pluginPanelGroups: [],
 		settings: null,
 		fetchModelsResult: null,
 		testModelConnectionResult: null,
@@ -1753,20 +1481,6 @@ export function useChat() {
 		fileSearch: null,
 		sessionSearch: null,
 		scmDirty: 0,
-		plugins: [],
-		pluginsEpoch: 0,
-		pluginUpdates: null,
-		checkingPluginUpdates: false,
-		pluginJobs: {},
-		presetExport: null,
-		presetImport: null,
-		presetCatalog: null,
-		presetShare: null,
-		installInspect: null,
-		pluginGrants: [],
-		pluginPermissions: [],
-		pathRequests: [],
-		permRequests: [],
 		dshPatches: null,
 		dshPresets: null,
 		dshPermission: null,
@@ -1927,9 +1641,6 @@ export function useChat() {
 			// state renders instead of the cached list.
 			if (msg.type === "check_updates_all" && msg.force === true) {
 				dispatch({ type: "updates_check_started" });
-			}
-			if (msg.type === "check_plugin_updates") {
-				dispatch({ type: "plugin_updates_check_started" });
 			}
 			ws.send(JSON.stringify(msg));
 			// 流式期间发送排队/插队消息或点 ✕ / ↩ 撤回：立即在本地做乐观队列更新，
@@ -2472,51 +2183,6 @@ export function useChat() {
 						},
 					});
 					break;
-				case "page_request": {
-					// 模型要操作浏览器里的页面（browser_page 工具）：转给扩展，再把结果回给服务端。
-					// 服务端的工具正阻塞等这个 page_response —— 任何一条路径（宿主桥缺失、
-					// 扩展没装、页面没授权、动作失败）都必须回一条，否则模型只能等到超时。
-					void (async () => {
-						const host = (
-							window as unknown as {
-								__piWebUiHost?: {
-									pageCall?: (opts: {
-										op: string;
-										args?: Record<string, unknown>;
-										target?: string;
-										timeoutMs?: number;
-									}) => Promise<{ ok: boolean; result?: unknown; error?: string }>;
-								};
-							}
-						).__piWebUiHost;
-						let res: { ok: boolean; result?: unknown; error?: string };
-						if (!host?.pageCall) {
-							res = { ok: false, error: "宿主页面桥不可用（页面版本过旧？）—— 刷新本页后再试" };
-						} else {
-							try {
-								res = await host.pageCall({
-									op: msg.op,
-									...(msg.args === undefined ? {} : { args: msg.args }),
-									...(msg.target ? { target: msg.target } : {}),
-									timeoutMs: msg.timeoutMs,
-								});
-							} catch (err) {
-								res = { ok: false, error: err instanceof Error ? err.message : String(err) };
-							}
-						}
-						send({
-							type: "page_response",
-							id: msg.id,
-							ok: res.ok === true,
-							...(res.ok === true
-								? res.result === undefined
-									? {}
-									: { result: res.result }
-								: { error: res.error ?? "页面操作失败" }),
-						});
-					})();
-					break;
-				}
 				case "terminal_output":
 					bridgeRef.current.write(
 						msg.conversationId ?? chatApi.current.chat.activeConversationId,
@@ -2561,170 +2227,11 @@ export function useChat() {
 					}
 					dispatch({ type: "settings", settings: msg.settings });
 					break;
-				case "mcp_servers":
-					dispatch({
-						type: "mcp_servers",
-						servers: msg.servers,
-						globalConfigPath: msg.globalConfigPath,
-						projectConfigPath: msg.projectConfigPath,
-					});
-					break;
 				case "bg_servers":
 					dispatch({ type: "bg_servers", servers: msg.servers });
 					break;
 				case "scheduler_tasks":
 					dispatch({ type: "scheduler_tasks", tasks: msg.tasks });
-					break;
-				case "plugin_panel_items":
-					dispatch({ type: "plugin_panel_items", groups: msg.groups });
-					break;
-				case "plugins":
-					dispatch({ type: "plugins", plugins: msg.plugins, epoch: msg.epoch });
-					break;
-				case "plugin_updates":
-					dispatch({ type: "plugin_updates", updates: msg.updates });
-					break;
-				case "plugin_grants":
-					dispatch({ type: "plugin_grants", grants: msg.grants });
-					break;
-				case "plugin_permissions":
-					dispatch({ type: "plugin_permissions", grants: msg.grants });
-					break;
-				case "plugin_permission_request":
-					dispatch({
-						type: "plugin_permission_request",
-						req: {
-							id: msg.id,
-							pluginId: msg.pluginId,
-							family: msg.family,
-							...(msg.hosts ? { hosts: msg.hosts } : {}),
-							...(msg.models ? { models: msg.models } : {}),
-							...(msg.reason ? { reason: msg.reason } : {}),
-						},
-					});
-					break;
-				case "plugin_permission_resolved":
-					dispatch({ type: "plugin_permission_resolved", id: msg.id });
-					break;
-				case "plugin_path_request":
-					dispatch({
-						type: "plugin_path_request",
-						req: {
-							id: msg.id,
-							pluginId: msg.pluginId,
-							path: msg.path,
-							...(msg.reason ? { reason: msg.reason } : {}),
-						},
-					});
-					break;
-				case "plugin_dom_consent_request":
-					// DOM 授权两步握手（协议 v20）：grant 由服务端生成在途请求并广播；
-					// 只有发起端（from === 自己的 clientId）自动确认——用户在设置面板
-					// 点一下的体验不变，其他端不是发起人不代答（服务端也只接受广播时
-					// 在线端的应答，陌生连接无从插手）。
-					if (msg.from === getClientId()) {
-						ws.send(
-							JSON.stringify({
-								type: "plugin_dom_consent_response",
-								id: msg.id,
-								ok: true,
-							} satisfies ClientMessage),
-						);
-					}
-					break;
-				case "plugin_job":
-					dispatch({
-						type: "plugin_job",
-						job: {
-							jobId: msg.jobId,
-							action: msg.action,
-							pluginId: msg.pluginId,
-							phase: msg.phase,
-							...(msg.ok === undefined ? {} : { ok: msg.ok }),
-							...(msg.error ? { error: msg.error } : {}),
-							...(msg.output ? { output: msg.output } : {}),
-						},
-						...(msg.line ? { line: msg.line } : {}),
-					});
-					break;
-				case "plugin_install_inspect_result":
-					dispatch({
-						type: "plugin_install_inspect_result",
-						result: {
-							requestId: String(msg.requestId ?? ""),
-							source: String(msg.source ?? ""),
-							kind: msg.kind,
-							suggestedId: String(msg.suggestedId ?? ""),
-							installed: msg.installed === true,
-							...(msg.problem ? { problem: msg.problem } : {}),
-							...(msg.detail ? { detail: msg.detail } : {}),
-							...(msg.manifest ? { manifest: msg.manifest } : {}),
-						},
-					});
-					break;
-				case "preset_export_result":
-					dispatch({
-						type: "preset_export_result",
-						result: {
-							...(msg.requestId ? { requestId: msg.requestId } : {}),
-							ok: msg.ok === true,
-							...(msg.name ? { name: msg.name } : {}),
-							...(msg.fileName ? { fileName: msg.fileName } : {}),
-							...(msg.json ? { json: msg.json } : {}),
-							...(msg.error ? { error: msg.error } : {}),
-						},
-					});
-					break;
-				case "preset_import_result": {
-					// 导入来源由前端编在 requestId 前缀里（"paste:" / "file:" / "url:"），
-					// 服务端不关心来源，但预览头部要提示“从网址导入”还是“粘贴的”。
-					const id = String(msg.requestId ?? "");
-					const source: PresetImportState["source"] = id.startsWith("url:")
-						? "url"
-						: id.startsWith("file:")
-							? "file"
-							: "paste";
-					dispatch({
-						type: "preset_import_result",
-						source,
-						result: {
-							...(msg.requestId ? { requestId: msg.requestId } : {}),
-							ok: msg.ok === true,
-							dryRun: msg.dryRun === true,
-							...(msg.preview ? { preview: msg.preview } : {}),
-							...(msg.applied ? { applied: true } : {}),
-							...(msg.error ? { error: msg.error } : {}),
-						},
-					});
-					break;
-				}
-				case "preset_catalog_result":
-					dispatch({
-						type: "preset_catalog_result",
-						result: {
-							...(msg.requestId ? { requestId: msg.requestId } : {}),
-							ok: msg.ok === true,
-							entries: msg.entries ?? [],
-							source: msg.source ?? "",
-							cached: msg.cached === true,
-							fetchedAt: msg.fetchedAt ?? 0,
-							...(msg.error ? { error: msg.error } : {}),
-						},
-					});
-					break;
-				case "preset_share_result":
-					dispatch({
-						type: "preset_share_result",
-						result: {
-							...(msg.requestId ? { requestId: msg.requestId } : {}),
-							ok: msg.ok === true,
-							...(msg.method ? { method: msg.method } : {}),
-							...(msg.url ? { url: msg.url } : {}),
-							...(msg.name ? { name: msg.name } : {}),
-							...(msg.json ? { json: msg.json } : {}),
-							...(msg.error ? { error: msg.error } : {}),
-						},
-					});
 					break;
 				case "dsh_patches":
 					dispatch({ type: "dsh_patches", patchDir: msg.patchDir, files: msg.files });
@@ -2734,10 +2241,6 @@ export function useChat() {
 					break;
 				case "dsh_permission":
 					dispatch({ type: "dsh_permission", options: msg.options, defaultPreset: msg.defaultPreset });
-					break;
-				case "plugin_data":
-					// 宿主保留通道（host.log 按需拉取回包）先拦截：命中即吞掉，只进日志 store。
-					if (!ingestPluginLogsData(msg.pluginId, msg.payload)) emitPluginData(msg.pluginId, msg.payload);
 					break;
 				default:
 					break;

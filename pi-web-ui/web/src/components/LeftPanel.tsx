@@ -15,14 +15,7 @@ import {
 	FiX,
 } from "react-icons/fi";
 import { LuFlaskConical } from "react-icons/lu";
-import type {
-	ConversationSummary,
-	ElsewhereRunning,
-	PluginPanelGroup,
-	PluginPanelItem,
-	ProjectSummary,
-	SessionSummary,
-} from "../types";
+import type { ConversationSummary, ElsewhereRunning, ProjectSummary, SessionSummary } from "../types";
 import { useT } from "../i18n";
 import { useAppField, useEngineCapabilities } from "../app-globals";
 import { applySashDrag } from "../panel-sash";
@@ -87,34 +80,28 @@ interface LeftPanelProps {
 	onToggleCollapse?: () => void;
 
 	// ---- 宿主 UI 扩展点（issue #146）：由 App 用 buildUiSlots() 算好后传进来 ----
-	/** `contextmenu.session` 槽位的最终条目（host 内置 + 插件贡献）。左栏只负责**打开**
+	/** `contextmenu.session` 槽位的最终条目（host 内置）。左栏只负责**打开**
 	 *  菜单（openContextMenu），菜单本身由 App 全局渲染；host 条目的实现就在本组件里（见
-	 *  dispatchHostSessionEntry），插件条目才交回 App 分发给插件。 */
+	 *  dispatchHostSessionEntry）。 */
 	uiContextSession?: UiSlotEntry[];
-	/** `leftpanel.sessions` 槽位的最终条目（host 内置 + 插件贡献，由 App 算好）。
+	/** `leftpanel.sessions` 槽位的最终条目（由 App 算好）。
 	 *  不传/空数组 = 不画，会话行 DOM 与旧版一字不差。 */
 	uiLeftSessions?: UiSlotEntry[];
 	/** P1：`contextmenu.project` 槽位的最终条目（项目行右键；与 uiContextSession 同口径，空 = 不抢浏览器右键）。 */
 	uiContextProject?: UiSlotEntry[];
-	/** P1：「最近项目」分区标题栏的插件按钮（App 已滤 hidden）。 */
+	/** P1：「最近项目」分区标题栏的槽位按钮（App 已滤 hidden）。 */
 	uiProjectsActions?: UiSlotEntry[];
 	/** P1：项目行内嵌区（`leftpanel.project`，App 已滤 hidden）。 */
 	uiLeftProject?: UiSlotEntry[];
-	/** P1：「运行的对话」分区标题栏的插件按钮。 */
+	/** P1：「运行的对话」分区标题栏的槽位按钮。 */
 	uiRunningActions?: UiSlotEntry[];
-	/** P1：「历史对话」分区标题栏的插件按钮。 */
+	/** P1：「历史对话」分区标题栏的槽位按钮。 */
 	uiHistoryActions?: UiSlotEntry[];
-	/** 点击一条会话行内嵌条目：交回 App 分发给贡献它的插件（与顶栏 onUiAction 同通道）。
-	 *  target 可选：项目行条目带上 `{id: 项目路径, kind: "project"}`，插件据此知道是哪个项目。 */
+	/** 点击一条会话行内嵌条目：交回 App 分发（与顶栏 onUiAction 同通道）。
+	 *  target 可选：项目行条目带上 `{id: 项目路径, kind: "project"}`。 */
 	onUiAction?: (item: UiSlotEntry, value?: string, target?: { id: string; kind?: string; label?: string }) => void;
 	/** P2：`leftpanel.sections` 的全量条目（含 hidden，由 App 算好）。决定三个分区的先后与显隐；不传 = 缺省顺序、全部显示。 */
 	uiSections?: UiSlotEntry[];
-	/** P4：插件自定义分区的正文渲染（由 App 用 PluginPage 挂插件 bundle；不传 = 空正文）。 */
-	renderPluginSectionBody?: (entry: UiSlotEntry) => React.ReactNode;
-	/** P3：插件运行条目分组（左栏「运行的对话」末尾；全量，服务端节流推送；不传 = 没有）。 */
-	uiPluginRunning?: PluginPanelGroup[];
-	/** P3：点插件运行条目（缺省 action 时无效果，由 App 分派给插件 bundle）。 */
-	onPluginRunningAction?: (group: PluginPanelGroup, item: PluginPanelItem) => void;
 	/** P2：`leftpanel.running` 运行行内嵌区的条目（与 leftpanel.sessions 并集）。 */
 	uiLeftRunning?: UiSlotEntry[];
 	/** P2：`leftpanel.history` 历史行内嵌区的条目（与 leftpanel.sessions 并集）。 */
@@ -208,43 +195,12 @@ function useCollapsed(key: string, defaultCollapsed = false): [boolean, () => vo
 }
 
 /* VSCode 风格可拖拽分割：展开区的 flex-grow 权重持久化，折叠区不占空间 */
-/** P4：插件自定义分区的折叠态（只记折叠的分区键，JSON 数组）。 */
-const LS_COLLAPSE_PLUGIN_SECTIONS = "pi-web-ui:lp-collapse-plugin-sections";
-function usePluginSectionCollapse(): [ReadonlySet<string>, (key: string) => void] {
-	const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => {
-		try {
-			const raw = localStorage.getItem(LS_COLLAPSE_PLUGIN_SECTIONS);
-			const arr: unknown = raw ? JSON.parse(raw) : [];
-			return new Set(Array.isArray(arr) ? arr.filter((x): x is string => typeof x === "string") : []);
-		} catch {
-			return new Set<string>();
-		}
-	});
-	const toggle = useCallback((key: string) => {
-		setCollapsed((prev) => {
-			const next = new Set(prev);
-			if (next.has(key)) next.delete(key);
-			else next.add(key);
-			try {
-				localStorage.setItem(LS_COLLAPSE_PLUGIN_SECTIONS, JSON.stringify([...next]));
-			} catch {}
-			return next;
-		});
-	}, []);
-	return [collapsed, toggle];
-}
 const LS_LP_SIZES = "pi-web-ui:lp-sizes";
-/** 分区权重：宿主三键 + 插件自定义分区键（`plugin:…`，缺省 1）。 */
+/** 分区权重：宿主三键（缺省 1）。 */
 type LpWeights = Record<string, number>;
 const DEFAULT_LP_WEIGHTS: LpWeights = { projects: 1, convs: 1, sessions: 1 };
 /** 折叠区仅留标题高度（与 styles.css 的 .lp-section.collapsed 对齐）。 */
 const LP_COLLAPSED_HEADER_PX = 32;
-/** P3：插件运行条目状态 → i18n key（tooltip 文案）。 */
-const PLUGIN_STATUS_KEY = {
-	running: "pluginRunStatusRunning",
-	done: "pluginRunStatusDone",
-	error: "pluginRunStatusError",
-} as const;
 /** 展开区最小高度（≈3 行，与 styles.css 的 .lp-section min-height 对齐）。 */
 const LP_MIN_SECTION_PX = 72;
 /** 存档解析与拖动换算都是纯函数，与右栏共用（见 `../panel-sash`）。 */
@@ -277,9 +233,6 @@ export const LeftPanel = memo(function LeftPanel({
 	uiRunningActions,
 	uiHistoryActions,
 	uiSections,
-	renderPluginSectionBody,
-	uiPluginRunning,
-	onPluginRunningAction,
 	uiLeftRunning,
 	uiLeftHistory,
 	onUiAction,
@@ -305,7 +258,6 @@ export const LeftPanel = memo(function LeftPanel({
 	const [collapseProjects, toggleProjects] = useCollapsed(LS_COLLAPSE_PROJECTS, false);
 	const [collapseConvs, toggleConvs] = useCollapsed(LS_COLLAPSE_CONVS, false);
 	const [collapseSessions, toggleSessions] = useCollapsed(LS_COLLAPSE_SESSIONS, false);
-	const [pluginCollapsed, togglePluginCollapsed] = usePluginSectionCollapse();
 	const [collapsedSubagents, toggleSubagents] = useCollapsedSubagents();
 	const [visibleSessionCount, setVisibleSessionCount] = useState(60);
 	useEffect(() => {
@@ -433,8 +385,6 @@ export const LeftPanel = memo(function LeftPanel({
 						: t("dismissFinishedSubagents", { n: nFinished });
 			const armed = Boolean(scopeId) && forceArmedRef.current === scopeId;
 			const entries = (uiContextSession ?? []).map((entry) => {
-				// 插件贡献的条目原样透传（点击由 App 分发给插件）。
-				if (entry.source !== "host") return entry;
 				// 重命名：运行中对话行与历史行才有；区域空白处 /「另一处」行隐藏
 				// （与悬停 ✎ 铅笔同一套内嵌输入框，见 dispatchHostSessionEntry）。
 				if (entry.id === "host:conv-rename")
@@ -637,7 +587,7 @@ export const LeftPanel = memo(function LeftPanel({
 		},
 		[panelSend, showSessionMenu, conversations, sessions],
 	);
-	// 每次渲染把最新闭包挂给菜单用的那个 ref（同 App 的 chatRefForPlugins / ContextMenu 的
+	// 每次渲染把最新闭包挂给菜单用的那个 ref（同 ContextMenu 的
 	// activateRef：挂在 render 上的 ref，不是副作用）。
 	hostActionRef.current = dispatchHostSessionEntry;
 
@@ -794,54 +744,14 @@ export const LeftPanel = memo(function LeftPanel({
 	const sectionPlan = planLeftSections(uiSections);
 	const shownPlan = sectionPlan.filter((p) => p.shown);
 	const collapsedOf = (k: LpSectionKey): boolean =>
-		k === "projects"
-			? collapseProjects
-			: k === "convs"
-				? collapseConvs
-				: k === "sessions"
-					? collapseSessions
-					: pluginCollapsed.has(k);
+		k === "projects" ? collapseProjects : k === "convs" ? collapseConvs : collapseSessions;
 	/** 参与权重的分区：显示中且有内容（项目区需有项目，运行区需有运行对话）。 */
-	/** P3：运行分区的条目数 = 对话（含另一处）+ 插件运行条目；两者任一有就显示分区。 */
-	const pluginItemCount = (uiPluginRunning ?? []).reduce((n, g) => n + g.items.length, 0);
-	const runningCount = runningAll.length + pluginItemCount;
+	/** 运行分区的条目数 = 对话（含另一处）；有就显示分区。 */
+	const runningCount = runningAll.length;
 	const flexKeys = flexSectionKeys(sectionPlan, (k) =>
 		k === "projects" ? projects.length > 0 : k === "convs" ? runningCount > 0 : true,
 	);
-	/** P3：插件运行条目分组（运行分区列表体末尾）。无条目返回 null，DOM 与改造前一致。 */
-	const renderPluginRunning = () => {
-		const groups = uiPluginRunning ?? [];
-		if (groups.length === 0) return null;
-		return groups.map((g) => (
-			<div key={`plugin:${g.pluginId}`} className="panel-conv-group lp-plugin-group">
-				<div className="panel-conv-group-title" title={g.pluginId}>
-					{t("leftPanelPluginGroup")} · {g.pluginName}
-				</div>
-				{g.items.map((it) => (
-					<div key={it.id} className="lp-row lp-plugin-row">
-						<button
-							type="button"
-							className={`session-item lp-plugin-item${it.action ? "" : " is-static"}`}
-							title={it.hint ? `${it.title} — ${it.hint}` : it.title}
-							onClick={() => onPluginRunningAction?.(g, it)}
-						>
-							<span className={`lp-plugin-dot st-${it.status}`} title={t(PLUGIN_STATUS_KEY[it.status])} />
-							{it.icon ? (
-								<span className="lp-plugin-icon" aria-hidden>
-									{it.icon}
-								</span>
-							) : null}
-							<span className="session-info">
-								<span className="session-title">{it.title}</span>
-								{it.hint ? <span className="session-sub">{it.hint}</span> : null}
-							</span>
-						</button>
-					</div>
-				))}
-			</div>
-		));
-	};
-	/** 行内插件位：运行行 / 历史行各用自己的合并槽位；leftpanel.sessions 是两者的并集。 */
+	/** 行内槽位：运行行 / 历史行各用自己的合并槽位；leftpanel.sessions 是两者的并集。 */
 	const runningRowEntries = useMemo(
 		() => [...(uiLeftSessions ?? []), ...(uiLeftRunning ?? [])],
 		[uiLeftSessions, uiLeftRunning],
@@ -950,8 +860,8 @@ export const LeftPanel = memo(function LeftPanel({
 		onToggle: () => void,
 		count?: number,
 		actions?: React.ReactNode,
-		/** 插件追加的标题栏按钮（leftpanel.*.actions）：排在宿主按钮之后；无条目时为 null。 */
-		pluginActions?: React.ReactNode,
+		/** 槽位追加的标题栏按钮（leftpanel.*.actions）：排在宿主按钮之后；无条目时为 null。 */
+		slotActions?: React.ReactNode,
 	) => (
 		<div className="lp-section-header">
 			<button
@@ -966,10 +876,10 @@ export const LeftPanel = memo(function LeftPanel({
 				</span>
 				<span className="lp-section-chevron">{collapsed ? <FiChevronDown /> : <FiChevronUp />}</span>
 			</button>
-			{actions || pluginActions ? (
+			{actions || slotActions ? (
 				<div className="lp-section-actions">
 					{actions}
-					{pluginActions}
+					{slotActions}
 				</div>
 			) : null}
 		</div>
@@ -1189,7 +1099,7 @@ export const LeftPanel = memo(function LeftPanel({
 														// （搬 runtime 本体，不造第二个 writer），标「离线」说清原页面为什么不在。
 														const isOffline = Boolean((c as RowConv).ownerOffline) && !isPseudo;
 														// issue #290：可过户（有 owner + convId）时本行可点击，两段确认。
-														// 定时任务（scheduler:）不支持过户；插件通道（如微信 plugin:）支持点击接管查看完整对话流并实时同步。
+														// 定时任务（scheduler:）不支持过户；其余持有方支持点击接管查看完整对话流并实时同步。
 														const isScheduler =
 															isPseudo && typeof elseOwner === "string" && elseOwner.startsWith("scheduler:");
 														const canTakeover = Boolean(elseOwner && elseConvId) && !isScheduler;
@@ -1543,7 +1453,6 @@ export const LeftPanel = memo(function LeftPanel({
 										})()}
 									</div>
 								))}
-								{renderPluginRunning()}
 							</div>
 						)}
 					</div>
@@ -1712,25 +1621,7 @@ export const LeftPanel = memo(function LeftPanel({
 		),
 	};
 
-	/** P4：插件自定义分区（kind="view"）：标题栏 + 正文由插件 bundle 挂载（渲染函数由 App 注入，同后台任务面板口径）。 */
-	const renderPluginSection = (key: LpSectionKey): React.ReactNode => {
-		const entry = shownPlan.find((p) => p.key === key)?.entry;
-		if (!entry) return null;
-		const collapsed = collapsedOf(key);
-		return (
-			<div
-				className={`lp-section lp-section-plugin ${collapsed ? "collapsed" : ""}`}
-				style={!collapsed ? { flex: `${effFlex(key)} 1 0px` } : undefined}
-			>
-				{sectionHeader(entry.label, collapsed, () => togglePluginCollapsed(key))}
-				{!collapsed && (
-					<div className="lp-section-body lp-plugin-section-body">{renderPluginSectionBody?.(entry) ?? null}</div>
-				)}
-			</div>
-		);
-	};
-	const renderSection = (key: LpSectionKey): React.ReactNode =>
-		key === "projects" || key === "convs" || key === "sessions" ? sectionNodes[key] : renderPluginSection(key);
+	const renderSection = (key: LpSectionKey): React.ReactNode => sectionNodes[key];
 
 	return (
 		<aside ref={panelRef as React.RefObject<HTMLDivElement>} className="panel panel-left lp-panel">

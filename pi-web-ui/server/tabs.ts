@@ -2,7 +2,7 @@
  * tabs — choose what an instance offers.
  *
  * pi-web-ui shows Chat, Terminal, Git, Search, Background tasks and Settings,
- * always, plus a tab per installed plugin. On the machine you are working on
+ * always. On the machine you are working on
  * that is the point of the tool. Exposed to other people it is not: Terminal
  * opens a shell as the server's user, and Git shows the working copy with
  * commit and diff a click away. Today there is no way to leave those out.
@@ -20,7 +20,7 @@
  */
 
 /** Every tab that can be listed. `chat` is always on and is listed for symmetry. */
-export const ALL_TABS = ["chat", "terminal", "git", "search", "tasks", "settings", "plugins"] as const;
+export const ALL_TABS = ["chat", "terminal", "git", "search", "tasks", "settings"] as const;
 
 export type Tab = (typeof ALL_TABS)[number];
 
@@ -46,9 +46,8 @@ const OWNED: Partial<Record<Tab, readonly string[]>> = {
  * The allow-list, or null when there is none.
  *
  * Case and spaces are forgiven because this is written by hand in a systemd
- * unit or a compose file. Unknown names are kept rather than rejected: a
- * plugin tab, or a tab a later version adds, should not make the server fail
- * to start.
+ * unit or a compose file. Unknown names are kept rather than rejected: a tab
+ * a later version adds should not make the server fail to start.
  */
 export function parseTabs(env: NodeJS.ProcessEnv = process.env): Set<string> | null {
 	const raw = (env.PI_WEB_TABS ?? "").trim();

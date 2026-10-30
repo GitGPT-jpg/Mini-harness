@@ -38,8 +38,6 @@ export interface MarkerTool<State = unknown> {
 	name: string;
 	/** 显示给用户的名称（设置面板中展示；缺省为 name）。 */
 	label?: string;
-	/** 归属插件 id（内置标记为 undefined）。 */
-	pluginId?: string;
 	/** 为 true 时表示该标记为别名（如 suggest 是 action 的别名），不参与提示词注入和 UI 列表。 */
 	isAlias?: boolean;
 	guidance: string[];

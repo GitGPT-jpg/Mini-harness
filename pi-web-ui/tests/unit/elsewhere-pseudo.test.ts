@@ -3,9 +3,9 @@ import { AgentService } from "../../server/agent-service.js";
 import type { ElsewhereRunning } from "../../server/protocol.js";
 
 describe("ElsewhereRunning pseudo support (#426)", () => {
-	it("AgentService.isPseudoClientId 识别 scheduler: 和 plugin: 客户端", () => {
+	it("AgentService.isPseudoClientId 只认 scheduler: 客户端（插件运行时已删除，plugin: 不再是伪客户端）", () => {
 		expect(AgentService.isPseudoClientId("scheduler:task-123")).toBe(true);
-		expect(AgentService.isPseudoClientId("plugin:probe-ext")).toBe(true);
+		expect(AgentService.isPseudoClientId("plugin:probe-ext")).toBe(false);
 		expect(AgentService.isPseudoClientId("c1")).toBe(false);
 		expect(AgentService.isPseudoClientId("client-browser-xyz")).toBe(false);
 		expect(AgentService.isPseudoClientId("")).toBe(false);
@@ -45,7 +45,6 @@ describe("ElsewhereRunning pseudo support (#426)", () => {
 		expect(computeCanTakeover({ owner: "client-a" })).toBe(false);
 		// 伪客户端条目（有 owner + convId，但 pseudo: true）：不可过户
 		expect(computeCanTakeover({ owner: "scheduler:task-1", convId: "c1", pseudo: true })).toBe(false);
-		expect(computeCanTakeover({ owner: "plugin:sync", convId: "c2", pseudo: true })).toBe(false);
 	});
 
 	it("LeftPanel 问卷徽章与右键过户菜单对 pseudo 过滤", () => {

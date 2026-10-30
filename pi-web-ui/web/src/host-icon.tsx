@@ -67,7 +67,6 @@ import {
 	FiZoomIn,
 } from "react-icons/fi";
 import { LuFlaskConical, LuWorkflow } from "react-icons/lu";
-import { PluginIcon } from "./plugin-icon";
 
 /** icon 名 → 预览节点。键就是 BUILTIN_UI_ITEMS 里出现过的全部 `icon` 值。 */
 const HOST_ICON_NODES: Record<string, ReactNode> = {
@@ -142,13 +141,10 @@ export const HOST_ICON_NAMES: readonly string[] = Object.keys(HOST_ICON_NODES);
 
 /**
  * 条目的预览图标。
- * 优先级与渲染层一致：内联 SVG > 已登记的名字 > 非拉丁字形（emoji，插件常用）> 无。
+ * 优先级与渲染层一致：已登记的名字 > 非拉丁字形（emoji）> 无。
  * 宿主条目写了个没登记的名字时返回 null（只剩文字）—— 单测会先一步把它拦下来。
  */
-export function hostEntryIcon(entry: { icon?: string; iconSvg?: string }): ReactNode {
-	if (entry.iconSvg) {
-		return <PluginIcon icon={entry.icon} iconSvg={entry.iconSvg} />;
-	}
+export function hostEntryIcon(entry: { icon?: string }): ReactNode {
 	if (!entry.icon) return null;
 	const known = HOST_ICON_NODES[entry.icon];
 	if (known !== undefined) return known;

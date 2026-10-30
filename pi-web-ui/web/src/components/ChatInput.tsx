@@ -1,5 +1,5 @@
 import { Fragment, memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { FiList, FiSquare, FiPaperclip, FiArrowUp, FiBookOpen, FiMic, FiCamera } from "react-icons/fi";
+import { FiList, FiSquare, FiPaperclip, FiArrowUp, FiBookOpen } from "react-icons/fi";
 import type { FileSearchResult, ModelInfo, ProviderKeyInfo, SlashCommandInfo, UiMessage, UiState } from "../types";
 import { isZhLocale, useT, useI18n } from "../i18n";
 import { appSend, useAppField, useIsDsh, useEngineCapabilities } from "../app-globals";
@@ -24,17 +24,7 @@ import { collectClipboardFiles } from "../clipboard-files";
 import { recordModelUsage } from "../model-usage";
 import { loadPromptHistory, pushPromptHistory } from "../prompt-history";
 import { filterSlashCommands } from "../slash-filter";
-import {
-	mapFileHits,
-	mapPageHits,
-	mapSkillHits,
-	matchAtToken,
-	mergeAtHits,
-	normalizeAtHits,
-	type AtHit,
-} from "../at-mention";
-import { getLastBrowserControlPages, pokeBrowserControl } from "../browser-control";
-import { getPluginComposerProvider, listPluginComposerProviders } from "../plugin-host";
+import { mapFileHits, mapSkillHits, matchAtToken, mergeAtHits, type AtHit } from "../at-mention";
 import { detectTouchFirstDevice } from "../touch-device";
 import { resolveEnterAction, useEffectiveSendKey } from "../composer-keys";
 import { resolveBackspaceMention } from "../chat-input-backspace";
@@ -70,13 +60,8 @@ const COMPOSER_H_KEY = "pi-web-ui:composer-height";
  *  by the server when the persisted set is unchanged), so the shallow-compared
  *  memo() below skips this input bar on every text delta. */
 interface ChatInputProps {
-	/** 输入框前置区条目（composer.leading 槽位：纯插件，无内置条目；渲染在文件上传按钮左侧）。 */
-	composerLeading?: import("../ui-slots").UiSlotEntry[];
-	/** 输入框动作区条目（composer.actions 槽位：内置 + 插件的最终结果）。 */
+	/** 输入框动作区条目（composer.actions 槽位：内置条目的最终结果）。 */
 	composerActions?: import("../ui-slots").UiSlotEntry[];
-	/** 点击一个条目：view 由宿主切视图，其余（action/select）交给贡献它的插件
-	 *  （select 切选项时第二个参数带选中的 value）。 */
-	onUiAction?: (item: import("../ui-slots").UiSlotEntry, value?: string) => void;
 	streaming: boolean;
 	/** Persisted messages (stable reference while unchanged) — used by /copy. */
 	messages: UiMessage[];
@@ -93,12 +78,11 @@ interface ChatInputProps {
 	attachments: {
 		path: string;
 		name: string;
-		/** "page" = 已授权给 AI 的网页（page-picker）：path 是 origin、name 是标题。
-		 *  "conversation" = 引用的另一个对话：path 不用，引用走 conversationId
+		/** "conversation" = 引用的另一个对话：path 不用，引用走 conversationId
 		 *  （运行中，含子代理）或 sessionPath（历史转录）。
 		 *  "inline" = 旧版「全文注入」的遗留值（服务端按 reference 处理）。
 		 *  粘贴图片/上传文件没有 mode（path 为空）。 */
-		mode?: "inline" | "reference" | "lines" | "page" | "conversation" | "quote";
+		mode?: "inline" | "reference" | "lines" | "conversation" | "quote";
 		quote?: import("../types").TextQuote;
 		/** mode "conversation" + 引用运行中对话的 id（如 "c3"）。 */
 		conversationId?: string;
@@ -125,7 +109,7 @@ interface ChatInputProps {
 	onAddPathAttachment?: (a: {
 		path: string;
 		name: string;
-		mode?: "inline" | "reference" | "lines" | "page";
+		mode?: "inline" | "reference" | "lines";
 		isDir?: boolean;
 		lines?: { start: number; end: number };
 		silent?: boolean;
@@ -195,9 +179,7 @@ export const ChatInput = memo(function ChatInput({
 	quickPhrases,
 	quickPhrasesEnabled,
 	recallDrafts,
-	composerLeading,
 	composerActions,
-	onUiAction,
 	dshPermCurrent,
 	dshPermOptions,
 	dshPermDefault,
@@ -295,7 +277,7 @@ export const ChatInput = memo(function ChatInput({
 		});
 	}, [recallDrafts]);
 
-	// 宿主注入草稿（浏览器元素拾取扩展 / 插件 → window.__piWebUiHost.compose）：
+	// 宿主注入草稿（composeToComposer：对话引用、选中文字引用等）：
 	// 合并语义与撤回完全一致（空则填入、非空追加、绝不覆盖），所以直接复用同一个纯函数。
 	// 挂载时装一次：setText 是 useState 的稳定引用，不依赖任何会变的闭包。
 	useEffect(() => {
@@ -617,7 +599,6 @@ export const ChatInput = memo(function ChatInput({
 		extension: t("slashExtension"),
 		prompt: t("slashPrompt"),
 		skill: t("slashSkill"),
-		plugin: t("slashPlugin"),
 	};
 
 	/** 重算统一浮层：slash 全文优先，否则看光标前的 @ 词元（异步问各 provider）。
@@ -645,53 +626,22 @@ export const ChatInput = memo(function ChatInput({
 			setMenu(null);
 			return;
 		}
-		// 查询作业 = 插件注册表 + 内置文件提供方（宿主自带，零插件也可用；
-		// 空 query 不走文件搜索，裸 @ 不刷全量）。
-		let ids: { id: string; label: string }[] = [];
-		try {
-			ids = listPluginComposerProviders();
-		} catch {
-			ids = [];
-		}
+		// 查询作业 = 内置文件提供方（空 query 不走文件搜索，裸 @ 不刷全量）。
 		const req = ++atReqRef.current;
 		const snapshot = value;
 		const start = tok.start;
 		const query = tok.query;
 		const end = start + 1 + query.length;
-		const jobs: { id: string; label: string; run: () => Promise<unknown> }[] = ids.map((p) => ({
-			id: p.id,
-			label: p.label,
-			run: () => {
-				let search: ((q: string) => Promise<unknown>) | undefined;
-				try {
-					search = getPluginComposerProvider(p.id)?.search as ((q: string) => Promise<unknown>) | undefined;
-				} catch {
-					search = undefined;
-				}
-				if (typeof search !== "function") return Promise.resolve([]);
-				return search(query);
-			},
-		}));
+		const jobs: { id: string; label: string; run: () => Promise<unknown> }[] = [];
 		if (query && typeof onSearchFiles === "function") {
 			jobs.push({ id: "host:files", label: t("openFiles"), run: () => searchBuiltinFiles(query) });
-		}
-		// 内置页面提供方（page-picker 已授权页）：底座支持 pageRef 且在线时才添加
-		let immediatePages: AtHit[] = [];
-		if (capabilities.pageRef) {
-			pokeBrowserControl();
-			immediatePages = mapPageHits(t("browserControl"), getLastBrowserControlPages(), query);
-			jobs.push({
-				id: "host:pages",
-				label: t("browserControl"),
-				run: () => Promise.resolve(immediatePages),
-			});
 		}
 		if (jobs.length === 0) {
 			setMenu(null);
 			return;
 		}
 		const skillItems = mapSkillHits(t("slashSkill"), slashCommands, query, 15, slashDesc);
-		const eagerItems = mergeAtHits({ pages: immediatePages, skills: skillItems }, query, 30);
+		const eagerItems = mergeAtHits({ skills: skillItems }, query, 30);
 		let eagerRendered = false;
 		if (eagerItems.length > 0) {
 			eagerRendered = true;
@@ -707,20 +657,12 @@ export const ChatInput = memo(function ChatInput({
 			),
 		).then((results) => {
 			if (atReqRef.current !== req || menuTextRef.current !== snapshot) return;
-			const pageItems: AtHit[] = [];
 			const fileItems: AtHit[] = [];
-			const pluginItems: AtHit[] = [];
 			results.forEach((r, i) => {
 				if (r.status !== "fulfilled") return;
-				if (jobs[i].id === "host:pages" && Array.isArray(r.value)) pageItems.push(...(r.value as AtHit[]));
-				else if (jobs[i].id === "host:files") fileItems.push(...mapFileHits(jobs[i].label, r.value));
-				else pluginItems.push(...normalizeAtHits(jobs[i].id, jobs[i].label, r.value));
+				if (jobs[i].id === "host:files") fileItems.push(...mapFileHits(jobs[i].label, r.value));
 			});
-			const items = mergeAtHits(
-				{ pages: pageItems, skills: skillItems, files: fileItems, plugins: pluginItems },
-				query,
-				30,
-			);
+			const items = mergeAtHits({ skills: skillItems, files: fileItems }, query, 30);
 			setMenu(items.length > 0 ? { kind: "at", start, end, items } : null);
 			// 仅在初次渲染浮层时重置高亮；若已展示过 eager 结果，保留用户已有键盘/鼠标选项目
 			if (!eagerRendered && items.length > 0) {
@@ -1102,8 +1044,6 @@ export const ChatInput = memo(function ChatInput({
 				path: a.path,
 				mode: a.mode,
 				...(a.lines ? { lines: a.lines } : {}),
-				// 网页引用：标题要一起送（服务端不读文件，用标题当卡片名）。
-				...(a.mode === "page" ? { name: a.name } : {}),
 				// 对话引用：id/path 二选一 + 标题（服务端只发 <conversation-ref>，转录由 AI 按需读）。
 				...(a.mode === "conversation"
 					? {
@@ -1415,64 +1355,14 @@ export const ChatInput = memo(function ChatInput({
 	// 空闲态的发送按钮和运行中的对半胶囊共用这一个条件。与 submit() 口径保持一致。
 	const canSubmit = sessionReady && (text.trim() !== "" || attachments.length > 0);
 
-	// 插件输入框动作按 align 分组（未接线回落用；接线后统一走下面的 composerGroups）。
-	const pluginActions = useMemo(
-		() => groupByAlign((composerActions ?? []).filter((it) => it.source !== "host" && !it.hidden)),
-		[composerActions],
-	);
-	// 输入框前置区（composer.leading）：纯插件槽位，按合并后的顺序整串渲染在上传按钮左侧。
-	const leadingActions = useMemo(
-		() => (composerLeading ?? []).filter((it) => it.source !== "host" && !it.hidden),
-		[composerLeading],
-	);
 	// 输入框槽位是否已接线（App 传全量 slot 数组，含 hidden；单测/未传时回落旧硬编码顺序）。
 	const composerWired = composerActions !== undefined;
-	// 接线后的统一分组：宿主内置（上传/模板/模型/思考/DSH/发送）+ 插件贡献按合并顺序来，
+	// 接线后的统一分组：宿主内置（上传/模板/模型/思考/DSH/发送）按合并顺序来，
 	// hidden 已滤掉；align=start 落左列，center 居中，end 落右列（发送簇 align=end）。
 	const composerGroups = useMemo(
 		() => groupByAlign((composerActions ?? []).filter((it) => !it.hidden)),
 		[composerActions],
 	);
-	const renderPluginAction = (it: import("../ui-slots").UiSlotEntry) => {
-		// kind="select"：下拉框（当前值取 value ?? options[0]；切换直接回插件，不等确认）。
-		if (it.kind === "select" && it.options?.length) {
-			const cur = it.options.some((o) => o.value === it.value) ? (it.value as string) : it.options[0]!.value;
-			return (
-				<select
-					key={it.id}
-					className="composer-plugin-select"
-					title={it.hint || it.label}
-					aria-label={it.label}
-					value={cur}
-					onChange={(e) => onUiAction?.(it, e.target.value)}
-				>
-					{it.options.map((o) => (
-						<option key={o.value} value={o.value}>
-							{o.label}
-						</option>
-					))}
-				</select>
-			);
-		}
-		// 插件 icon 是宿主图标词表名时映射到 feather 线条图标（与文件上传 FiPaperclip 同风格），
-		// emoji/文字则原样当文本画。
-		const icon = it.icon === "mic" ? <FiMic /> : it.icon === "camera" ? <FiCamera /> : it.icon || it.label;
-		return (
-			<button
-				key={it.id}
-				type="button"
-				className="btn composer-plugin-action"
-				data-action={it.action}
-				data-plugin-slot-id={it.id}
-				title={it.hint || it.label}
-				aria-label={it.label}
-				onClick={() => onUiAction?.(it)}
-			>
-				{icon}
-			</button>
-		);
-	};
-
 	// Send / stop / steer+queue — rendered once inside the composer toolbar
 	// (ChatInput .composer-tools-right). 运行中发送位与停止位二选一互斥：
 	// 空输入（含无附件）时只显示停止键（蓝圆），插队/排队胶囊隐藏；
@@ -1601,11 +1491,10 @@ export const ChatInput = memo(function ChatInput({
 			) : null,
 		"host:composer-send": renderActions(),
 	};
-	/** 单条目渲染：宿主走工厂（未知 id 画 null，不白屏），插件走 renderPluginAction。 */
-	const renderComposerEntry = (it: import("../ui-slots").UiSlotEntry) => {
-		if (it.source === "host") return <Fragment key={it.id}>{composerHostNodes[it.id] ?? null}</Fragment>;
-		return renderPluginAction(it);
-	};
+	/** 单条目渲染：宿主走工厂（未知 id 画 null，不白屏）。 */
+	const renderComposerEntry = (it: import("../ui-slots").UiSlotEntry) => (
+		<Fragment key={it.id}>{composerHostNodes[it.id] ?? null}</Fragment>
+	);
 
 	return (
 		<div
@@ -1644,19 +1533,17 @@ export const ChatInput = memo(function ChatInput({
 											? t("attachFile", { name: a.name })
 											: a.isDir
 												? t("folderRef", { path: a.path })
-												: a.mode === "page"
-													? t("attachPage", { name: a.name })
-													: a.mode === "conversation"
-														? t("attachConversation", { name: a.name })
-														: a.mode === "reference"
-															? t("refOnly", { path: a.path })
-															: a.mode === "lines" && a.lines
-																? t("attachLines", {
-																		path: a.path,
-																		start: a.lines.start,
-																		end: a.lines.end,
-																	})
-																: t("attachContent", { path: a.path })
+												: a.mode === "conversation"
+													? t("attachConversation", { name: a.name })
+													: a.mode === "reference"
+														? t("refOnly", { path: a.path })
+														: a.mode === "lines" && a.lines
+															? t("attachLines", {
+																	path: a.path,
+																	start: a.lines.start,
+																	end: a.lines.end,
+																})
+															: t("attachContent", { path: a.path })
 								}
 							>
 								{a.imageData
@@ -1665,13 +1552,11 @@ export const ChatInput = memo(function ChatInput({
 										? "📄"
 										: a.isDir
 											? "📁"
-											: a.mode === "page"
-												? "🌐"
-												: a.mode === "conversation"
-													? "💬"
-													: a.mode === "reference"
-														? "🔗"
-														: "📎"}
+											: a.mode === "conversation"
+												? "💬"
+												: a.mode === "reference"
+													? "🔗"
+													: "📎"}
 								{a.name}
 								{a.mode === "lines" && a.lines && (
 									<span className="attach-range">
@@ -1927,10 +1812,7 @@ export const ChatInput = memo(function ChatInput({
 				<div className="composer-tools">
 					{composerWired ? (
 						<>
-							<div className="composer-tools-left">
-								{leadingActions.map(renderPluginAction)}
-								{composerGroups.start.map(renderComposerEntry)}
-							</div>
+							<div className="composer-tools-left">{composerGroups.start.map(renderComposerEntry)}</div>
 							{composerGroups.center.length > 0 && (
 								<div className="composer-tools-center">{composerGroups.center.map(renderComposerEntry)}</div>
 							)}
@@ -1939,7 +1821,6 @@ export const ChatInput = memo(function ChatInput({
 					) : (
 						<>
 							<div className="composer-tools-left">
-								{leadingActions.map(renderPluginAction)}
 								<button
 									type="button"
 									className="btn attach-img"
@@ -1949,8 +1830,6 @@ export const ChatInput = memo(function ChatInput({
 								>
 									<FiPaperclip />
 								</button>
-								{/* 插件输入框动作（start 组）：紧跟文件上传右侧，与上传同一组线条图标风格。 */}
-								{pluginActions.start.map(renderPluginAction)}
 								<button type="button" className="btn tpl-open" title={t("tpl.openPicker")} onClick={openPicker}>
 									<FiBookOpen />
 								</button>
@@ -1983,16 +1862,8 @@ export const ChatInput = memo(function ChatInput({
 										conversationId={conversationId ?? ""}
 									/>
 								)}
-								{/* 插件贡献的输入框动作（issue #146）：align 分三组：start 已在文件上传右侧渲染，center 居中，end 紧贴发送键；
- 只画图标（label 进 title/aria），无图标的才回落显示文字。 */}
 							</div>
-							{pluginActions.center.length > 0 && (
-								<div className="composer-tools-center">{pluginActions.center.map(renderPluginAction)}</div>
-							)}
-							<div className="composer-tools-right">
-								{pluginActions.end.map(renderPluginAction)}
-								{renderActions()}
-							</div>
+							<div className="composer-tools-right">{renderActions()}</div>
 						</>
 					)}
 				</div>

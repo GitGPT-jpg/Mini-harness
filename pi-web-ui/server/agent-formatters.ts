@@ -5,22 +5,14 @@
  * - conversationTitle: 提取会话标题（首条用户消息摘要）
  * - contentFingerprint: 消息快照序列化缓存的低成本指纹
  * - extractAssistantTextFromContent / extractPartialText: 提取助手消息纯文本
- * - previewToolResult / truncRun: 工具执行结果文本截断与预览
  * - modelKeyOf / contextWindowOf: 模型键值与上下文窗口大小提取
  * - firstSentence: 工具描述首句提取
- * - pluginToolToDefinition: 插件自定义工具规范化包装
  *
  * 从 agent-service.ts 抽出为独立模块。
  */
-import type { AgentSession, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { AgentMessage } from "./serialize.js";
-import type { PluginAgentTool } from "./plugins.js";
 import { writeAtomicSync } from "./atomic-file.js";
-
-/** 轨迹事件 payload 封顶（可直接广播/持久化，不撑爆 storage.json）。 */
-export const RUN_TASK_CAP = 500;
-export const RUN_ARGS_CAP = 4000;
-export const RUN_RESULT_CAP = 4000;
 
 /** Cap on simultaneously open NON-subagent conversations of ONE project（可通过 PI_WEB_MAX_OPEN_CONVERSATIONS 覆盖） */
 export const MAX_OPEN_CONVERSATIONS = 8;
@@ -47,32 +39,6 @@ export function getMaxOpenConversations(): number {
 /** SubagentSnapshot.prompt 下发上限：存的是全量 prompt，快照里只带前 N 字符。 */
 export const SUBAGENT_PROMPT_SNAPSHOT_CAP = 2000;
 export const DEFAULT_CONV_TITLE = "新对话";
-
-export function truncRun(s: string, cap: number): string {
-	return s.length <= cap ? s : `${s.slice(0, cap)}\n… [truncated]`;
-}
-
-/** 从 SDK tool result 里抠可读文本预览（text 块拼接，图片/二进制占位，封顶）。 */
-export function previewToolResult(result: unknown): string {
-	try {
-		const content = (result as { content?: unknown })?.content;
-		if (Array.isArray(content)) {
-			const parts: string[] = [];
-			for (const c of content) {
-				if (c && typeof c === "object" && (c as { type?: unknown }).type === "text") {
-					parts.push(String((c as { text?: unknown }).text ?? ""));
-				} else {
-					parts.push("[…]");
-				}
-			}
-			return truncRun(parts.join("\n"), RUN_RESULT_CAP);
-		}
-		if (typeof result === "string") return truncRun(result, RUN_RESULT_CAP);
-		return truncRun(JSON.stringify(result ?? null), RUN_RESULT_CAP);
-	} catch {
-		return "[unserializable result]";
-	}
-}
 
 /** 转录整文件重写的原子落盘：先写同目录临时文件再 rename。 */
 export function atomicWriteFileSync(file: string, data: string): void {
@@ -116,53 +82,6 @@ export function conversationTitle(session: AgentSession): string {
 		// best-effort
 	}
 	return DEFAULT_CONV_TITLE;
-}
-
-/**
- * 插件结构化工具 → SDK ToolDefinition。
- * execute 返回值宽容处理：{content,details} 原样收编；字符串/对象包成文本块。
- */
-export function pluginToolToDefinition(tool: PluginAgentTool): ToolDefinition {
-	const normalize = (
-		result: unknown,
-	): {
-		content: Array<{ type: "text"; text: string }>;
-		details?: unknown;
-	} => {
-		if (result && typeof result === "object" && Array.isArray((result as { content?: unknown }).content)) {
-			return result as {
-				content: Array<{ type: "text"; text: string }>;
-				details?: unknown;
-			};
-		}
-		const text = typeof result === "string" ? result : JSON.stringify(result ?? null, null, 2);
-		return { content: [{ type: "text", text }] };
-	};
-	return {
-		name: tool.name,
-		label: tool.label ?? tool.name,
-		description: tool.description,
-		promptSnippet: tool.promptSnippet,
-		promptGuidelines: tool.promptGuidelines,
-		parameters: (tool.parameters ?? {
-			type: "object",
-			properties: {},
-		}) as ToolDefinition["parameters"],
-		execute: async (
-			toolCallId: string,
-			params: Record<string, unknown>,
-			signal: AbortSignal | undefined,
-			onUpdate: ((partial: unknown) => void) | undefined,
-		) => {
-			const raw = await tool.execute(
-				toolCallId,
-				params as Record<string, unknown>,
-				signal,
-				onUpdate ? (partial) => onUpdate(normalize(partial) as never) : undefined,
-			);
-			return normalize(raw) as never;
-		},
-	} as unknown as ToolDefinition;
 }
 
 /**

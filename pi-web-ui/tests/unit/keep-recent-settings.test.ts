@@ -2,8 +2,7 @@
  * 消息列表尾部「常驻渲染窗口」可配置（keepRecentMessages）：
  *   1. 归一化：钳到 [5, 100]，脏值回落默认 15（= 原 KEEP_RECENT 硬编码值，默认行为不变）；
  *   2. ClientStateStore 落盘/加载保真 + 脏值在写入时就被钳制；
- *   3. SettingsService.set() 钳制并随 settings_state 下发；
- *   4. 纯 UI 偏好：预设快照不收录该字段。
+ *   3. SettingsService.set() 钳制并随 settings_state 下发。
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -121,22 +120,5 @@ describe("SettingsService.set(keepRecentMessages)", () => {
 		const state = host.emitted.filter((m) => (m as { type?: string }).type === "settings_state").pop() as
 			{ settings: { keepRecentMessages?: number } } | undefined;
 		expect(state?.settings.keepRecentMessages).toBe(KEEP_RECENT_MESSAGES_MAX);
-	});
-
-	it("随预设保存与应用（上游白名单模型：与 thinkingWrap 等 UI 偏好同等待遇）", async () => {
-		const store = tempStore();
-		const host = makeHost(store);
-		const svc = new SettingsService(host, templates);
-
-		await svc.set({ keepRecentMessages: 25 });
-		await svc.savePreset("ui-preset");
-		const preset = store.getPresets("c").find((p) => p.name === "ui-preset");
-		expect(preset).toBeDefined();
-		expect((preset as { keepRecentMessages?: number }).keepRecentMessages).toBe(25);
-
-		// 应用预设覆盖当前值
-		await svc.set({ keepRecentMessages: 12 });
-		await svc.applyPreset("ui-preset");
-		expect(svc.current.keepRecentMessages).toBe(25);
 	});
 });

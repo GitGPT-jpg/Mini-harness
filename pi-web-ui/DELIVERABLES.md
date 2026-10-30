@@ -1,4 +1,4 @@
-# 精简发行版交付清单（阶段 A-E + D-9）
+# 精简发行版交付清单（阶段 A-E + D-9 至 D-11）
 
 基于上游 [xing-shuyin/pi-web-ui](https://github.com/xing-shuyin/pi-web-ui) @ **v0.111.0**（tag `7c40b44`，MIT）源码裁剪。来源/版本/许可见 `PROVENANCE.md`。
 
@@ -26,14 +26,15 @@
 | D-6b | 文件树（RightPanel 常驻文件树 tab + host:files/host:right-files 入口） | 58b37af |
 | D-7 | 多引擎（DSH/Claude/Durable + 引擎切换/探测/更新全链路） | 5c62fdc |
 | D-8 | Plan/Delegate 入口（GoalBar 计划按钮 + PlanBoard + 审查者委派开关/徽标） | 2be7a90 |
-| D-10 | 插件 UI 入口（顶栏「插件」+ 插件面板/管理弹窗 + 设置页「界面插件」页）与右侧空栏（RightPanel 及 D-6b 残留的文件树代码、FileTransferDialog、SlotTabs、对应 CSS），清理 106 个无引用 i18n key；插件运行时与 MCP 保留 | 7f8a39f |
+| D-10 | 插件 UI 入口（顶栏「插件」+ 插件面板/管理弹窗 + 设置页「界面插件」页）与右侧空栏（RightPanel 及 D-6b 残留的文件树代码、FileTransferDialog、SlotTabs、对应 CSS），清理 106 个无引用 i18n key；插件运行时与 MCP 保留（D-11 已删） | 7f8a39f |
+| D-11 | 设置页「系统提示词 / 预设 / 扩展 / MCP 服务器 / 目标审查」五个分区；插件运行时整套（`server/plugins.ts` 等 20 个服务端模块、前端插件宿主/视图/围栏/图标、`plugins/` 目录含 page-picker、`plugin-sdk/`、CLI 插件子命令、`browser_page` 工具与网页引用附件）；MCP（自带 MCP 桥 + `mcp_manage` 工具，SDK 自带的 `builtin:mcp` 扩展用 `disabledBuiltinExtensions` 关掉）；设置预设（保存/应用/导入/导出/分享）。清理 270 个无引用 i18n key、313 条无引用 CSS 规则。pi-llm-wiki 扩展、定时任务、审批、内置布局保留 | 70f90bd + 本次 |
 
-**净删除 325,784 行源码**（`git diff --stat 30902c1..HEAD`），`server/` 3.7M、`web/src/` 3.5M。
+**净删除 325,784 行源码**（D-1 至 D-8，`git diff --stat 30902c1..HEAD`），当时 `server/` 3.7M、`web/src/` 3.5M。D-11 又删 74,661 行（含测试与语言包；`git diff --histogram` 统计），`server/` 降到 3.0M、`web/src/` 降到 2.8M。
 
 ## 三、验证证据位置
 
-- **单元测试**：`npx vitest run` → 372 个文件全过（4376 过 / 0 失败 / 9 跳过，2026-10-30，D-10 后；删掉了只测已删插件面板的 `plugin-menu.test.ts`）。
-- **零 token 冒烟套件**：`node tests/run-smoke.mjs --no-build` → **74/74 全绿**（含恢复的 `token-auth-test`、适配 D-9 默认值的 `lazy-tools-test`/`vision-bridge-test`/`subagent-template-test`/`takeover-test`/`plugin-test`/`elsewhere-lifecycle-test`，并清理了 D-4/D-4b/D-5 已删插件的过期用例）。
+- **单元测试**：`npx vitest run` → 312 个文件全过（3282 过 / 0 失败 / 9 跳过，2026-10-30，D-11 后；删掉只测插件、page-picker、MCP、预设的用例，保留功能的用例改写）。
+- **零 token 冒烟套件**：`node tests/run-smoke.mjs --no-build` → D-11 后清单 59 条（删了 15 条只测插件/MCP 的用例），58/59 通过；唯一失败是 `terminal-smoke-test`，本机 zsh 交互 shell 偶尔在用例的 3 秒窗口内没退出，D-11 未改终端代码与该用例，单独重跑 3 次过 2 次。D-10 时为 74/74。
 - **Loop 正确性**：`tests/unit/loop-extension.test.ts`（13 用例，mock 零 token）。
 - **Loop 前端渲染**：`tests/loop-bar-test.mjs`（14/14，Playwright：成对胶囊 `LLM loop` + `代码 loop`、LLM loop 展开/折叠、`CodeLoopModal` 弹窗开启时隐藏底部胶囊、预设/字段/高级折叠项与启动按钮门控）。
 - **E 阶段回归**：五项保留 + 删除项不渲染 + 无 pageerror（Playwright，隔离端口 8941，`PI_WEB_SDK=bundled`）。

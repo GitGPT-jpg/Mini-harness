@@ -20,7 +20,7 @@ import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import WebSocket from "ws";
 
-// 8981 已被 elsewhere-lifecycle-test / plugin-http-test 占用（串行跑不冲突，
+// 8981 已被 elsewhere-lifecycle-test 占用（串行跑不冲突，
 // 但并行化会撞车），这里用独立端口；MOCK_PORT = PORT+1 也需空闲（8910 同样空闲）。
 const PORT = Number(process.argv[2] || 8909);
 const MOCK_PORT = PORT + 1;

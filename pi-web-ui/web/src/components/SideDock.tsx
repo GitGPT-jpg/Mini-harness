@@ -21,7 +21,6 @@ interface SideDockProps {
 	onOpenProjectPicker?: () => void;
 	onThemeToggle?: () => void;
 	dropdownProps?: BarItemProps["dropdownProps"];
-	plugins?: BarItemProps["plugins"];
 }
 
 /**
@@ -50,7 +49,6 @@ export function SideDock({
 	onOpenProjectPicker,
 	onThemeToggle: _onThemeToggle,
 	dropdownProps,
-	plugins,
 }: SideDockProps) {
 	const { t } = useI18n();
 	const [collapsed, setCollapsed] = useState(false);
@@ -100,7 +98,6 @@ export function SideDock({
 			bar={side}
 			chat={chat}
 			view={view}
-			plugins={plugins}
 			onViewChange={onViewChange}
 			onOpenPanel={onOpenPanel}
 			onOpenSettings={onOpenSettings}

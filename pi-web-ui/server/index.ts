@@ -21,7 +21,7 @@ import "./patch-remote-catalog.js";
 import "./patch-turn-end-boundary.js";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
-import { createServer, request as proxyRequest, type IncomingMessage } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
 import { createConnection } from "node:net";
 import { basename, delimiter, join, resolve, sep } from "node:path";
 import { homedir, tmpdir } from "node:os";
@@ -63,19 +63,6 @@ import {
 	resolveSystemDefaultLocale,
 	unloadServerStrings,
 } from "./locales.js";
-import {
-	PluginManager,
-	resolvePluginClientFile,
-	type PluginChatRequest,
-	type PluginConversationQuery,
-	type PluginConversationSnapshot,
-	type PluginRunEvent,
-} from "./plugins.js";
-import type { ToolPostRequest, ToolPreRequest } from "./plugin-tool-guard.js";
-import { confirmPluginInstall, PluginInstaller } from "./plugin-installer.js";
-import type { ServerLang } from "./i18n.js";
-import { McpBridge } from "./mcp-bridge.js";
-import { createMcpHotReload } from "./mcp-hot-reload.js";
 import { createHostMetricsSampler } from "./host-metrics.js";
 import { SchedulerStore } from "./scheduler-tasks.js";
 import { initHttpProxy } from "./http-proxy.js";
@@ -96,9 +83,7 @@ import {
 	handleInteractiveResponseMessage,
 } from "./dispatch-domain-handlers.js";
 import { isRemoteWorkspaceUri } from "./remote-ssh-service.js";
-import { handlePluginMessage } from "./dispatch-plugin-handlers.js";
 import type {
-	BgServer,
 	ClientMessage,
 	UiApprovalRule,
 	UiLayoutPrefs,
@@ -150,7 +135,7 @@ if (!Number.isInteger(PORT) || PORT <= 0 || PORT > 65535) {
 }
 const CWD = resolve(cliFlag("--cwd") ?? process.env.PI_WEB_CWD ?? process.cwd());
 const DATA_DIR = resolve(cliFlag("--data-dir") ?? process.env.PI_WEB_DATA_DIR ?? join(homedir(), ".pi-web"));
-// The data dir is where the control socket, client state, plugins, themes and
+// The data dir is where the control socket, client state, themes and
 // uploads live, but nothing guarantees it exists on a first run (a fresh
 // `server install` never creates it). The control socket binds at startup —
 // before any store gets a chance to mkdir its own subdirectory — and bind()
@@ -356,9 +341,9 @@ function cookieToken(req: { headers: IncomingMessage["headers"] }): string {
 }
 
 /** Express 5 命名通配 `*splat` 的取值：单段是字符串，多段是字符串数组
- *  （issue #225：直接 String() 会把多段用逗号拼成 "a,b.mjs"，插件 vendor 子
- *  目录、嵌套文件预览、插件子路径 API 全 404）。统一拼回 "/" 即得 Express 4
- *  语义；下游既有的越界/包含校验（workspacePath / resolvePluginClientFile）不变。 */
+ *  （issue #225：直接 String() 会把多段用逗号拼成 "a,b.mjs"，嵌套文件预览
+ *  全 404）。统一拼回 "/" 即得 Express 4 语义；下游既有的越界/包含校验
+ *  （workspacePath）不变。 */
 function splatParam(req: { params: unknown }): string {
 	const v = (req.params as unknown as Record<string, string | string[] | undefined>).splat;
 	if (Array.isArray(v)) return v.join("/");
@@ -823,109 +808,6 @@ app.get("/themes/:id.css", (req, res) => {
 	res.send(css);
 });
 
-// Plugin client bundles: <dataDir>/plugins/<id>/client/* served at
-// /plugins/<id>/client/* so the frontend can import() plugin views. Only the
-// client/ subtree is exposed — manifest.json and the server-side index.mjs
-// (which may hold credentials) never leave the machine. Registered BEFORE the
-// SPA catch-all below.
-const PLUGINS_DIR = join(DATA_DIR, "plugins");
-// 插件 HTTP 路由挂载点：host.route("GET", "/inbox") 实际暴露为
-// /plugins-api/<id>/inbox。PI_WEB_TOKEN 鉴权（上方 app.use）自动覆盖；
-// 响应已在前面过了 express.json。注意不要在此 catch-all 里消费 body。
-app.all(["/plugins-api/:id/*splat", "/plugins-api/:id"], (req, res) => {
-	// 多段子路径的 splat 是数组（见 splatParam），拼回 "/" 后再交插件路由。
-	const rest = splatParam(req);
-	pluginMgr.handleHttp(String(req.params.id ?? ""), req.method, rest, req, res);
-});
-/** 通用插件代理（host.registerProxy 注册的前缀落到这里）：去前缀后原样透传到
- *  127.0.0.1:port——相对路径/Range/SSE 天然可用。PI_WEB_TOKEN 鉴权已在上方覆盖。
- *  必须站在静态资源与 SPA catch-all 之前，否则子路径被 index.html 吞掉。 */
-type ProxyHit = { prefix: string; pluginId: string; host: string; port: number };
-function proxyForwardPath(hit: ProxyHit, url: string): string {
-	let fwd = String(url ?? "/").slice(hit.prefix.length);
-	if (!fwd.startsWith("/")) fwd = `/${fwd}`;
-	return fwd || "/";
-}
-function proxyHttp(hit: ProxyHit, req: express.Request, res: express.Response): void {
-	const fwdPath = proxyForwardPath(hit, req.url ?? "/");
-	const headers: Record<string, string | string[]> = {};
-	for (const [k, v] of Object.entries(req.headers)) {
-		if (v === undefined) continue;
-		if (k.toLowerCase() === "host") continue;
-		if (k.toLowerCase() === "content-length" && req.method !== "GET" && req.method !== "HEAD") continue;
-		headers[k] = v as string | string[];
-	}
-	// 内页拼 SSE/资源绝对地址用（子路径反代下 import.meta 推导不到前缀，靠这个头）。
-	headers["x-pi-proxy-prefix"] = hit.prefix;
-	let body: Buffer | undefined;
-	if (req.method !== "GET" && req.method !== "HEAD" && (req as unknown as { body?: unknown }).body !== undefined) {
-		const b = (req as unknown as { body?: unknown }).body;
-		if (Buffer.isBuffer(b)) body = b;
-		else if (typeof b === "string") body = Buffer.from(b);
-		else if (b !== undefined) {
-			body = Buffer.from(JSON.stringify(b));
-			if (!headers["content-type"]) headers["content-type"] = "application/json";
-		}
-		if (body) headers["content-length"] = String(body.length);
-	}
-	const up = proxyRequest(
-		{ host: hit.host, port: hit.port, method: req.method, path: fwdPath, headers, timeout: 30000 },
-		(upRes) => {
-			const out: Record<string, string | string[]> = {};
-			for (const [k, v] of Object.entries(upRes.headers)) {
-				if (v === undefined) continue;
-				const lk = k.toLowerCase();
-				if (lk === "connection" || lk === "keep-alive" || lk === "transfer-encoding" || lk === "upgrade") continue;
-				out[k] = v as string | string[];
-			}
-			res.writeHead(upRes.statusCode ?? 502, out);
-			upRes.pipe(res);
-		},
-	);
-	up.on("timeout", () => up.destroy(new Error("proxy timeout")));
-	up.on("error", (err) => {
-		console.error(`[proxy:${hit.prefix}] → 127.0.0.1:${hit.port}${fwdPath} failed:`, err);
-		if (!res.headersSent) res.status(502).end("proxy target unreachable");
-		else res.end();
-	});
-	if (body) up.end(body);
-	else req.pipe(up);
-}
-app.use((req, res, next) => {
-	const hit = pluginMgr.findProxy(req.path);
-	if (!hit) {
-		next();
-		return;
-	}
-	proxyHttp(hit, req, res);
-});
-app.get("/plugins/:id/client/*splat", (req, res) => {
-	// 多段子路径（插件 vendor/分包）的 splat 是数组（见 splatParam），拼回 "/"。
-	const rest = splatParam(req);
-	// 特权 DOM 门禁：声明了 dom 能力的插件，其 bundle 需用户逐个授权后才下发
-	// （同源 bundle 技术上拦不住 DOM 访问，门只能放在这里；见 server/plugin-dom.ts）。
-	if (pluginMgr.isDomBundleBlocked(String(req.params.id ?? ""))) {
-		res.status(403).end("dom access not granted (settings > plugins > grant)");
-		return;
-	}
-	const abs = resolvePluginClientFile(PLUGINS_DIR, req.params.id, rest);
-	if (!abs) {
-		res.status(404).end("plugin not found");
-		return;
-	}
-	// .mjs 常不在老 mime 表里，手动定 Content-Type 保证 import() 可用
-	if (/\.(mjs|js)$/.test(abs)) {
-		res.setHeader("Content-Type", "text/javascript; charset=utf-8");
-	}
-	res.setHeader("Cache-Control", "no-cache"); // 开发期改文件即生效
-	// dotfiles: allow — issue #223：插件目录默认在 ~/.pi-web/plugins（隐藏目录段），同上需放行。
-	res.sendFile(abs, { dotfiles: "allow" }, (err) => {
-		if (err && !res.headersSent)
-			res
-				.status((err as NodeJS.ErrnoException & { statusCode?: number }).statusCode === 404 ? 404 : 500)
-				.end("not found");
-	});
-});
 /** Set in the env of the replacement child spawned by a self-update restart. */
 const RESTART_CHILD_ENV = "PI_WEB_RESTART_CHILD";
 const webDist = join(pkgRoot, "web", "dist");
@@ -1068,59 +950,6 @@ httpServer.on("upgrade", (req, socket, head) => {
 	} catch {
 		/* fall through to the path check below */
 	}
-	// 通用插件代理的 websocket 透传（live-reload 这类 socket 走这条；与 proxyHttp 同前缀表）。
-	const proxyHit = pluginMgr.findProxy(pathname);
-	if (proxyHit) {
-		if (!originAllowed(req)) {
-			socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
-			socket.destroy();
-			return;
-		}
-		if (AUTH_TOKEN && !tokenOk(req)) {
-			socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
-			socket.destroy();
-			return;
-		}
-		const target = createConnection(proxyHit.port, proxyHit.host);
-		const tearDown = (): void => {
-			try {
-				socket.destroy();
-			} catch {
-				/* already gone */
-			}
-			try {
-				target.destroy();
-			} catch {
-				/* already gone */
-			}
-		};
-		target.on("error", tearDown);
-		socket.on("error", tearDown);
-		target.setTimeout(10000, tearDown);
-		target.on("connect", () => {
-			target.setTimeout(0);
-			let fwdPath = String(req.url ?? "/").slice(proxyHit.prefix.length) || "/";
-			if (!fwdPath.startsWith("/")) fwdPath = `/${fwdPath}`;
-			const lines = [`${req.method} ${fwdPath} HTTP/${req.httpVersion}`];
-			for (const [k, v] of Object.entries(req.headers)) {
-				if (k.toLowerCase() === "host") {
-					lines.push(`host: 127.0.0.1:${proxyHit.port}`);
-					continue;
-				}
-				if (Array.isArray(v)) for (const x of v) lines.push(`${k}: ${x}`);
-				else if (v !== undefined) lines.push(`${k}: ${v}`);
-			}
-			lines.push("", "");
-			try {
-				target.write(lines.join("\r\n"));
-				if (head?.length) target.write(head);
-				socket.pipe(target).pipe(socket);
-			} catch {
-				tearDown();
-			}
-		});
-		return;
-	}
 	if (pathname !== "/ws") {
 		socket.destroy();
 		return;
@@ -1249,7 +1078,7 @@ export interface DispatchSession {
 	abortBash(): Promise<void>;
 	/** 手动重试上次失败的模型调用（自动重试次数用完、已停止标红后）。 */
 	retryLast(): Promise<void>;
-	killBackgroundServer(port?: number, taskId?: string): Promise<boolean>;
+	killBackgroundServer(port?: number): Promise<boolean>;
 	killAllBackgroundServers(): Promise<string[]>;
 	listBgServers(): Promise<void>;
 	/** 钉住 / 取消钉住一个后台实例（自动清理跳过钉住的）。 */
@@ -1333,7 +1162,6 @@ export interface DispatchSession {
 	makeDir(path: string, setAsCwd?: boolean): Promise<void>;
 	checkUpdate(): Promise<void>;
 	checkUpdatesAll(force?: boolean): Promise<void>;
-	checkPluginUpdates?(manual?: boolean): Promise<void>;
 	resolveDialog(id: number, value: string | boolean | null): void;
 	handleTuiOverlayInput?(id: number, data: string): void;
 	handleTuiOverlayResize?(id: number, cols: number, rows: number): void;
@@ -1424,8 +1252,7 @@ export interface DispatchSession {
 		promptOverrides?: Record<string, string>;
 		disabledSkills?: string[];
 		disabledExtensions?: string[];
-		disabledPlugins?: string[];
-		/** 宿主 UI 布局偏好（插件 UI 贡献 + 内置条目的隐藏/排序/分组；纯 UI，per-client）。 */
+		/** 宿主 UI 布局偏好（内置条目的隐藏/排序/分组；纯 UI，per-client）。 */
 		uiLayout?: UiLayoutPrefs;
 		terminalToolsEnabled?: boolean;
 		terminalBash?: boolean;
@@ -1467,9 +1294,6 @@ export interface DispatchSession {
 		cancelled?: boolean,
 		cancelReason?: string,
 	): Promise<void>;
-	/** 浏览器页面调用回包（browser_page 工具，pi 引擎专有；DSH 无页面桥，
-	 *  方法缺失时 dispatch 侧的 `?.` 直接忽略这条消息）。 */
-	resolvePageCall?(id: string, ok: boolean, result?: unknown, error?: string): void;
 	forkSession?(messageId: string, position?: "before" | "at", conversationId?: string): Promise<void>;
 	rollbackSession?(messageId: string, conversationId?: string, restoreWorkspace?: boolean): Promise<void>;
 	resolveToolApproval?(
@@ -1487,25 +1311,8 @@ export interface DispatchSession {
 	setPlanMode?(enabled: boolean, conversationId?: string): Promise<void>;
 	/** 切换审查者模式（自动委派）：会话级，默认关。DSH 实现里直接拒（无工具闸门）。 */
 	setDelegateMode?(enabled: boolean, conversationId?: string): Promise<void>;
-	savePreset(name: string): Promise<void>;
-	applyPreset(name: string): Promise<void>;
-	deletePreset(name: string): Promise<void>;
-	saveMcpServer?(
-		server: import("./protocol.js").UiMcpServer,
-		prevName?: string,
-		prevScope?: import("./protocol.js").McpScope,
-	): Promise<void>;
-	deleteMcpServer?(name: string, scope: import("./protocol.js").McpScope): Promise<void>;
-	toggleMcpServer?(name: string, scope: import("./protocol.js").McpScope, enabled: boolean): Promise<void>;
-	reloadMcp?(): Promise<void>;
 	installSkill?(name: string, scope: "global" | "project", content: string): Promise<void>;
 	uninstallSkill?(name: string, scope: "global" | "project"): Promise<void>;
-	/** 预设分享（server/preset-share.ts）：导出 / 导入 / 网址导入 / 目录 / 一键分享。 */
-	exportPreset(msg: Extract<ClientMessage, { type: "preset_export" }>): Promise<void>;
-	importPreset(msg: Extract<ClientMessage, { type: "preset_import" }>): Promise<void>;
-	importPresetFromUrl(msg: Extract<ClientMessage, { type: "preset_import_url" }>): Promise<void>;
-	pushPresetCatalog(msg: Extract<ClientMessage, { type: "preset_catalog" }>): Promise<void>;
-	sharePreset(msg: Extract<ClientMessage, { type: "preset_share" }>): Promise<void>;
 	/** Upsert 一个子代理模板（全局共享）。 */
 	saveSubagentTemplate(template: UiSubagentTemplate): Promise<void>;
 	saveApprovalRule?(rule: UiApprovalRule): Promise<void>;
@@ -1524,7 +1331,7 @@ export interface DispatchSession {
 	pendingMessages(): number;
 }
 
-/** 引擎无关的服务接口（index.ts attach 流程 + 插件扩展点所需）。 */
+/** 引擎无关的服务接口（index.ts attach 流程所需）。 */
 export interface EngineService {
 	attach(clientId: string, send: (msg: ServerMessage) => void): Promise<DispatchSession>;
 	detach(clientId: string, send: (msg: ServerMessage) => void): void;
@@ -1553,10 +1360,6 @@ export interface EngineService {
 	};
 	activeConversations(): number;
 	pendingMessages(): number;
-	applyPluginAgentTools(): void;
-	applyPluginCommandCatalog(): void;
-	applyPluginMarkers?(): void;
-	refreshBackgroundServers(): void;
 	/** 当前底座能力声明（Capabilities） */
 	getCapabilities?(): AgentEngineCapabilities;
 	/** Browser UI locale report (hello.locale / set_locale) — persist per
@@ -1574,51 +1377,6 @@ export interface EngineService {
 		cancelled?: boolean,
 	): Promise<void>;
 	onQuit?: (() => boolean) | undefined;
-	onToolEvent?:
-		| ((ev: {
-				phase: "start" | "end";
-				toolName: string;
-				conversationId: string;
-				durationMs?: number;
-				isError?: boolean;
-		  }) => void)
-		| undefined;
-	/** bash/read 插件拦截（P1-5，pi 引擎；dsh 引擎无 customTool 注册面，不接）。 */
-	toolGuard?:
-		| {
-				pre: (
-					req: ToolPreRequest,
-					lang: string,
-				) => Promise<{
-					verdict:
-						| { decision: "allow" }
-						| { decision: "deny"; reason?: string; reasonEn?: string }
-						| { decision: "ask"; reason?: string; reasonEn?: string };
-					pluginId?: string;
-				}>;
-				post: (
-					req: ToolPostRequest,
-					lang: string,
-				) => Promise<{ content?: Array<{ type: string; text?: string }>; pluginIds: string[] } | undefined>;
-		  }
-		| undefined;
-	/** 运行轨迹事件转发（pi 引擎发射；dsh 引擎暂不发射，插件收不到即无轨迹）。 */
-	onRunEvent?: ((ev: PluginRunEvent) => void) | undefined;
-	/** 对话切换通知（切历史会话/切 running 对话/新对话/切项目，pi 引擎）。 */
-	onConversationChanged?: (() => void) | undefined;
-	/** 当前打开对话的快照（pi 引擎；dsh 引擎无此方法，插件回退空态）。
-	 *  #542：可带 `{clientId}` 取某标签页正在看的对话。 */
-	readConversationForPlugins?: ((options?: PluginConversationQuery) => PluginConversationSnapshot | null) | undefined;
-	/** 模型切换成功通知（#542；pi 引擎。dsh 引擎暂无——插件订不到事件但快照照旧可读）。 */
-	onClientModelChanged?: ((snap: PluginConversationSnapshot) => void) | undefined;
-	/** 插件无头调用 agent（pi 引擎；dsh 引擎暂无，host.chat 明确拒绝）。 */
-	chatFromPlugin?:
-		((pluginId: string, req: PluginChatRequest) => Promise<{ conversationId: string; clientId: string }>) | undefined;
-	pluginToolsProvider?: (() => unknown[]) | undefined;
-	pluginCommandsProvider?: (() => unknown[]) | undefined;
-	pluginBgTasksProvider?: (() => BgServer[]) | undefined;
-	pluginStopBgTask?: ((taskId: string) => boolean) | undefined;
-	onClientCwdChanged?: ((cwd: string, roots: string[]) => void) | undefined;
 }
 
 let piServiceInstance: AgentService | null = null;
@@ -1724,18 +1482,6 @@ const service: EngineService = {
 		for (const s of activeEngines()) n += s.pendingMessages();
 		return n;
 	},
-	applyPluginAgentTools() {
-		for (const s of activeEngines()) s.applyPluginAgentTools();
-	},
-	applyPluginCommandCatalog() {
-		for (const s of activeEngines()) s.applyPluginCommandCatalog();
-	},
-	applyPluginMarkers() {
-		for (const s of activeEngines()) s.applyPluginMarkers?.();
-	},
-	refreshBackgroundServers() {
-		for (const s of activeEngines()) s.refreshBackgroundServers();
-	},
 	setLocale(clientId, locale) {
 		return ensureEngine(resolveClientEngine(clientId)).setLocale(clientId, locale);
 	},
@@ -1760,194 +1506,12 @@ const service: EngineService = {
 		}
 		return Promise.resolve();
 	},
-	readConversationForPlugins(options) {
-		if (options?.clientId) {
-			const eng = resolveClientEngine(options.clientId);
-			return ensureEngine(eng).readConversationForPlugins?.(options) ?? null;
-		}
-		return piServiceInstance?.readConversationForPlugins?.(options) ?? null;
-	},
-	chatFromPlugin(pluginId, req) {
-		const piSvc = ensureEngine("pi") as AgentService;
-		return piSvc.chatFromPlugin(pluginId, req);
-	},
 };
 
 // Server-string tables (issue #91 v2): packs' `serverStrings` sections feed
 // pick() lookup for non-zh/en UI languages (missing key → English fallback).
 initAttachmentStore(DATA_DIR);
 loadServerStrings(DATA_DIR);
-// Optional UI plugins (<dataDir>/plugins/<id>/): scanned on every client
-// attach so freshly dropped plugins appear without a server restart.
-const pluginMgr = new PluginManager(DATA_DIR, CWD, join(pkgRoot, "plugins", "catalog.json"));
-// 插件作业（安装/更新/卸载）后台执行：不占用户终端、不打断设置面板（issue #152）。
-// 真正干活的是 CLI（<pkgRoot>/bin/pi-web-ui.mjs），这里只做进程编排 + 进度转发。
-const pluginInstaller = new PluginInstaller({ dataDir: DATA_DIR, pkgRoot, managed: MANAGED });
-/** 插件变化后统一收尾：重扫激活 + 重推 plugins。 */
-async function reloadPluginsAndPush(lang?: () => ServerLang): Promise<void> {
-	await pluginMgr.reload(lang);
-	await pluginMgr.pushToAll();
-}
-// ---------------------------------------------------------------------------
-// 插件目录授权（issue #146）：插件要访问**工作区之外**的目录时，向所有在线客户端推一条
-// plugin_path_request，等第一个答复；同意则写进全局授权表（设置面板可撤销），超时=拒绝。
-// 这条流程只解决「用户知情 + 可撤销」——插件的服务端代码本来就是全权 Node 代码，
-// 想真正限制得靠 OS 沙箱（不在本项目范围），所以这里的价值是让受支持路径覆盖更多场景。
-// ---------------------------------------------------------------------------
-interface PendingPathRequest {
-	resolve: (ok: boolean) => void;
-	timer: ReturnType<typeof setTimeout>;
-	/** 弹窗广播时在线的 clientId 集合：应答必须来自其中之一——广播后才连上的端
-	 *  没见过弹窗，不许代答（plugin_path_response 处理处校验）。 */
-	recipients: Set<string>;
-}
-const pendingPathRequests = new Map<string, PendingPathRequest>();
-/** 把授权表推给所有在线客户端（设置面板展示 + 撤销后刷新）。 */
-function pushPluginGrants(): void {
-	const grants = pluginMgr.grants.list();
-	const payload = JSON.stringify({ type: "plugin_grants", grants });
-	for (const client of wss.clients) {
-		if (client.readyState === WebSocket.OPEN) {
-			try {
-				client.send(payload);
-			} catch {
-				/* 死连接：index.ts 自己会清理 */
-			}
-		}
-	}
-}
-pluginMgr.pathAccessRequester = (pluginId, dir, reason) =>
-	new Promise<boolean>((resolve) => {
-		const id = randomUUID();
-		const timer = setTimeout(() => {
-			pendingPathRequests.delete(id);
-			resolve(false);
-		}, 120_000);
-		// 广播前先记下在线端集合：应答来源绑定用（防没见过弹窗的连接代答）。
-		const recipients = new Set(pluginMgr.onlineClientIds());
-		pendingPathRequests.set(id, { resolve, timer, recipients });
-		const payload = JSON.stringify({
-			type: "plugin_path_request",
-			id,
-			pluginId,
-			path: dir,
-			...(reason ? { reason } : {}),
-		});
-		for (const client of wss.clients) {
-			if (client.readyState === WebSocket.OPEN) {
-				try {
-					client.send(payload);
-				} catch {
-					/* 死连接 */
-				}
-			}
-		}
-	});
-
-// 用户点了「允许」→ 授权表变了 → 立刻重推给所有在线客户端（设置面板「已授权目录」即时可见）。
-pluginMgr.onGrantsChanged = () => pushPluginGrants();
-// ---------------------------------------------------------------------------
-// 插件能力授权（host.requestPermission）：向所有在线客户端推一条
-// plugin_permission_request，等第一个答复；remember=true 落盘，否则只记内存。
-// 超时 120s 视为拒绝（与目录授权同窗口）。
-// ---------------------------------------------------------------------------
-interface PendingPermissionRequest {
-	resolve: (ans: { ok: boolean; remember: boolean }) => void;
-	timer: ReturnType<typeof setTimeout>;
-	/** 弹窗广播时在线的 clientId 集合：应答必须来自其中之一（同目录授权）。 */
-	recipients: Set<string>;
-}
-const pendingPermissionRequests = new Map<string, PendingPermissionRequest>();
-/** 把能力授权表推给所有在线客户端（设置面板展示 + 撤销后刷新）。 */
-function pushPluginPermissions(): void {
-	const payload = JSON.stringify({ type: "plugin_permissions", grants: pluginMgr.permGrants.list() });
-	for (const client of wss.clients) {
-		if (client.readyState === WebSocket.OPEN) {
-			try {
-				client.send(payload);
-			} catch {
-				/* 死连接 */
-			}
-		}
-	}
-}
-pluginMgr.permissionRequester = (pluginId, req) =>
-	new Promise<{ ok: boolean; remember: boolean }>((resolve) => {
-		const id = randomUUID();
-		const resolved = JSON.stringify({ type: "plugin_permission_resolved", id });
-		const timer = setTimeout(() => {
-			pendingPermissionRequests.delete(id);
-			for (const client of wss.clients) {
-				if (client.readyState === WebSocket.OPEN) {
-					try {
-						client.send(resolved);
-					} catch {
-						/* 死连接 */
-					}
-				}
-			}
-			resolve({ ok: false, remember: false });
-		}, 120_000);
-		// 广播前先记下在线端集合：应答来源绑定用（防没见过弹窗的连接代答）。
-		const recipients = new Set(pluginMgr.onlineClientIds());
-		pendingPermissionRequests.set(id, { resolve, timer, recipients });
-		const ask = JSON.stringify({
-			type: "plugin_permission_request",
-			id,
-			pluginId,
-			family: req.family,
-			...(req.hosts ? { hosts: req.hosts } : {}),
-			...(req.models ? { models: req.models } : {}),
-			...(req.reason ? { reason: req.reason } : {}),
-		});
-		for (const client of wss.clients) {
-			if (client.readyState === WebSocket.OPEN) {
-				try {
-					client.send(ask);
-				} catch {
-					/* 死连接 */
-				}
-			}
-		}
-	});
-pluginMgr.onPermGrantsChanged = () => pushPluginPermissions();
-
-// ---------------------------------------------------------------------------
-// 特权 DOM 授权两步握手：grant 是提权方向，不接受「一帧消息直接落盘」——设置面板
-// 点击先发 plugin_dom_consent，服务端给该 pluginId 生成在途 consent 请求并广播
-// plugin_dom_consent_request，收到绑定来源的 plugin_dom_consent_response 才调
-// setDomConsent 持久写盘。发起端（settings 面板）按 from === 自己的 clientId 自动
-// 应答，用户点一下的体验不变；陌生连接既不在 recipients 里，也没有发起记录，
-// 只能等 120s 超时拒绝。revoke 是降权方向，保持单步直达（不走本表）。
-// ---------------------------------------------------------------------------
-interface PendingDomConsent {
-	/** 随广播下发的请求 id，应答按它回查（本表按 pluginId 键：同插件同时只允许一个在途）。 */
-	id: string;
-	pluginId: string;
-	/** 广播时在线的 clientId 集合：应答来源绑定（与目录/能力授权同一口径）。 */
-	recipients: Set<string>;
-	timer: ReturnType<typeof setTimeout>;
-}
-/** key = pluginId：wantsDom 插件集合有限 + 120s 自动过期，规模天然有界。 */
-const pendingDomConsents = new Map<string, PendingDomConsent>();
-/** 按 id 反查在途 consent 请求（应答只有 id；表很小，线性扫即可）。 */
-function findDomConsentById(id: string): PendingDomConsent | undefined {
-	for (const p of pendingDomConsents.values()) if (p.id === id) return p;
-	return undefined;
-}
-
-// ---------------------------------------------------------------------------
-// 插件安装的用户确认门（P0）：plugin_catalog_sync 的 install:true 与 plugin_job
-// 的 install/update 在真正动安装器之前必须拿到用户确认。
-// ---------------------------------------------------------------------------
-async function confirmPluginInstallHelper(items: Array<{ id: string; source: string }>): Promise<boolean> {
-	return confirmPluginInstall(items, {
-		permGrants: pluginMgr.permGrants,
-		permissionRequester: pluginMgr.permissionRequester,
-		onGrantsChanged: pushPluginPermissions,
-	});
-}
-
 // 内置定时任务（issue #184）：全局 <dataDir>/scheduler-tasks.json，TTL 与
 // client-state 同级；Agent 工具建的任务优先唤醒发起对话（issue #193：
 // wakeConversation steer 投递，不切用户当前对话），原对话不在先回落同项目
@@ -2129,7 +1693,7 @@ function pushSchedulerTasks(): void {
 	}
 }
 
-/** 广播通知条给全部在线客户端（全局事件，不属于某个 ClientSession —— 如 mcp.json 坏）。 */
+/** 广播通知条给全部在线客户端（全局事件，不属于某个 ClientSession）。 */
 function pushNoticeToAll(level: "info" | "warning" | "error", text: string, textEn: string): void {
 	const payload = JSON.stringify({ type: "notice", level, text, textEn });
 	for (const client of wss.clients) {
@@ -2143,200 +1707,14 @@ function pushNoticeToAll(level: "info" | "warning" | "error", text: string, text
 	}
 }
 
-// MCP 工具桥：读取配置启动外部 MCP 服务器（stdio / HTTP streamable-http），把它们的
-// 工具并入与插件工具相同的 customTools 管线；单服务器失败不炸进程。
-const mcpBridge = new McpBridge(DATA_DIR, (...a) => console.log("[mcp]", ...a), {
-	agentDir: getAgentDir(),
-	cwd: CWD,
-	onToolsChanged: () => service.applyPluginAgentTools(),
-});
-ClientSession.mcpBridge = mcpBridge;
-pluginMgr.mcpBridge = mcpBridge;
-// mcp.json 热加载：保存文件即生效，改完不必再重启服务。两半都在这里收口 —— reload 换入
-// 新的服务器集合（只重启规格真变了的），applyPluginAgentTools 把新工具推给已有会话。
-const mcpHotReload = createMcpHotReload({
-	dataDir: DATA_DIR,
-	agentDir: getAgentDir(),
-	cwd: CWD,
-	reload: () => mcpBridge.reload(),
-	onToolsChanged: () => service.applyPluginAgentTools(),
-	onNotice: (level, text, textEn) => pushNoticeToAll(level, text, textEn),
-	log: (...a) => console.log(...a),
-});
-void mcpBridge.load().then(() => {
-	if (mcpBridge.getTools().length) service.applyPluginAgentTools();
-	// 播种在 load 之后：否则指纹可能记在 load 读到的版本之前，白重载一次。
-	mcpHotReload.start();
-});
-// 插件与宿主钩子统一挂载器：无论引擎在启动时预热还是运行期按需懒加载，都一致注入全部回调。
+// 宿主钩子统一挂载器：无论引擎在启动时预热还是运行期按需懒加载，都一致注入全部回调。
 wireEngineHooks = (svc: EngineService) => {
-	svc.onToolEvent = (ev) => pluginMgr.emitToolEvent(ev);
-	svc.toolGuard = {
-		pre: (req, lang) => pluginMgr.evaluateToolPre(req, lang),
-		post: (req, lang) => pluginMgr.evaluateToolPost(req, lang),
-	};
-	svc.onRunEvent = (ev) => pluginMgr.emitRunEvent(ev);
-	svc.onConversationChanged = () => pluginMgr.emitConversationChanged();
-	svc.onClientModelChanged = (snap) => pluginMgr.emitClientModelChanged(snap);
-	svc.pluginToolsProvider = () => [...pluginMgr.getAgentTools(), ...mcpBridge.getTools()];
-	svc.pluginCommandsProvider = () => pluginMgr.listCommands();
-	svc.pluginBgTasksProvider = () => pluginMgr.bgTasks();
-	svc.pluginStopBgTask = (taskId) => pluginMgr.stopPluginBgTask(taskId);
-	svc.onClientCwdChanged = (cwd, roots) => {
-		pluginMgr.notifyCwd(cwd);
-		pluginMgr.notifyWorkspaceRoots(roots);
-	};
 	svc.onQuit = scheduleQuit;
 	if ("schedulerStore" in svc) {
 		(svc as unknown as { schedulerStore: typeof scheduler }).schedulerStore = scheduler;
 	}
 };
 for (const s of activeEngines()) wireEngineHooks(s);
-
-// 插件扩展点：当前打开对话的快照（轨迹视图直接显示打开对话的时间线；
-// dsh 引擎无此方法时回退 null，插件显示空态）。#542：透传 {clientId} 选本标签页的对话。
-pluginMgr.conversationProvider = (opts) => service.readConversationForPlugins?.(opts) ?? null;
-// 插件扩展点：无头调用 agent（微信通道等经 host.chat 投递外部消息，无浏览器也能跑）。
-pluginMgr.chatProvider = (pluginId, req) =>
-	service.chatFromPlugin?.(pluginId, req) ?? Promise.reject(new Error("当前引擎不支持无头调用（仅标准 pi 引擎）"));
-pluginMgr.onAgentToolsChanged = () => {
-	service.applyPluginAgentTools();
-	void pluginMgr.pushToAll().catch(() => {});
-};
-// 插件扩展点：插件斜杠命令（registerCommand）→ 命令选择器目录 + prompt 拦截执行。
-pluginMgr.onCommandsChanged = () => service.applyPluginCommandCatalog();
-// 插件扩展点：插件内联标记（registerMarker）→ 刷新客户端 markers 与设置状态。
-pluginMgr.onMarkersChanged = () => service.applyPluginMarkers?.();
-// 插件扩展点：插件常驻后台任务（registerBackgroundTask）→ 并入「后台任务」面板。
-pluginMgr.onBgTasksChanged = () => service.refreshBackgroundServers();
-// ---------------------------------------------------------------------------
-// 插件扩展点 v2（并行任务在 server/plugins.ts 加 host.conversations/prompt/
-// steer/abortRun/chatWait/fs.watch/scm/bash/schedule/models/onStats/onStreaming/
-// net.fetch/events + conversationLister/conversationSearcher/conversationWriter/
-// runSteerer/runAborter/modelLister + emitStats/emitStreaming 注入点，web/ 侧加
-// plugin-host v8 与新 slot/kind/messageWidget）。本文件只做接线，不实现宿主方法
-// 本身：下面全是注入函数（读 service 现有逻辑组装数据），PluginManager 那边
-// 存在即用、不存在即跳过。约束：全部用 (pm as any).xxx 赋值 + typeof 防御，绝不
-// 假设 PluginManager 已有这些字段（并行任务可能还没合入）；每个注入内部再
-// try/catch，DSH 引擎（无 pluginClient/各 ForPlugins 方法）回退空列表或
-// {ok:false}，绝不抛错炸进程。
-// ---------------------------------------------------------------------------
-{
-	// SAFETY: This compatibility bridge only assigns optional plugin hooks; consumers test their presence.
-	const pm = pluginMgr as unknown as Record<string, unknown>;
-	/** 注入函数间复用的对话条目形状（与 agent-service 的 *ForPlugins 方法对齐）。 */
-	type PluginConvListItem = { id: string; title: string; cwd: string; kind: string; isStreaming: boolean };
-	type PluginListerClient = {
-		listRunningForPlugins?: () => PluginConvListItem[];
-		listHistoryForPlugins?: (limit?: number) => Promise<PluginConvListItem[]>;
-	};
-	type PluginSearchClient = {
-		searchForPlugins?: (q: string, n?: number) => Promise<{ id: string; title: string }[]>;
-	};
-	type PluginWriteClient = {
-		writeForPlugins?: (cid: string, t: string) => Promise<{ ok: boolean; error?: string }>;
-	};
-	type PluginModelsClient = {
-		listModelsForPlugins?: () => Promise<{ id: string; provider: string; vision: boolean }[]>;
-	};
-	type PluginAbortClient = {
-		abortForPlugins?: (cid: string) => Promise<{ ok: boolean; error?: string }>;
-	};
-	type PluginSteerClient = {
-		steerForPlugins?: (cid: string, t: string) => Promise<{ ok: boolean; error?: string }>;
-	};
-	/** 挑一个客户端会话：标准 pi 引擎走 piServiceInstance.pluginClient()，DSH/未知引擎无此方法即 undefined。 */
-	const pickClient = (): ReturnType<AgentService["pluginClient"]> => {
-		try {
-			return piServiceInstance ? piServiceInstance.pluginClient() : undefined;
-		} catch {
-			return undefined;
-		}
-	};
-	// conversationLister：本客户端运行中对话 + 当前项目历史会话摘要，只读组装
-	// {id,title,cwd,kind,isStreaming}。无客户端/方法缺失回空数组（插件显示空态）。
-	(pm as any).conversationLister = async () => {
-		try {
-			const cs = pickClient() as PluginListerClient | undefined;
-			if (!cs) return [];
-			const running = typeof cs.listRunningForPlugins === "function" ? cs.listRunningForPlugins() : [];
-			const history = typeof cs.listHistoryForPlugins === "function" ? await cs.listHistoryForPlugins(50) : [];
-			return [...running, ...history];
-		} catch {
-			return [];
-		}
-	};
-	// conversationSearcher：复用 search_sessions 逻辑，返回前 N 个 {id,title}。
-	(pm as any).conversationSearcher = async (query: string, limit?: number) => {
-		try {
-			const cs = pickClient() as PluginSearchClient | undefined;
-			if (!cs || typeof cs.searchForPlugins !== "function") return [];
-			return await cs.searchForPlugins(query, limit ?? 20);
-		} catch {
-			return [];
-		}
-	};
-	// conversationWriter：向指定对话投递 prompt（复用 prompt 路径）；找不到对话回 {ok:false,error}。
-	(pm as any).conversationWriter = async (id: string, text: string) => {
-		try {
-			const cs = pickClient() as PluginWriteClient | undefined;
-			if (!cs || typeof cs.writeForPlugins !== "function")
-				return { ok: false, error: "当前引擎不支持对话投递（仅标准 pi 引擎）" };
-			return await cs.writeForPlugins(id, text);
-		} catch (err) {
-			return { ok: false, error: (err as Error).message };
-		}
-	};
-	// modelLister：复用现有模型列表，映射 {id,provider,vision}。
-	(pm as any).modelLister = async () => {
-		try {
-			const cs = pickClient() as PluginModelsClient | undefined;
-			if (!cs || typeof cs.listModelsForPlugins !== "function") return [];
-			return await cs.listModelsForPlugins();
-		} catch {
-			return [];
-		}
-	};
-	// runSteerer：复用 ClientSession.steerForPlugins（sendUserMessage + deliverAs:'steer'，
-	// 跨客户端查找由方法内部兜底）；DSH/未知引擎无此方法即 not supported。
-	(pm as any).runSteerer = async (id: string, text: string) => {
-		try {
-			const cs = pickClient() as PluginSteerClient | undefined;
-			if (!cs || typeof cs.steerForPlugins !== "function") return { ok: false, error: "not supported" };
-			return await cs.steerForPlugins(id, text);
-		} catch (err) {
-			return { ok: false, error: (err as Error).message };
-		}
-	};
-	// runAborter：有现成 abort 路径（interruptRun，卡住/空转强制重置语义继承）。
-	(pm as any).runAborter = async (id: string) => {
-		try {
-			const cs = pickClient() as PluginAbortClient | undefined;
-			if (!cs || typeof cs.abortForPlugins !== "function") return { ok: false, error: "not supported" };
-			return await cs.abortForPlugins(id);
-		} catch (err) {
-			return { ok: false, error: (err as Error).message };
-		}
-	};
-	// llmProvider：插件直调模型（孤立无工具的一次性补全，不建对话）。
-	// 标准 pi 引擎走 service.completeForPlugins；DSH/未知引擎回 {ok:false}，绝不抛错。
-	(pm as any).llmProvider = async (pluginId: string, req: unknown) => {
-		try {
-			// SAFETY: Only invoked after the optional method is checked; request fields are narrowed below.
-			const svc = ensureEngine("pi") as unknown as {
-				completeForPlugins?: (
-					pluginId: string,
-					req: { prompt?: string; system?: string; model?: string; maxChars?: number; timeoutMs?: number },
-				) => Promise<{ ok: boolean; text?: string; model?: string; error?: string }>;
-			};
-			if (typeof svc.completeForPlugins !== "function")
-				return { ok: false, error: "当前引擎不支持 LLM 直调（仅标准 pi 引擎）" };
-			return await svc.completeForPlugins(pluginId, (req ?? {}) as { prompt?: string });
-		} catch (err) {
-			return { ok: false, error: (err as Error).message };
-		}
-	};
-}
 
 // ---------------------------------------------------------------------------
 // Self-update
@@ -2430,9 +1808,8 @@ wss.on("connection", (ws) => {
 	/** Commands received while the session is still being created — replayed after attach.
 	 *  带上限（256 条）：attach 挂死/失败保活期间队列不再无界增长，超限丢最旧并告警。 */
 	const pending = new PendingCommandQueue();
-	/** attach 完成（含插件链 + 首快照）前一律排队（见 hello 分支的 replayQueued）：
-	 *  ready 先行后，ready 只代表传输通，插件命令目录/首快照都还没好，直接分发
-	 *  会撞「未知命令」/ rev 链断裂。 */
+	/** attach 完成（含首快照）前一律排队（见 hello 分支的重放）：
+	 *  ready 先行后，ready 只代表传输通，首快照还没好，直接分发会撞 rev 链断裂。 */
 	let attachDone = false;
 	/** attach 代际（#699）：hello/switch 每次发起 attach 前 +1，慢 attach 落定时代际过期则只 detach 清理，绝不 flush/replay。 */
 	let attachGen = 0;
@@ -2494,31 +1871,6 @@ wss.on("connection", (ws) => {
 	const windowTap = new MessageWindowTap(sendRaw, readMessageWindowConfig(process.env));
 	const send = (msg: ServerMessage): void => windowTap.accept(msg);
 
-	// Plugins broadcast to every open socket; unregister on close below.
-	// Plugins broadcast to every open socket; unregister on close below. The
-	// cid getter lets plugins target THIS socket via host.sendTo(clientId).
-	const removePluginSender = pluginMgr.addSender(send, () => clientId);
-
-	/** DOM 授权落盘 + notice 反馈（两步握手的 grant 与单步 revoke 共用收尾）。
-	 *  cs 缺席（未 attach 完成）时只落盘不提示——消息本来就会在 attach 前排队。 */
-	const applyDomConsent = (pluginId: string, granted: boolean): void => {
-		void pluginMgr
-			.setDomConsent(pluginId, granted)
-			.then((r) => {
-				const cs2 = clientId ? service.get(clientId) : undefined;
-				if (r.error) cs2?.emitNotice("warning", `DOM 授权失败：${r.error}`, `DOM consent failed: ${r.error}`);
-				else if (r.changed)
-					cs2?.emitNotice(
-						"info",
-						granted ? `已授权插件「${pluginId}」完全 DOM 访问` : `已撤销插件「${pluginId}」完全 DOM 访问`,
-						granted
-							? `Granted full DOM access to plugin "${pluginId}"`
-							: `Revoked full DOM access from plugin "${pluginId}"`,
-					);
-			})
-			.catch(() => {});
-	};
-
 	const dispatch = (msg: ClientMessage): void => {
 		if (!clientId) {
 			pending.push(msg);
@@ -2527,7 +1879,7 @@ wss.on("connection", (ws) => {
 
 		const cs = service.get(clientId);
 		if (!cs || !attachDone) {
-			// Session not ready yet (hello processing / plugin chain) — hold the command.
+			// Session not ready yet (hello processing) — hold the command.
 			pending.push(msg);
 			return;
 		}
@@ -2558,28 +1910,6 @@ wss.on("connection", (ws) => {
 			if (handleScheduleMessage(msg, scheduler, send)) return;
 			if (handleSettingsMessage(msg, cs)) return;
 			if (handleInteractiveResponseMessage(msg, cs, service, clientId, send)) return;
-			if (
-				handlePluginMessage(msg, {
-					pluginMgr,
-					pluginInstaller,
-					cs,
-					clientId,
-					send,
-					dataDir: DATA_DIR,
-					cwd: CWD,
-					clients: wss.clients,
-					pendingPathRequests,
-					pendingPermissionRequests,
-					pendingDomConsents,
-					findDomConsentById,
-					applyDomConsent,
-					pushPluginGrants,
-					pushPluginPermissions,
-					reloadPluginsAndPush,
-					confirmPluginInstallHelper,
-				})
-			)
-				return;
 
 			switch (msg.type) {
 				case "prompt": {
@@ -2674,11 +2004,6 @@ wss.on("connection", (ws) => {
 				case "check_updates_all":
 					void cs.checkUpdatesAll(msg.force === true);
 					break;
-				case "check_plugin_updates":
-					if (typeof cs.checkPluginUpdates === "function") {
-						void cs.checkPluginUpdates(true);
-					}
-					break;
 				case "restart_service": {
 					// Same effect as `pi-web-ui server restart`: this process exits and its
 					// supervisor brings it back (launchd/systemd immediately, the Windows
@@ -2768,7 +2093,7 @@ wss.on("connection", (ws) => {
 			// 重放守卫：一条连接只允许 attach 一次。clientId 已赋值说明 hello 处理过
 			//（或进行中），再来的 hello 幂等回一条 ready 即可——否则重复 hello 会把
 			// service.attach 整个再跑一遍：重型 ClientSession 重复创建 + 旧 send sink
-			// 永久泄漏（removePluginSender 只在 close 时清一次）。
+			// 永久泄漏。
 			if (clientId) {
 				if (!closed) send(readyMsg(clientId));
 				return;
@@ -2813,59 +2138,21 @@ wss.on("connection", (ws) => {
 						helloSvc.detach(cid, send);
 						return;
 					}
-					// Plugin catalog: re-scan + activate new dirs on every attach so
-					// freshly dropped plugins show up without a server restart.
-					pluginMgr
-						.ensureLoaded(() => service.get(cid)?.getLang() ?? "en")
-						.then((plugins) => {
-							if (closed) return;
-							send({ type: "plugins", plugins, epoch: pluginMgr.epoch });
-							// 让各插件向新接入的客户端推送自身初始状态（onAttach 钩子）——
-							// 插件不要依赖客户端挂载后自己拉（见 plugins.ts onAttach 注释）。
-							pluginMgr.notifyAttach(cid);
-							// P3：左栏插件运行条目全量补发（之后的变更经 plugin_panel_items 广播）。
-							send({ type: "plugin_panel_items", groups: pluginMgr.panelGroups() });
-							// 插件目录授权表（设置面板展示 + 可撤销）
-							send({ type: "plugin_grants", grants: pluginMgr.grants.list() });
-							// 插件能力授权表（设置面板展示 + 可撤销；session 授权带标记）
-							send({ type: "plugin_permissions", grants: pluginMgr.permGrants.list() });
-							// 插件命令可能在本客户端 attach 过程中才注册（首载竞态）——
-							// 重推一次目录，保证选择器完整。
-							service.applyPluginCommandCatalog();
-							// 插件清单【先于】快照推送：前端渲染历史消息前就拿到 renderer
-							// 注册表（plugin-fence.ts），`` ```lang `` 围栏才能立即命中插件；
-							// 否则消息先落成普通代码块，清单后到也不会重渲。
-							// 新连接/新客户端 attach 首次快照必须强制全量（forceFull=true），
-							// 保证新标签页/刷新页能立刻拿到完整的会话基线，绝不因增量 delta 而卡在加载中。
-							cs.flushSnapshot(true);
-							// 内置定时任务列表随附推一次（后续变更经 pushSchedulerTasks 广播）。
-							try {
-								send({ type: "scheduler_tasks", tasks: scheduler.list() });
-							} catch {
-								/* 推送失败不挡快照 */
-							}
-							replayQueued();
-						})
-						.catch(() => {
-							if (closed) return;
-							// ensureLoaded 失败（如磁盘读错）不能卡死快照——前端 30s 无消息
-							// 会重连，重连又失败会陷入循环。至少把状态推下去（同样强制全量）。
-							cs.flushSnapshot(true);
-							replayQueued();
-						});
 					// hello may carry the UI locale — persist it before replaying
 					// anything queued during startup (issue #91).
 					if (msg.locale) void service.setLocale(cid, msg.locale);
-					// attach 期间收到的命令先排队（dispatch 里的 pending），必须等插件链
-					// 就绪后再重放：prompt 里可能是插件命令（/probe-grant 等），目录由
-					// 下面的 applyPluginCommandCatalog 同步；提前重放会撞上「未知命令」。
-					// ready 先行（issue #295）之前，客户端收到 ready 时 attach 已完成，
-					// 首条命令天然落在插件加载之后；现在 ready 与 attach 脱钩，不等就重放
-					// 等于把竞态窗口从一个 RTT 放大到整个插件扫描期（CI 必现 grant 超时）。
-					const replayQueued = (): void => {
-						attachDone = true;
-						for (const m of pending.drain()) dispatch(m);
-					};
+					// 新连接/新客户端 attach 首次快照必须强制全量（forceFull=true），
+					// 保证新标签页/刷新页能立刻拿到完整的会话基线，绝不因增量 delta 而卡在加载中。
+					cs.flushSnapshot(true);
+					// 内置定时任务列表随附推一次（后续变更经 pushSchedulerTasks 广播）。
+					try {
+						send({ type: "scheduler_tasks", tasks: scheduler.list() });
+					} catch {
+						/* 推送失败不挡快照 */
+					}
+					// attach 期间收到的命令先排队（dispatch 里的 pending），attach 完成后再重放。
+					attachDone = true;
+					for (const m of pending.drain()) dispatch(m);
 				})
 				.catch((err: unknown) => {
 					clearTimeout(slowTimer);
@@ -2925,7 +2212,6 @@ wss.on("connection", (ws) => {
 		service.noteSocketClose();
 		closed = true;
 		pending.clear();
-		removePluginSender();
 		if (snapshotRetryTimer) {
 			clearTimeout(snapshotRetryTimer);
 			snapshotRetryTimer = null;
@@ -3051,10 +2337,6 @@ async function shutdown(signal: "SIGINT" | "SIGTERM" = "SIGINT"): Promise<void> 
 		clearInterval(heartbeatTimer);
 		stopControl();
 		scheduler.stop();
-		pluginMgr.dispose();
-		pluginInstaller.dispose();
-		mcpHotReload.dispose();
-		mcpBridge.dispose();
 		await globalLspPool.shutdownAll();
 		await service.disposeAll();
 		// Don't let dead browsers hold the exit open: half-open WebSocket /

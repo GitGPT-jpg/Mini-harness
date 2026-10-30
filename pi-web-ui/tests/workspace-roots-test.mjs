@@ -4,9 +4,7 @@
  * 覆盖：
  *   1. `set_workspace_roots` 落进快照（`state.workspaceRoots`），**按项目（cwd）**存；
  *   2. 归一化：只收绝对路径（相对路径 / 非字符串逐个丢弃），空数组 = 回到单根；
- *   3. 多根真正的语义落点 —— 插件宿主把这些根算作「工作区内」：同一个
- *      `host.fs.readTextPath()` 调用，加根前被拒（要走目录授权）、加根后放行；
- *   4. 切项目各带各自的多根（切回去原来的根还在），并确实写进了 client-state.json。
+ *   3. 切项目各带各自的多根（切回去原来的根还在），并确实写进了 client-state.json。
  *
  * 运行：npm run build && node tests/workspace-roots-test.mjs
  * （已进 tests/run-smoke.mjs 的 ALL 列表）
@@ -35,35 +33,6 @@ mkdirSync(extra, { recursive: true });
 mkdirSync(extra2, { recursive: true });
 writeFileSync(join(extra, "hello.txt"), "from-extra");
 writeFileSync(join(extra2, "hello2.txt"), "from-extra2");
-
-// 探针插件：一条斜杠命令 → 用 host.fs.readTextPath 读**工作区外**的绝对路径。
-// 读到 = 该路径被当作「工作区内」（根生效）；被拒 = 需要目录授权（根没生效）。
-const plugDir = join(dataDir, "plugins", "rootprobe");
-mkdirSync(plugDir, { recursive: true });
-writeFileSync(
-	join(plugDir, "manifest.json"),
-	JSON.stringify({ name: "rootprobe", version: "0.1.0", permissions: ["fs"] }),
-);
-writeFileSync(
-	join(plugDir, "index.mjs"),
-	`export default {
-	activate(host) {
-		host.registerCommand({
-			name: "probe-read",
-			description: "读一个绝对路径",
-			descriptionEn: "Read an absolute path",
-			run: async (args) => {
-				try {
-					const txt = await host.fs.readTextPath(args.trim());
-					return "OK:" + txt;
-				} catch (err) {
-					return "DENY:" + (err && err.message ? err.message : String(err));
-				}
-			},
-		});
-	},
-};`,
-);
 
 let failures = 0;
 const check = (name, ok, extra = "") => {
@@ -124,17 +93,6 @@ const until = async (pred, label, timeoutMs = 12_000) => {
 	}
 };
 
-/** 发一条命令并等它的 notice 回显，返回回显正文。 */
-const runProbe = async (path) => {
-	notices.length = 0;
-	sock.send(JSON.stringify({ type: "prompt", text: `/probe-read ${path}` }));
-	// 只认命令回显（插件激活/授权那类 notice 也会落到同一个通道，别抢第一条）。
-	return await until(() => {
-		const hit = notices.find((n) => /^(OK|DENY):/.test(String(n.text)));
-		return hit ? String(hit.text) : null;
-	}, `probe-read notice (${path})`);
-};
-
 try {
 	try {
 		await freePort(PORT);
@@ -164,26 +122,15 @@ try {
 		JSON.stringify(lastRoots),
 	);
 
-	// -- 2. 加根前：工作区外的路径需要授权（被拒） -----------------------------
-	const helloExtra = join(extra, "hello.txt");
-	const before = await runProbe(helloExtra);
-	check("加根前读工作区外路径被拒（提示未授权）", before.startsWith("DENY:"), before.slice(0, 120));
-
 	// -- 3. set_workspace_roots → 快照可见 ------------------------------------
 	sock.send(JSON.stringify({ type: "set_workspace_roots", roots: [extra] }));
 	await until(() => lastRoots && lastRoots.length === 1 && samePath(lastRoots[0], extra), "roots in snapshot");
 	check("set_workspace_roots 落进快照", true, lastRoots.join(","));
 
-	// -- 4. 加根后：插件读它不必再授权（多根的真正语义） ----------------------
-	const after = await runProbe(helloExtra);
-	check("加根后同一路径放行（插件阅读不必再授权）", after === "OK:from-extra", after.slice(0, 120));
-
 	// -- 5. 归一化：相对路径 / 非字符串逐个丢弃 --------------------------------
 	sock.send(JSON.stringify({ type: "set_workspace_roots", roots: ["relative/dir", 1, null, extra2] }));
 	await until(() => lastRoots && lastRoots.length === 1 && samePath(lastRoots[0], extra2), "normalized roots");
 	check("相对路径与非字符串被丢弃，绝对路径留下", true, lastRoots.join(","));
-	const inExtra = await runProbe(helloExtra);
-	check("被丢弃的根不再放行（列表是覆盖语义，不是并集）", inExtra.startsWith("DENY:"), inExtra.slice(0, 100));
 
 	// -- 6. 按项目隔离：切项目各带各自的根 ------------------------------------
 	sock.send(JSON.stringify({ type: "set_workspace_roots", roots: [extra] }));
@@ -216,8 +163,7 @@ try {
 	// -- 8. 清空 = 回到单根 ----------------------------------------------------
 	sock.send(JSON.stringify({ type: "set_workspace_roots", roots: [] }));
 	await until(() => lastRoots && lastRoots.length === 0, "roots cleared");
-	const cleared = await runProbe(helloExtra);
-	check("空数组 = 回到单根（工作区外又需要授权）", cleared.startsWith("DENY:"), cleared.slice(0, 100));
+	check("空数组 = 回到单根（快照清空）", true);
 } catch (err) {
 	check(`未捕获异常：${err?.message ?? err}`, false);
 	console.error(err?.stack ?? err);

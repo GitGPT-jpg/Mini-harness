@@ -20,12 +20,12 @@
  * 基底的 schema、描述、prompt 指引、渲染全部原样保留，扩展独有的参数（如 better-edit 的
  * `windows`）照旧可用。
  *
- * 注入手法与 `plugins.ts` 的 `syncPluginToolsIntoSession` 相同：改 `session._customTools`
- * 后调 `_refreshToolRegistry()`（SDK 改私有字段名即返回 null，调用方按「覆盖没装上」降级；
- * `extensionRunner` 缺失时退化成「有扩展也当内置」＝改动前的行为，不会更差）。
+ * 注入手法：改 `session._customTools` 后调 `_refreshToolRegistry()`（SDK 改私有字段名
+ * 即返回 null，调用方按「覆盖没装上」降级；`extensionRunner` 缺失时退化成「有扩展也当
+ * 内置」＝改动前的行为，不会更差）。
  *
- * 顺序：注入项排在既有 `_customTools` **之前** ⇒ pi-web-ui 插件注册的同名工具（也是
- * customTools，比覆盖层后写）仍然是最后赢家，与改动前的相对顺序一致。
+ * 顺序：注入项排在既有 `_customTools` **之前** ⇒ 之后写入的同名 customTools 仍然是
+ * 最后赢家，与改动前的相对顺序一致。
  */
 
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";

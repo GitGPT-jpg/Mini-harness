@@ -110,9 +110,7 @@ const TEXT_CONTAINERS = [
 	".delegate-sec-text",
 	".present-note",
 	".set-tip-bubble", // pre-line + 绝对定位气泡
-	".source-default-text",
 	".setup-detail",
-	".set-prompt-view-text",
 	".dialog-body",
 	".dialog-option",
 	".msg-error", // 长报错（URL / 报错码）

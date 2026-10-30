@@ -25,7 +25,6 @@ export const BG_CLEANUP_FALLBACK_MIN = 30;
 /**
  * 从当前列表里挑出「该被自动清理」的条目（纯函数，好测）：
  *   - **钉住的（keep）不碰** —— 用户明确说要留的，永远不动；
- *   - 插件注册的任务不参与（它们不在这个列表里，由插件的 stop 回调负责）；
  *   - 只看 `since`（宿主首次发现它的时间）与阈值，与是否还在跑无关（还在跑才会在列表里）。
  * @param entries `{port, pid, since, keep?}` 列表
  * @param opts `{ now, thresholdMs }`；thresholdMs ≤ 0 = 不清理
@@ -294,8 +293,6 @@ export class BgServerTracker {
 			emit: (msg: ServerMessage) => void;
 			flushSnapshot: () => void;
 			isDisposed: () => boolean;
-			/** 插件注册的常驻任务（host.registerBackgroundTask）→ 追加进同一列表。 */
-			pluginTasks?: () => BgServer[];
 			/** 自动清理阈值（分钟；0 = 关）。每轮定时器实时读，改设置即时生效。 */
 			cleanupMinutes?: () => number;
 			/** 当前工作区目录（用于断链时核对进程是否在工作区内启动）。 */
@@ -408,7 +405,7 @@ export class BgServerTracker {
 		return out;
 	}
 
-	/** The current background-server list, oldest first. 合并插件任务。 */
+	/** The current background-server list, oldest first. */
 	list(): BgServer[] {
 		const out: BgServer[] = [...this.servers.entries()]
 			.map(([port, v]) => ({
@@ -420,7 +417,6 @@ export class BgServerTracker {
 				...(v.keep ? { keep: true } : {}),
 			}))
 			.sort((a, b) => a.since - b.since);
-		for (const t of this.opts.pluginTasks?.() ?? []) out.push(t);
 		return out;
 	}
 

@@ -10,14 +10,13 @@
 import type { AgentEngineCapabilities } from "./protocol.js";
 
 /** Pi 原生引擎能力：推理发行版裁剪后的出厂集（关闭与 Loop 重叠/非推理场景的能力）。
- *  SSH/沙盒/计划/委派/子代理/页面选择器已从源码删除或在发行版关闭；presentFiles 保留
+ *  SSH/沙盒/计划/委派/子代理已在发行版关闭，页面选择器已从源码删除；presentFiles 保留
  *  （推理产出 report/chart 成果卡片要用）。 */
 export const DEFAULT_PI_CAPABILITIES: Readonly<AgentEngineCapabilities> = Object.freeze({
 	remoteSsh: false,
 	sandboxes: false,
 	workspaceRoots: true,
 	conversationRef: true,
-	pageRef: false,
 	presentFiles: true,
 	planMode: false,
 	delegateMode: false,
@@ -37,7 +36,6 @@ export const DEFAULT_DSH_CAPABILITIES: Readonly<AgentEngineCapabilities> = Objec
 	sandboxes: false,
 	workspaceRoots: false,
 	conversationRef: false,
-	pageRef: false,
 	presentFiles: false,
 	planMode: false,
 	delegateMode: false,
@@ -57,7 +55,6 @@ export const DEFAULT_UNIVERSAL_CAPABILITIES: Readonly<AgentEngineCapabilities> =
 	sandboxes: false,
 	workspaceRoots: false,
 	conversationRef: false,
-	pageRef: false,
 	presentFiles: false,
 	planMode: false,
 	delegateMode: false,
@@ -77,7 +74,6 @@ export const DEFAULT_DURABLE_CAPABILITIES: Readonly<AgentEngineCapabilities> = O
 	sandboxes: false,
 	workspaceRoots: true,
 	conversationRef: true,
-	pageRef: true,
 	presentFiles: true,
 	planMode: false,
 	delegateMode: false,

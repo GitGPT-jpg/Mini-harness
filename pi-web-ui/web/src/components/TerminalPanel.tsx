@@ -26,10 +26,10 @@ interface TerminalPanelProps {
 		restart: (id: string) => void;
 		select: (id: string) => void;
 	};
-	/** `terminal.toolbar` 槽位的最终条目（全量，含 hidden；宿主 chrome + 插件按槽位顺序合并渲染）。
+	/** `terminal.toolbar` 槽位的最终条目（全量，含 hidden；宿主 chrome 按槽位顺序渲染）。
 	 *  不传 = 未接线，回落默认顺序（与旧硬编码一致）。 */
 	uiTerminalToolbar?: UiSlotEntry[];
-	/** 点击一条工具条目：交回 App 分发给贡献它的插件（与顶栏 onUiAction 同通道）。 */
+	/** 点击一条工具条目：交回 App 分派（与顶栏 onUiAction 同通道）。 */
 	onUiAction?: (item: UiSlotEntry) => void;
 }
 
@@ -269,17 +269,17 @@ export function TerminalPanel({ chat, terminal, uiTerminalToolbar, onUiAction }:
 
 	const editing = isNew || editingIdx !== null;
 
-	/** 命令列表头与终端 tab 头按槽位分别排序（插件 historically 落 tab 头；命令行/标签行是数据，不动）。 */
+	/** 命令列表头与终端 tab 头按槽位分别排序（命令行/标签行是数据，不动）。 */
 	const TERM_DEFAULT_ORDER = ["host:term-cmd-refresh", "host:term-cmd-new", "host:term-tab-new"];
 	const allTermEntries: UiSlotEntry[] =
 		uiTerminalToolbar === undefined
 			? TERM_DEFAULT_ORDER.map((id) => ({ id, source: "host" }) as UiSlotEntry)
 			: uiTerminalToolbar.filter((e) => !e.hidden);
-	const termZone = (ids: string[], withPlugins: boolean): UiSlotEntry[] => {
+	const termZone = (ids: string[]): UiSlotEntry[] => {
 		const set = new Set(ids);
-		return allTermEntries.filter((e) => set.has(e.id) || (withPlugins && e.source !== "host"));
+		return allTermEntries.filter((e) => set.has(e.id));
 	};
-	/** 布局页改名 / 插件 arrange 指定过文案（`labelExplicit`）→ 用那一条，否则内置 i18n 文案。
+	/** 布局页改名指定过文案（`labelExplicit`）→ 用那一条，否则内置 i18n 文案。
 	 *  这三个条目是纯图标按钮，名字落在 `title` 上。 */
 	const termLabel = (id: string, fallback: string): string => {
 		const e = allTermEntries.find((x) => x.id === id);
@@ -325,11 +325,7 @@ export function TerminalPanel({ chat, terminal, uiTerminalToolbar, onUiAction }:
 				<div className="panel-header">
 					<span className="panel-title">{t("commands")}</span>
 					<div className="panel-header-actions">
-						{renderMergedToolbar(
-							termZone(["host:term-cmd-refresh", "host:term-cmd-new"], false),
-							termHostNodes,
-							onUiAction,
-						)}
+						{renderMergedToolbar(termZone(["host:term-cmd-refresh", "host:term-cmd-new"]), termHostNodes, onUiAction)}
 					</div>
 				</div>
 
@@ -421,7 +417,7 @@ export function TerminalPanel({ chat, terminal, uiTerminalToolbar, onUiAction }:
 				<div className="term-tabs-block">
 					<div className="panel-header">
 						<span className="panel-title">{t("terminal")}</span>
-						{renderMergedToolbar(termZone(["host:term-tab-new"], true), termHostNodes, onUiAction)}
+						{renderMergedToolbar(termZone(["host:term-tab-new"]), termHostNodes, onUiAction)}
 					</div>
 					<div className="panel-body">
 						{chat.terminals.length === 0 && <div className="panel-empty">{t("noTerminal")}</div>}

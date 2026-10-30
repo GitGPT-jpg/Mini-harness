@@ -2,7 +2,7 @@
  * 内置定时任务调度（issue #184）。
  *
  * 面向普通用户的图形化调度器：任务 CRUD + cron/间隔触发 + 无头执行 +
- * 执行历史 + 通知。底层 cron 解析复用 plugin-schedule.ts（parseCronSpec /
+ * 执行历史 + 通知。底层 cron 解析复用 cron-spec.ts（parseCronSpec /
  * nextCronFire），持久化走 <dataDir>/scheduler-tasks.json（全局共享，
  * 与 client-state.json 同级），执行经调用方注入的 executor（index.ts 接
  * AgentService.chatFromScheduler，无头伪客户端）。
@@ -12,7 +12,7 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { nextCronFire, parseCronSpec } from "./plugin-schedule.js";
+import { nextCronFire, parseCronSpec } from "./cron-spec.js";
 import { writeJsonAtomicSync } from "./atomic-file.js";
 
 export type SchedulerKind = "cron" | "interval";

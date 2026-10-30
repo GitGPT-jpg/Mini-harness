@@ -2,7 +2,7 @@
  * 输入框草稿的纯逻辑（便于单测）：文本合并 + 待发附件追加。
  *
  * 两个使用方：① 把「撤回的排队/插队消息」放回输入框；② 宿主注入草稿
- * （浏览器元素拾取扩展 / 插件 → 见 composer-bridge.ts）。两边的纪律一致：
+ * （对话引用、选中文字引用等 → 见 composer-bridge.ts）。两边的纪律一致：
  * **绝不覆盖用户正在打的内容**，只填空位或追加。
  */
 
@@ -46,9 +46,6 @@ export interface DraftAttachment {
 	path: string;
 	name: string;
 	/**
-	 * "page" = a web page granted to the AI (page-picker extension): `path` is
-	 * the page origin (also the `browser_page` target) and `name` its title —
-	 * it is never treated as a workspace path.
 	 * "conversation" = another conversation quoted by the user: `path` is unused,
 	 * the reference travels in conversationId (running, incl. subagents) or
 	 * sessionPath (history transcript); the AI fetches it via conversation_read.
@@ -56,7 +53,7 @@ export interface DraftAttachment {
 	 * "inline" = 旧版「全文注入」的遗留值（服务端按 reference 处理）。
 	 * 粘贴图片/上传文件没有 mode（path 为空）。
 	 */
-	mode?: "inline" | "reference" | "lines" | "page" | "conversation" | "quote";
+	mode?: "inline" | "reference" | "lines" | "conversation" | "quote";
 	quote?: import("../../server/protocol.js").TextQuote;
 	/** mode "conversation" + 引用运行中对话的 id（如 "c3"）。 */
 	conversationId?: string;

@@ -7,7 +7,6 @@ export default defineConfig({
 		// `npm run test:smoke` / 单独 node 运行。
 		include: ["tests/unit/**/*.test.ts"],
 		environment: "node",
-		setupFiles: ["tests/unit/setup-chrome-i18n.ts"],
 		silent: true,
 		onConsoleLog: () => false,
 	},

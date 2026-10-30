@@ -1,11 +1,11 @@
 /**
- * 应用根（base path）解析：让服务端相对 URL（/ws、/api、/plugins、/themes）
+ * 应用根（base path）解析：让服务端相对 URL（/ws、/api、/themes）
  * 兼容 nginx 子路径反代部署（页面在 http://host/pi/，nginx 用
  * `location /pi/ { proxy_pass http://backend/; }` 剥离前缀转发给后端）。
  *
  * 背景：官方 dist 的静态资源引用是根绝对路径（/assets/...），页面能在
  * /pi/ 上正常加载，说明 nginx 已正确把 /pi/ 路由到后端；但浏览器侧 JS 里
- * 硬编码的根相对 URL（如插件 bundle `/plugins/<id>/client/entry.mjs`）仍会
+ * 硬编码的根相对 URL（如 `/api/file?...`、`/themes/<id>.css`）仍会
  * 落在网站根，绕过 /pi/ 转发规则 → 404 / 加载失败。这里用页面自身的
  * baseURI 推导应用根，把这类 URL 统一加上前缀，零配置适配任意子路径。
  *
@@ -65,7 +65,7 @@ export function withAppBase(path: string, base: string): string {
 }
 
 /** 把服务端相对路径带上应用根前缀：
- *  appUrl("/plugins/x.js") 在 /pi/ 部署下 → "/pi/plugins/x.js"；根部署原样返回。 */
+ *  appUrl("/api/x") 在 /pi/ 部署下 → "/pi/api/x"；根部署原样返回。 */
 export function appUrl(path: string): string {
 	return withAppBase(path, appBase());
 }

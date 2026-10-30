@@ -14,7 +14,6 @@
  */
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { ServerMessage, SlashCommandInfo } from "./protocol.js";
-import type { PluginCommandDef } from "./plugins.js";
 
 /** ClientSession 提供给本服务的宿主能力（窄接口，便于独立测试）。 */
 export interface SlashHost {
@@ -42,11 +41,6 @@ export interface SlashHost {
 	getPlanMode?: () => boolean;
 	/** session.reload() 之后的钩子（重放终端工具开关等设置门控）。 */
 	afterReload?: () => void;
-	/** 插件注册的斜杠命令（registerCommand）——目录展示 + exec 拦截执行。 */
-	pluginCommands?: () => PluginCommandDef[];
-	/** 执行一个插件命令：找到并调用 run，返回 true；没这个命令返回 false。
-	 *  放在宿主层而不是本服务里，因为 clientId/通知回显需要 ClientSession 环境。 */
-	execPluginCommand?: (name: string, args: string) => Promise<boolean> | boolean;
 
 	/** 通用引擎支持：当前模型信息 */
 	getModel?: () => { id: string; name?: string; provider?: string } | undefined;
@@ -232,19 +226,6 @@ export class SlashCommandsService {
 			} catch {
 				/* ignore */
 			}
-		}
-		// UI 插件注册的命令（host.registerCommand）——全局，不依赖会话就绪。
-		for (const cmd of this.host.pluginCommands?.() ?? []) {
-			if (seen.has(cmd.name)) continue; // 与内置/扩展重名时先到先得（内置优先）
-			commands.push({
-				name: cmd.name,
-				description: cmd.description,
-				descriptionEn: cmd.descriptionEn,
-				argumentHint: cmd.argumentHint,
-				argumentHintEn: cmd.argumentHintEn,
-				source: "plugin",
-			});
-			seen.add(cmd.name);
 		}
 		this.host.emit({ type: "slash_commands", commands });
 	}
@@ -500,8 +481,7 @@ export class SlashCommandsService {
 					const handled = await this.host.execExtraCommand(name, args);
 					if (handled) return true;
 				}
-				// 插件命令：拦截执行（纯配置动作，与内置命令同级，不到 SDK）。
-				return (await this.host.execPluginCommand?.(name, args)) ?? false;
+				return false;
 		}
 	}
 }

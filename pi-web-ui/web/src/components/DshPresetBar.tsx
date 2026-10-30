@@ -60,8 +60,7 @@ function presetDescKey(id: string): PresetDescKey | null {
 
 /**
  * 预设文案随界面语言落定：内置五档走 i18n 键（与权限档同口径），
- * 其它预设（DSH 运行时下发、自建）用服务端文案，非中文界面取 nameEn ?? name
- * （与 ui-slots.ts 的 pluginLabel 同一回落约定）。
+ * 其它预设（DSH 运行时下发、自建）用服务端文案，非中文界面取 nameEn ?? name。
  * 修的正是「英文界面仍见全功能/极简模式」：服务端只下发中文 name。
  */
 export function presetText(p: UiAgentPreset, locale: string, t: Translate): { name: string; description?: string } {

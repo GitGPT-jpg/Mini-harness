@@ -49,7 +49,7 @@ export interface ModalProps {
 	headerActions?: ReactNode;
 	/** 弹窗内容。 */
 	children?: ReactNode;
-	/** 附加在 .modal 上的类名（如 "plugin-modal", "bg-tasks-modal"）。 */
+	/** 附加在 .modal 上的类名（如 "bg-tasks-modal"）。 */
 	className?: string;
 	/** 附加在 .modal-backdrop 上的类名。 */
 	backdropClassName?: string;

@@ -5,11 +5,9 @@
 import { describe, expect, it } from "vitest";
 import {
 	mapFileHits,
-	mapPageHits,
 	mapSkillHits,
 	matchAtToken,
 	mergeAtHits,
-	normalizeAtHits,
 	type AtHit,
 	type SkillCommandLike,
 } from "../../web/src/at-mention.js";
@@ -58,27 +56,6 @@ describe("matchAtToken", () => {
 		expect(matchAtToken("（@z", 3)).toEqual({ start: 1, query: "z" });
 	});
 
-	describe("normalizeAtHits", () => {
-		it("坏字段逐条丢弃，好条目保留", () => {
-			const out = normalizeAtHits("p", "P", [
-				{ title: "a", hint: "h", text: "A ", attachments: [{ path: "/x", mode: "inline" }] },
-				{ title: "  " },
-				"nope",
-				{ title: "b", attachments: [{ nope: 1 }, { path: "/y", mode: "bogus" }] },
-			]);
-			expect(out).toHaveLength(2);
-			expect(out[0]).toMatchObject({ providerId: "p", title: "a", text: "A " });
-			expect(out[0]?.attachments).toHaveLength(1);
-			expect(out[1]?.attachments?.[0]).toMatchObject({ path: "/y" });
-			expect(out[1]?.attachments?.[0]).not.toHaveProperty("mode");
-		});
-
-		it("非数组/超限截断", () => {
-			expect(normalizeAtHits("p", "P", null)).toEqual([]);
-			expect(normalizeAtHits("p", "P", [1, 2, 3], 2)).toEqual([]);
-		});
-	});
-
 	describe("mapFileHits", () => {
 		it("文件/目录映射为引用 chip 命中", () => {
 			const out = mapFileHits("文件", [
@@ -102,29 +79,6 @@ describe("matchAtToken", () => {
 			expect(out[0]?.text).toBe("@报告");
 			expect(out[1]?.text).toBe("@方案/报告");
 			expect(out[0]?.text).not.toBe(out[1]?.text);
-		});
-	});
-
-	describe("mapPageHits", () => {
-		it("标题/origin 双字段过滤，无标题回落 origin", () => {
-			const pages = [
-				{ origin: "https://example.com", title: "Example", open: true },
-				{ origin: "https://closed.dev", title: "", open: false },
-				{ origin: "", title: "坏" },
-			];
-			const out = mapPageHits("浏览器操作", pages, "exam");
-			expect(out).toHaveLength(1);
-			expect(out[0]).toMatchObject({ providerId: "host:pages", title: "page · Example", text: "Example" });
-			expect(out[0]?.attachments?.[0]).toMatchObject({ path: "https://example.com", mode: "page" });
-			// 关掉的页不收录（模型读不到）。
-			const all = mapPageHits("浏览器操作", pages, "");
-			expect(all).toHaveLength(1);
-			expect(all[0]?.hint).toBe("https://example.com");
-			// 前缀词精确命中即列出全部；前缀仍走过滤。
-			expect(mapPageHits("浏览器操作", pages, "page")).toHaveLength(1);
-			expect(mapPageHits("浏览器操作", pages, "页面")).toHaveLength(1);
-			expect(mapPageHits("浏览器操作", pages, "pag")).toHaveLength(0);
-			expect(mapPageHits("浏览器操作", pages, "CLOSED")).toHaveLength(0);
 		});
 	});
 
@@ -209,7 +163,6 @@ describe("matchAtToken", () => {
 	});
 
 	describe("mergeAtHits", () => {
-		const pageHit: AtHit = { providerId: "host:pages", providerLabel: "Pages", title: "page · GitHub" };
 		const skillHit: AtHit = {
 			providerId: "host:skills",
 			providerLabel: "Skills",
@@ -217,32 +170,15 @@ describe("matchAtToken", () => {
 			text: "@skill:wrapup",
 		};
 		const fileHit: AtHit = { providerId: "host:files", providerLabel: "Files", title: "readme.md" };
-		const pluginHit: AtHit = { providerId: "p1", providerLabel: "Plugin", title: "item" };
 
-		it("Rule 1: ALL_PAGES_TRIGGERS 命中时 pages 置顶", () => {
-			const merged = mergeAtHits(
-				{ pages: [pageHit], skills: [skillHit], files: [fileHit], plugins: [pluginHit] },
-				"page",
-			);
-			expect(merged.map((m) => m.providerId)).toEqual(["host:pages", "host:skills", "host:files", "p1"]);
+		it("技能在前、文件在后；query 不影响顺序（含 skill: 前缀）", () => {
+			for (const q of ["skill:wr", "test", ""]) {
+				const merged = mergeAtHits({ files: [fileHit], skills: [skillHit] }, q);
+				expect(merged.map((m) => m.providerId)).toEqual(["host:skills", "host:files"]);
+			}
 		});
 
-		it("Rule 2: query 以 skill: 开头时 skills 置顶", () => {
-			const merged = mergeAtHits(
-				{ pages: [pageHit], skills: [skillHit], files: [fileHit], plugins: [pluginHit] },
-				"skill:wr",
-			);
-			expect(merged.map((m) => m.providerId)).toEqual(["host:skills", "host:pages", "host:files", "p1"]);
-		});
-
-		it("Rule 3: 默认顺序 pages -> skills -> files -> plugins，缺省 totalCap 为 30，支持空 bucket", () => {
-			const merged = mergeAtHits(
-				{ pages: [pageHit], skills: [skillHit], files: [fileHit], plugins: [pluginHit] },
-				"test",
-			);
-			expect(merged).toHaveLength(4);
-			expect(merged.map((m) => m.providerId)).toEqual(["host:pages", "host:skills", "host:files", "p1"]);
-
+		it("缺省 totalCap 为 30，支持显式截断与空 bucket", () => {
 			// 验证缺省 totalCap 为 30：35 条项目默认截断为 30 条
 			const thirtyFiveSkills: AtHit[] = Array.from({ length: 35 }, (_, idx) => ({
 				providerId: "host:skills",
@@ -252,17 +188,14 @@ describe("matchAtToken", () => {
 			const defaultCapped = mergeAtHits({ skills: thirtyFiveSkills }, "query");
 			expect(defaultCapped).toHaveLength(30);
 
-			// 显式 totalCap 截断
-			const capped = mergeAtHits(
-				{ pages: [pageHit], skills: [skillHit], files: [fileHit], plugins: [pluginHit] },
-				"test",
-				2,
-			);
-			expect(capped).toHaveLength(2);
+			// 显式 totalCap 截断：排在后面的文件先被截掉
+			const capped = mergeAtHits({ skills: [skillHit], files: [fileHit] }, "test", 1);
+			expect(capped.map((m) => m.providerId)).toEqual(["host:skills"]);
+			expect(mergeAtHits({ skills: [skillHit], files: [fileHit] }, "test", 0)).toEqual([]);
 
-			// 空 buckets 测试
-			const empty = mergeAtHits({}, "test");
-			expect(empty).toHaveLength(0);
+			// 空 buckets / 单桶
+			expect(mergeAtHits({}, "test")).toHaveLength(0);
+			expect(mergeAtHits({ files: [fileHit] }, "test")).toEqual([fileHit]);
 		});
 	});
 

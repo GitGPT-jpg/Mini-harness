@@ -33,7 +33,6 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 
 // 冒烟测试离线确定性运行：禁用服务启动时的远程插件市场拉取（避免污染测试临时 dataDir 并消除外网依赖与时序竞态）
-process.env.PI_WEB_PLUGIN_CATALOG_URL = process.env.PI_WEB_PLUGIN_CATALOG_URL ?? "";
 // 测试内自建 upstream/mock 书源站监听 127.0.0.1，SSRF 防护对回环地址放行
 process.env.LEGADO_ALLOW_PRIVATE_HOSTS = process.env.LEGADO_ALLOW_PRIVATE_HOSTS ?? "127.0.0.1,localhost";
 
@@ -49,15 +48,6 @@ const ALL = [
 	"conv-cross-project-test",
 	"conv-cwd-test",
 	"project-model-key-test",
-	// 插件目录授权的**接线**（request → 浏览器确认 → 落表 → 插件读得到 → 撤销）。
-	"plugin-grants-test",
-	// 注册面目录的 WS 往返（P2-7：plugin_api_catalog → 22 slot+别名+工具表+方法表+占用者）。
-	"plugin-api-catalog-test",
-	// #542：插件会话快照按 clientId 取用（两个标签页互不串台）+ 模型切换事件（不发消息即到、失败/重复不发）。
-	"plugin-client-conversation-test",
-	// #546：plugin create 生成的骨架四个模板都要真能用（SDK 两处拷贝 + 客户端 import 落在 client/ 内
-	// + manifest 合法 + 浏览器口径拓客户端 import 图）。
-	"plugin-scaffold-test",
 	"provider-oauth-test",
 	"provider-keys-test",
 	"chat-abort-attachments-rollback-test",
@@ -79,22 +69,8 @@ const ALL = [
 	"list-files-missing-dir-test",
 	// #262 regression: directory symlinks classify as dir on all platforms + "~/" expansion in the panel path bar (Android/Termux).
 	"list-files-symlink-home-test",
-	// 宿主 cron 引爆的溢出回归（远期 / 永不发生的表达式不能把服务打成死循环）。
-	"plugin-cron-overflow-test",
-	"plugin-bgtask-test",
-	// 左栏「运行的对话」插件运行条目（P3）：登记推送 / attach 补发 / clear / 心跳过期整组清空。
-	"plugin-leftpanel-running-test",
 	// 后台任务「自动清理」的协议面（阈值落库/归一化、钉住、立即清理反馈）。
 	"bg-cleanup-test",
-	"plugin-command-test",
-	"plugin-cwd-test",
-	"plugin-http-test",
-	"mcp-bridge-test",
-	"plugin-settings-test",
-	"plugin-test",
-	"plugin-update-test",
-	// --build 自动推断 + --no-build + install --catalog（issue #165，零网络本地目录源）。
-	"plugin-catalog-cli-test",
 	"preview-test",
 	// Express 5 *splat 多段数组回归（issue #225）：嵌套文件 HTTP 预览（__abs__/相对）。
 	"preview-http-test",
@@ -169,13 +145,6 @@ const CORE = [
 	"slash-commands-test",
 	"approval-policy-test",
 	"approval-rules-test",
-	"plugin-test", // 插件基线（激活/命令/推送）
-	"plugin-command-test",
-	"plugin-grants-test", // 目录授权接线（v0.95.0 回归过）
-	"plugin-api-catalog-test", // 注册面目录（v0.95.0 回归过）
-	"plugin-scaffold-test", // 脚手架四个模板真能用（#546：客户端 import 越界 / SDK 拷贝缺半）
-	"plugin-settings-test",
-	"plugin-cwd-test", // cwd 安全
 	"running-list-test", // 并发列表口径
 	"takeover-test", // 过户代表（6 合 1 前先留这一个）
 	"switch-session-background-test",

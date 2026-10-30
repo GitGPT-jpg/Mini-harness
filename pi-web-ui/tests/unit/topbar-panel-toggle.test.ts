@@ -435,19 +435,6 @@ describe("TopBar 连接状态", () => {
 });
 
 describe("TopBar 槽位渲染（顺序即 slot 顺序，插件条目与宿主条目同级）", () => {
-	const pluginViewEntry = (id: string, label: string, target: string) => ({
-		id,
-		source: "plugin:mail",
-		slot: "topbar.primary" as const,
-		label,
-		kind: "view" as const,
-		view: target,
-		order: 100,
-		align: "start" as const,
-		hidden: false,
-		userOverrides: [],
-		arrangedBy: [],
-	});
 	const pluginActionEntry = (id: string) => ({
 		id: `mail:${id}`,
 		source: "plugin:mail",
@@ -474,18 +461,6 @@ describe("TopBar 槽位渲染（顺序即 slot 顺序，插件条目与宿主条
 		tabs.forEach((t) => expect(t.parentElement?.classList.contains("topbar-flow")).toBe(true));
 	});
 
-	it("插件视图 tab 按 slot 顺序插进宿主三连之间", () => {
-		const { container } = mount("chat", [
-			hostEntry("host:chat"),
-			pluginViewEntry("mail:__view", "Mailbox", "plugin:mail"),
-			hostEntry("host:terminal"),
-		]);
-		const tabs = Array.from(container.querySelectorAll('[role="tab"]'));
-		expect(tabs.length).toBe(3);
-		expect(tabs[1].classList.contains("plugin-tab")).toBe(true);
-		expect(tabs[1].textContent).toContain("Mailbox");
-	});
-
 	it("插件动作不限 4 个：5 个全进主栏；⋯ 因为兼着「编辑图标」入口而常驻", () => {
 		const { container } = mount("chat", [
 			hostEntry("host:chat"),
@@ -499,16 +474,6 @@ describe("TopBar 槽位渲染（顺序即 slot 顺序，插件条目与宿主条
 		expect(flowItems(container).length).toBe(6); // host:chat + a..e
 		// ⋯ 不再随「无溢出」消失：它是「编辑图标」的唯一入口（见 IconEditor）。
 		expect(container.querySelector(".plugin-topbar-more")).not.toBeNull();
-	});
-
-	it("报错插件的视图 tab 置灰保留（走 plugins 清单兜底，slot 里没有它）", () => {
-		const { container } = mount("chat", [hostEntry("host:chat")], undefined, [
-			{ id: "mail", name: "Mail", error: "boom" },
-		]);
-		const broken = container.querySelector(".plugin-tab.broken");
-		expect(broken?.textContent).toContain("Mail");
-		// 报错原因走 data-tip 即时气泡（顶栏直流内不用原生 title，见上）
-		expect(broken?.getAttribute("data-tip")).toContain("boom");
 	});
 });
 

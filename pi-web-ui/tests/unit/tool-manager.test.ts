@@ -11,7 +11,6 @@ import {
 	COMPACT_CONTEXT_TOOL_NAME,
 	CONVERSATION_READ_TOOL_NAME,
 	LSP_TOOL_NAME,
-	MCP_MANAGE_TOOL_NAME,
 	SANDBOX_TOOL_NAME,
 	PATCH_TOOL_NAME,
 	PLAN_UPDATE_TOOL_NAME,
@@ -30,7 +29,6 @@ import {
 	legacyToDisabled,
 	normalizeDisabledAgentTools,
 	filterToolsByPreset,
-	presetAllowsPluginTools,
 	presetHasQuestionnaire,
 	presetShowsSkillCatalog,
 	setAgentToolEnabled,
@@ -54,8 +52,8 @@ function fakeSet(initial: string[] = []) {
 }
 
 describe("catalog", () => {
-	it("共 27 个可开关工具（终端 7＋子代理 1＋其他 19）", () => {
-		expect(AGENT_TOOL_CATALOG).toHaveLength(27);
+	it("共 25 个可开关工具（终端 7＋子代理 1＋其他 17）", () => {
+		expect(AGENT_TOOL_CATALOG).toHaveLength(25);
 		expect(TERMINAL_TOOL_NAMES).toHaveLength(7);
 		expect(SUBAGENT_TOOL_NAMES).toHaveLength(1);
 	});
@@ -68,7 +66,6 @@ describe("catalog", () => {
 		expect(off.has(LSP_TOOL_NAME)).toBe(true);
 		expect(off.has(CODEMODE_TOOL_NAME)).toBe(true);
 		expect(off.has(TOOL_SEARCH_TOOL_NAME)).toBe(true);
-		expect(off.has(MCP_MANAGE_TOOL_NAME)).toBe(true);
 		expect(off.has(PATCH_TOOL_NAME)).toBe(false);
 		expect(off.has(SANDBOX_TOOL_NAME)).toBe(false);
 		for (const n of SUBAGENT_TOOL_NAMES) expect(off.has(n)).toBe(false);
@@ -118,7 +115,7 @@ describe("legacy sync", () => {
 		for (const n of TERMINAL_TOOL_NAMES) expect(d).toContain(n);
 		expect(d).toContain("edit_soft");
 		expect(d).not.toContain(ASK_USER_QUESTION_TOOL_NAME);
-		// 全新安装：目录里默认关的工具（eval / browser_page / codemode …）保持关闭。
+		// 全新安装：目录里默认关的工具（eval / codemode …）保持关闭。
 		for (const n of defaultDisabledAgentTools()) expect(d).toContain(n);
 		// 新字段优先，遗留值忽略。
 		expect(legacyToDisabled({ disabledAgentTools: [], terminalToolsEnabled: false })).toEqual([]);
@@ -243,14 +240,6 @@ describe("tool_manage 出入口", () => {
 });
 
 describe("预设语义总表（见 tool-manager.ts 语义注释）", () => {
-	it("插件工具：只有 standard 允许，其余预设一律拒绝（读写未知，保守）", () => {
-		expect(presetAllowsPluginTools(undefined)).toBe(true);
-		expect(presetAllowsPluginTools("standard")).toBe(true);
-		for (const p of ["minimal", "code", "reader", "ask"]) expect(presetAllowsPluginTools(p)).toBe(false);
-		// 未知预设 id 按不过滤处理（filterToolsByPreset 同口径，防脏配置全灭）。
-		expect(presetAllowsPluginTools("nope")).toBe(true);
-	});
-
 	it("技能名录与 skill 加载器同进退（单源推导，不另维护名单）", () => {
 		expect(presetShowsSkillCatalog(undefined)).toBe(true);
 		expect(presetShowsSkillCatalog("standard")).toBe(true);

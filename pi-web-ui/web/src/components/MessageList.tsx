@@ -161,11 +161,9 @@ function QueuedMessage({
 											? "🖼️"
 											: att.type === "folder"
 												? "📁"
-												: att.type === "page"
-													? "🌐"
-													: att.type === "conversation"
-														? "💬"
-														: "📎"}
+												: att.type === "conversation"
+													? "💬"
+													: "📎"}
 									</span>
 									<span className="queued-att-name">{att.name}</span>
 								</span>
@@ -389,15 +387,15 @@ const LazyToolCluster = memo(function LazyToolCluster({
 });
 
 interface MessageListProps {
-	/** 消息工具条条目（message.actions 槽位：内置 + 插件的最终结果）。 */
+	/** 消息工具条条目（message.actions 槽位：内置条目的最终结果）。 */
 	uiMessageActions?: import("../ui-slots").UiSlotEntry[];
 	/** 消息右键菜单条目（contextmenu.message 槽位）。 */
 	uiContextMessage?: import("../ui-slots").UiSlotEntry[];
 	/** 工具卡的工具名右键菜单条目（contextmenu.toolcall 槽位）。 */
 	uiContextToolCall?: import("../ui-slots").UiSlotEntry[];
-	/** 空对话占位区条目（chat.empty 槽位：纯插件新增位，无条目时不渲染）。 */
+	/** 空对话占位区条目（chat.empty 槽位：无宿主内置条目，无条目时不渲染）。 */
 	uiChatEmpty?: import("../ui-slots").UiSlotEntry[];
-	/** 条目的动作分发（view 切视图 / action 交给插件）。 */
+	/** 条目的动作分发（交回 App 分派）。 */
 	onUiAction?: (item: import("../ui-slots").UiSlotEntry) => void;
 	state: UiState;
 	liveOutputs: ReadonlyMap<string, { toolName: string; text: string }>;

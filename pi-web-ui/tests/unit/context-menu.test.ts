@@ -38,7 +38,6 @@ function entry(id: string, partial: Partial<UiSlotEntry> = {}): UiSlotEntry {
 		align: "start",
 		hidden: false,
 		userOverrides: [],
-		arrangedBy: [],
 		...partial,
 	};
 }
@@ -394,7 +393,7 @@ describe("expandSelectEntries（右键菜单里 select 展开成子菜单）", (
 		return {
 			id: "p:tone",
 			slot: "contextmenu.file",
-			source: "plugin:p",
+			source: "host",
 			label: "语气",
 			kind: "select",
 			order: 100,
@@ -407,7 +406,6 @@ describe("expandSelectEntries（右键菜单里 select 展开成子菜单）", (
 				{ value: "full", label: "详细" },
 			],
 			userOverrides: [],
-			arrangedBy: [],
 			...partial,
 		};
 	}

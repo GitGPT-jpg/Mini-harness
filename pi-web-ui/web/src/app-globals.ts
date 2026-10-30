@@ -10,7 +10,7 @@
  *    GoalBar / SettingsModal / PiSetupModal / ChatInput…… 传参版漏一个就是一个看不见的
  *    分支走错（DSH 少一道 gating、managed 实例多出安装按钮）。
  *  - 它们也不属于快照流（只在 `ready` 消息里来一次），用 Context 还得在每个可能被
- *    单独渲染的子树里再包 Provider（插件视图、portal 弹窗最容易漏）。
+ *    单独渲染的子树里再包 Provider（portal 弹窗最容易漏）。
  *
  * ⚠️ 纪律（改动本文件前先读）：
  *  1. 只放**极少变化**的字段。`messages` / `state` / `settings` / `streaming` 这类
@@ -31,7 +31,7 @@
  * 边界：「整棵树都要 + 低频」才进来。`chat.*` 里的快照流数据（messages / state /
  * settings / models …）仍由 useChat 持有并逐层传（TopBar/FooterBar 这类本来就吃
  * 整个 ChatState 的组件不算传参问题）。这里只是把「几乎人人要、又懒得传」的那几个
- * 值镜像出来，方便深子树（插件视图、portal 弹窗）直接取。
+ * 值镜像出来，方便深子树（portal 弹窗等）直接取。
  */
 
 import { useSyncExternalStore } from "react";
@@ -46,7 +46,6 @@ export const DEFAULT_ENGINE_CAPABILITIES: AgentEngineCapabilities = {
 	sandboxes: false,
 	workspaceRoots: true,
 	conversationRef: true,
-	pageRef: false,
 	presentFiles: true,
 	planMode: false,
 	delegateMode: false,
@@ -63,7 +62,7 @@ export const DEFAULT_ENGINE_CAPABILITIES: AgentEngineCapabilities = {
 export interface AppGlobals {
 	/** 引擎标识（"pi" | "dsh"）。缺省 "pi" —— 老服务端不发这个字段。 */
 	engine: string;
-	/** PI_WEB_MANAGED=1：更新与插件安装由部署方负责，界面不提供入口。 */
+	/** PI_WEB_MANAGED=1：更新由部署方负责，界面不提供入口。 */
 	managed: boolean;
 	/** PI_WEB_TABS：本实例提供的 tab 白名单；undefined = 全部（默认）。 */
 	tabs?: string[];

@@ -10,7 +10,6 @@
  * 白名单里（bash/read：覆盖 SDK 内置，与 write/edit 一起走设置页「核心工具」区开关、
  * 不占目录行——见 tool-manager.ts 的 CORE_BUILTIN_TOOL_NAMES）。
  * 加新工具 = 在这里给它的工厂登记一行，逼着你当场决定：入目录还是内核。
- * 插件工具走 enabledPluginToolDefs 动态区，不经过 make*Tool 调用，不管。
  */
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -18,7 +17,6 @@ import { describe, expect, it } from "vitest";
 import {
 	AGENT_TOOL_CATALOG,
 	ASK_USER_QUESTION_TOOL_NAME,
-	BROWSER_PAGE_TOOL_NAME,
 	CLAIM_FILES_TOOL_NAME,
 	CODEMODE_TOOL_NAME,
 	COMPACT_CONTEXT_TOOL_NAME,
@@ -27,7 +25,6 @@ import {
 	EDIT_SOFT_TOOL_NAME,
 	EVAL_TOOL_NAME,
 	LSP_TOOL_NAME,
-	MCP_MANAGE_TOOL_NAME,
 	SANDBOX_TOOL_NAME,
 	WORKTREE_TOOL_NAME,
 	LOAD_TOOLS_TOOL_NAME,
@@ -62,7 +59,6 @@ const FACTORY_TOOLS: Record<string, string[]> = {
 	makeSubagentTools: [...SUBAGENT_TOOL_NAMES],
 	makeDelegateTaskTool: [DELEGATE_TASK_TOOL_NAME],
 	makeAskUserQuestionTool: [ASK_USER_QUESTION_TOOL_NAME],
-	makeBrowserPageTool: [BROWSER_PAGE_TOOL_NAME],
 	makeConversationReadTool: [CONVERSATION_READ_TOOL_NAME],
 	makeClaimFilesTool: [CLAIM_FILES_TOOL_NAME],
 	makePlanUpdateTool: [PLAN_UPDATE_TOOL_NAME],
@@ -73,7 +69,6 @@ const FACTORY_TOOLS: Record<string, string[]> = {
 	makeEvalTool: [EVAL_TOOL_NAME],
 	makePatchTool: [PATCH_TOOL_NAME],
 	makeLspTool: [LSP_TOOL_NAME],
-	makeMcpManageTool: [MCP_MANAGE_TOOL_NAME],
 	makeSandboxTool: [SANDBOX_TOOL_NAME],
 	makeWorktreeTool: [WORKTREE_TOOL_NAME],
 	makeLoadToolsTool: [LOAD_TOOLS_TOOL_NAME],

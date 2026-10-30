@@ -10,8 +10,8 @@
  *
  * 为什么打补丁而不是在注册时替换定义：SDK 的工具注册表由
  * `[...扩展注册, ...customTools]` + 内置定义合并而成（`_refreshToolRegistry()`），
- * 覆盖面必须落在**合并之后**的注册表上才覆盖得到全部来源（核心内置/本项目工具/插件/MCP）。
- * 手法与 `tool-overrides.ts` / `plugins.ts` 相同：改 SDK 私有字段；字段名一变即返回
+ * 覆盖面必须落在**合并之后**的注册表上才覆盖得到全部来源（核心内置/本项目工具/扩展）。
+ * 手法与 `tool-overrides.ts` 相同：改 SDK 私有字段；字段名一变即返回
  * null，调用方按「覆盖没装上」降级（模型仍看到默认文案，不会更差）。
  *
  * 打哪三个补丁：
@@ -21,7 +21,7 @@
  *  - `_toolPromptSnippets` / `_toolPromptGuidelines`：SDK 内部组装系统提示词时读这两个
  *    表；web-ui 自己重渲染提示词时也会读（见 agent-service 的 compose 循环）。
  *  **默认值从 `_toolDefinitions` 取**（本模块从不改它，永远是出厂定义）——这样反复
- *  apply（清空覆盖、插件 sync 后重放）都能准确回到默认，不会层层叠字。
+ *  apply（清空覆盖、工具刷新后重放）都能准确回到默认，不会层层叠字。
  *
  * 本模块不 import SDK / node：只依赖 `./protocol.js` 的 wire 类型，浏览器端也能复用
  * 归一化函数（`web/src/types.ts` 是 protocol 的 shim）。
@@ -156,7 +156,7 @@ export interface ToolPromptSessionLike {
  * 把覆盖表打进会话：返回被覆盖的工具名；会话结构不符（SDK 改私有字段名）返回 null。
  *
  * 幂等：每次都用 `_toolDefinitions` 的默认值重算，清空覆盖后再次 apply 会准确复原。
- * 调用点见 `agent-service.ts` 的 `applyToolGating()`（会话创建/设置变更/插件 sync 后统一重放）。
+ * 调用点见 `agent-service.ts` 的 `applyToolGating()`（会话创建/设置变更后统一重放）。
  */
 export function applyToolPromptOverrides(
 	session: ToolPromptSessionLike | undefined | null,

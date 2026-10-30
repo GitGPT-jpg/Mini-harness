@@ -27,7 +27,7 @@ const goal = {
 	wizard: null,
 } as unknown as GoalStatus;
 
-/** goalbar.actions 槽位条目（与 buildUiSlots 的落成形状一致；labelExplicit 由改名/arrange 置位）。 */
+/** goalbar.actions 槽位条目（与 buildUiSlots 的落成形状一致；labelExplicit 由布局页改名置位）。 */
 const entries = (overrides: Record<string, Partial<UiSlotEntry>> = {}): UiSlotEntry[] =>
 	["host:goal-pill", "host:goal-set", "host:goal-wizard", "host:goal-plan"].map((id) => ({
 		id,
@@ -39,7 +39,6 @@ const entries = (overrides: Record<string, Partial<UiSlotEntry>> = {}): UiSlotEn
 		align: "start" as const,
 		hidden: false,
 		userOverrides: [],
-		arrangedBy: [],
 		...overrides[id],
 	}));
 
@@ -82,11 +81,11 @@ describe("目标条内置条目改名落地", () => {
 		container.remove();
 	});
 
-	it("布局页改名 / 插件 arrange 指定（labelExplicit）→ 按钮文字真的换", () => {
+	it("布局页改名（labelExplicit）→ 按钮文字真的换", () => {
 		const { container, root } = render(
 			entries({
 				"host:goal-set": { label: "MY-SET", labelExplicit: true, userOverrides: ["label"] },
-				"host:goal-plan": { label: "MY-PLAN", labelExplicit: true, arrangedBy: ["layouttest"] },
+				"host:goal-plan": { label: "MY-PLAN", labelExplicit: true, userOverrides: ["label"] },
 			}),
 			true,
 		);

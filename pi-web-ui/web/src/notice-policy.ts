@@ -44,8 +44,6 @@ const SUPPRESSED_INFO_PATTERNS: readonly RegExp[] = [
 	// 后台自动维护与开机巡检（底栏 token 数值 / 顶栏红点已原位体现）
 	/^分层上下文预算裁剪生效/,
 	/^Tiered context budget pruning/i,
-	/^发现 \d+ 个内置插件有更新可用/,
-	/^\d+ built-in plugin\(s\) have updates available/i,
 
 	// 文件树原位增删改移（右侧文件树已实时刷新；保留「已上传」回执）
 	/^已(创建文件|创建文件夹|重命名|删除|移动|复制)[：:]/,

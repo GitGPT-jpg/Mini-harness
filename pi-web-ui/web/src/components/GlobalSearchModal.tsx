@@ -1,8 +1,7 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { FiFileText, FiFolder, FiMessageSquare, FiPackage, FiSearch, FiX } from "react-icons/fi";
+import { FiFileText, FiFolder, FiMessageSquare, FiSearch, FiX } from "react-icons/fi";
 import type { FileSearchResult, MessageAnchor, ProjectSummary, SessionSearchResult } from "../types";
 import { useT } from "../i18n";
-import { getPluginSearchProvider, listPluginSearchProviders, triggerPluginUiAction } from "../plugin-host";
 import { appSend, useAppField, useEngineCapabilities } from "../app-globals";
 import { composeToComposer } from "../composer-bridge";
 import { nextSearchReqId } from "../search-req-id";
@@ -48,7 +47,6 @@ function matches(text: string, q: string): boolean {
  * ② 项目：最近项目路径（客户端过滤，点击 set_cwd 切换工作区）；
  * ③ 文件：当前工作区递归文件名匹配（服务端 search_files，reqId 匹配，
  *    点击打开文件预览）。↑↓/Enter 键盘导航，Esc 关闭。
- * ④ 插件：各插件经 host.searchProviders 注册的全局搜索提供者（无提供者整节不渲染）。
  * 点击结果后面板保持打开、结果不被清空，可直接点下一条；会话点击
  * 会收起面板并跳到命中消息的位置（搜索状态仍保留在面板里，重开即恢复）。
  */
@@ -64,8 +62,6 @@ export function GlobalSearchModal({
 }: GlobalSearchModalProps) {
 	const t = useT();
 	const capabilities = useEngineCapabilities();
-	// 节标题复用现成词条（zh「插件」/ en「Plugins」/ 各语言包自带译文）。
-	const pluginSectionLabel = t("pluginMenuTitle");
 	// 当前工作目录：走全局（web/src/app-globals.ts），不再从 App 传（项目行的
 	// 「当前」标记与 cwd 变化重探测都靠它）。
 	const cwd = useAppField("cwd");
@@ -167,103 +163,11 @@ export function GlobalSearchModal({
 	}, [activeFileSearch, sessionSearch]);
 	const fileTruncated = !!activeFileSearch && activeFileSearch.ok && activeFileSearch.truncated;
 
-	/** ④ 插件命中（一行 = 一个 provider 的一条 search 结果）。 */
-	interface PluginHit {
-		providerId: string;
-		providerLabel: string;
-		title: string;
-		hint?: string;
-		action: string;
-	}
-	const [pluginHits, setPluginHits] = useState<PluginHit[]>([]);
-	// 有 query 时调每个 provider 的 search(q)：Promise.allSettled + 单家 3000ms 超时；
-	// searchProviders 是模块级内存注册表（api 上的字段只是它的代理）：优先经已挂载的
-	// 宿主实例枚举（与插件看到的是同一份），未挂载回落直接 import；list() 只给轻量信息，
-	// search 函数走条目自带的（typeof 防御，没有就不调）——无提供者时下面整节不渲染。
-	useEffect(() => {
-		if (!open) return;
-		const qq = deferredQuery.trim();
-		if (!qq) {
-			setPluginHits([]);
-			return;
-		}
-		let cancelled = false;
-		interface ProviderLike {
-			id: string;
-			label: string;
-			search?: (q: string) => Promise<unknown>;
-		}
-		let providers: ProviderLike[] = [];
-		try {
-			const w = window as unknown as { __piWebUiHost?: { searchProviders?: { list?: () => unknown } } };
-			const viaHost = w.__piWebUiHost?.searchProviders?.list;
-			if (typeof viaHost === "function") {
-				const arr: unknown = viaHost.call(w.__piWebUiHost);
-				if (Array.isArray(arr)) providers = arr as ProviderLike[];
-			} else if (typeof listPluginSearchProviders === "function") {
-				providers = listPluginSearchProviders() as ProviderLike[];
-			}
-		} catch {
-			providers = [];
-		}
-		// list() 只给轻量信息（无 search 函数）：经 getPluginSearchProvider 补全可调定义。
-		const searchable = providers
-			.filter((p) => p && typeof p.id === "string")
-			.map((p) => {
-				if (typeof p.search === "function") return p;
-				try {
-					const full = getPluginSearchProvider(p.id);
-					return full && typeof full.search === "function" ? { ...p, search: full.search } : null;
-				} catch {
-					return null;
-				}
-			})
-			.filter((p): p is ProviderLike & { search: (q: string) => Promise<unknown> } => !!p);
-		if (searchable.length === 0) {
-			setPluginHits([]);
-			return;
-		}
-		void Promise.allSettled(
-			searchable.map((p) =>
-				Promise.race([
-					(p.search as (q: string) => Promise<unknown>)(qq),
-					new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 3000)),
-				]).then(
-					(items) => ({ provider: p, items: Array.isArray(items) ? items : [] }),
-					() => ({ provider: p, items: [] as unknown[] }),
-				),
-			),
-		).then((settled) => {
-			if (cancelled) return;
-			const hits: PluginHit[] = [];
-			for (const s of settled) {
-				if (s.status !== "fulfilled") continue;
-				for (const it of s.value.items) {
-					if (!it || typeof it !== "object") continue;
-					const rec = it as { title?: unknown; hint?: unknown; action?: unknown };
-					if (typeof rec.title !== "string" || typeof rec.action !== "string") continue;
-					hits.push({
-						providerId: s.value.provider.id,
-						providerLabel: s.value.provider.label,
-						title: rec.title,
-						...(typeof rec.hint === "string" ? { hint: rec.hint } : {}),
-						action: rec.action,
-					});
-				}
-			}
-			setPluginHits(hits.slice(0, 20));
-		});
-		return () => {
-			cancelled = true;
-		};
-	}, [open, deferredQuery]);
-
-	/** Flat navigation order: conversations → projects → files → plugins. */
+	/** Flat navigation order: conversations → projects → files. */
 	type NavItem =
 		| { kind: "session"; path: string; anchors: MessageAnchor[] }
 		| { kind: "project"; path: string }
-		| { kind: "file"; path: string; name: string }
-		| { kind: "plugin"; providerId: string; providerLabel: string; title: string; action: string };
+		| { kind: "file"; path: string; name: string };
 	const navItems = useMemo<NavItem[]>(
 		() => [
 			...sessionHits.map((s) => ({
@@ -273,15 +177,8 @@ export function GlobalSearchModal({
 			})),
 			...projectHits.map((p) => ({ kind: "project" as const, path: p.path })),
 			...fileHits.filter((f) => f.type === "file").map((f) => ({ kind: "file" as const, path: f.path, name: f.name })),
-			...pluginHits.map((h) => ({
-				kind: "plugin" as const,
-				providerId: h.providerId,
-				providerLabel: h.providerLabel,
-				title: h.title,
-				action: h.action,
-			})),
 		],
-		[sessionHits, projectHits, fileHits, pluginHits],
+		[sessionHits, projectHits, fileHits],
 	);
 
 	useEffect(() => {
@@ -308,12 +205,6 @@ export function GlobalSearchModal({
 					appSend({ type: "search_files", reqId, query: qq });
 					appSend({ type: "search_sessions", reqId, query: qq });
 				}
-			} else if (item.kind === "plugin") {
-				// 插件命中：交给插件自己的 UI 动作（签名与 App 的顶栏条目调用一致）；
-				// 无人接管静默忽略，面板保持打开，可直接点下一条。
-				void triggerPluginUiAction(item.providerId, item.action, item.action).catch(() => {
-					/* 忽略 */
-				});
 			} else onPreviewFile(item.path, item.name);
 			// 项目/文件点击不关面板：结果继续保持，可直接点下一条；
 			// 会话点击已在上方收起（为让跳转可见），搜索状态仍保留、重开即恢复。
@@ -347,7 +238,7 @@ export function GlobalSearchModal({
 		return () => window.removeEventListener("keydown", onKey, true);
 	}, [navItems, active, activate, onClose, open]);
 
-	const total = sessionHits.length + projectHits.length + fileHits.length + pluginHits.length;
+	const total = sessionHits.length + projectHits.length + fileHits.length;
 
 	/** Section header with match count. */
 	const sectionHead = (label: string, count: number, icon: ReactNode) => (
@@ -502,37 +393,6 @@ export function GlobalSearchModal({
 								);
 							})}
 							{fileTruncated && <div className="gs-truncated">{t("gsTruncated")}</div>}
-						</div>
-					)}
-
-					{pluginHits.length > 0 && (
-						<div className="gs-section">
-							{sectionHead(pluginSectionLabel, pluginHits.length, <FiPackage />)}
-							{pluginHits.map((h, hi) => {
-								navIdx++;
-								const idx = navIdx;
-								return (
-									<button
-										key={`${h.providerId}:${h.action}:${hi}`}
-										type="button"
-										className={idx === active ? "gs-item active" : "gs-item"}
-										title={h.providerLabel}
-										onMouseEnter={() => setActive(idx)}
-										onClick={() =>
-											activate({
-												kind: "plugin",
-												providerId: h.providerId,
-												providerLabel: h.providerLabel,
-												title: h.title,
-												action: h.action,
-											})
-										}
-									>
-										<span className="gs-item-title">{h.title}</span>
-										<span className="gs-item-sub">{h.hint ?? h.providerLabel}</span>
-									</button>
-								);
-							})}
 						</div>
 					)}
 				</div>

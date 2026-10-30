@@ -2,7 +2,7 @@
 // schedule-agent-tool.ts — 把内置调度器暴露给 Agent（issue #193）
 // ---------------------------------------------------------------------------
 // 背景：pi-web-ui 早有完整调度基建（SchedulerStore：cron/间隔触发＋持久化＋
-// 无头执行，见 scheduler-tasks.ts），但只停留在插件 API 与图形面板层面 ——
+// 无头执行，见 scheduler-tasks.ts），但只停留在图形面板层面 ——
 // AI 被用户要求“每小时检查一次”“半小时后提醒我”时手里没有工具，只能用
 // sleep 死循环假装答应（休眠的会话根本推不回消息）。
 //
@@ -31,7 +31,7 @@ import {
 	type SchedulerStore,
 	type SchedulerTaskView,
 } from "./scheduler-tasks.js";
-import { parseCronSpec } from "./plugin-schedule.js";
+import { parseCronSpec } from "./cron-spec.js";
 
 /** 由 ClientSession 实现的数据宿主（store 全局单例在 index.ts，cwd/对话取 live 值）。 */
 export interface ScheduleToolHost {

@@ -1,6 +1,6 @@
 # 训推引擎组 Harness 交接文档
 
-> 更新于 2026-10-30。分支 `harness-cockpit`：GitHub 上是 `812bb9d`；本地多一个 D-10 提交 `7f8a39f`（未推送）。
+> 更新于 2026-10-30。分支 `harness-cockpit`：GitHub 上是 `812bb9d`；本地多出 D-10、D-11 的提交（均未推送，见下文）。
 > 读法：先看第 0 节「现状」和第 11 节「待办」；要改代码再看第 3–10 节。
 
 ## 0. 现状
@@ -8,7 +8,7 @@
 - **产品**：「训推引擎组 Harness」是上游 pi-web-ui v0.111.0 的源码裁剪定制版，跑 pi 1.4.0，接 Baidu One API 网关，服务推理侧（sglang / AttentionStore / prefill / cache）的 AI Loop 工作流。
 - **D-9 已完成**：旧做法是 npm 装 pi-web-ui 包，再由 `harden.mjs` 改写 `dist/`、往 `index.html` 注入脚本。现在所有定制都在 `pi-web-ui/` 源码里；`harden.mjs`、`verify-hardened.mjs`、`harness-server/` 已删除。
 - **能用**：`./setup.sh` 一键安装 → `pi-web-cockpit/start-hardened.sh` 启动 → 首次配置弹窗填 One API Key → 直接对话。干净 HOME 实测通过，setup 可重复跑。
-- **测试**：typecheck 0 错误、build 通过、vitest 372/372 个文件通过（D-10 后）、首装浏览器 E2E 14/14、`verify-cockpit.mjs` 15/15、**零 token 冒烟套件 `run-smoke.mjs` 74/74 全绿**、`tests/loop-bar-test.mjs` 14/14 全绿（含 `token-auth-test.mjs` 恢复与 `.gitignore` 例外规则）。
+- **测试**：typecheck 0 错误、build 通过、vitest 312/312 个文件通过（D-11 后）、首装浏览器 E2E 14/14、`verify-cockpit.mjs` 15/15、**零 token 冒烟套件 `run-smoke.mjs`：D-10 时 74/74；D-11 后清单 59 条，58/59（`terminal-smoke-test` 本机偶发，单跑可过）**、`tests/loop-bar-test.mjs` 14/14 全绿（含 `token-auth-test.mjs` 恢复与 `.gitignore` 例外规则）。
 - **刻意没动**：GitHub 默认分支（用户要求先不动）；icode 上的版本（仍是旧 harden 版）。
 
 ## 1. 仓库与分支
@@ -39,6 +39,7 @@
 | D-9f | 测试全绿；干净 HOME 实测发现并修复两处首装问题；`verify-cockpit.mjs`；交付文档 | 04a695d、eee6e64、b787b1f、c67b634、9cc13c9 |
 
 - **D-10**（提交 `7f8a39f`，本地未推）：删掉顶栏「插件」入口（插件面板、插件管理弹窗、设置页「界面插件」页、插件任务进度条）和右侧空栏（`RightPanel` 连同 D-6b 后残留的文件树代码、`FileTransferDialog`、`SlotTabs` 和对应 CSS）；清理 106 个已无引用的 i18n key 并同步 12 个语言包；设置页里 pi 扩展那一页改名「扩展」（列的是 pi-llm-wiki 这类 pi 扩展包，不是界面插件）。插件运行时、MCP、page-picker 浏览器扩展保留。
+- **D-11**（提交 `70f90bd` + 其后一笔，本地未推）：用户看过设置页后要求删掉「系统提示词 / 预设 / 插件（扩展）/ MCP / 目标审查」，并说插件只要 wiki 就够。删了这五个设置分区；插件运行时整套（服务端 20 个 `plugin*` 模块与 `browser-page-tool`、前端插件宿主/视图/围栏/图标/浏览器操作按钮、`plugins/`（含 page-picker）、`plugin-sdk/`、CLI 插件子命令、网页引用附件）；MCP（自带 MCP 桥、`mcp_manage` 工具，并给 SDK 资源加载器传 `disabledBuiltinExtensions: ["mcp"]` 关掉 SDK 自带的 MCP 扩展）；设置预设（保存/应用/导入/导出/分享与 `preset-share`/`preset-fields`/`net-guard`）。保留并改名的：`plugin-schedule.ts` → `cron-spec.ts`（定时任务的 cron 解析）、`plugin-conversation-view.ts` → `conversation-view.ts`（定时任务读对话）、`readConversationForPlugins` → `readConversationForScheduler`。pi-llm-wiki 扩展照常加载（18 个 `wiki_` 工具在会话里可用），只是设置里不再有列出它的页面。系统提示词按已存配置组装，LLM loop 的目标审查用默认配置。旧 `client-state.json` 里的 `presets`/`disabledPlugins`/`disabledPluginTools` 字段被忽略，不迁移不删除。
 
 ## 3. 仓库地图
 
@@ -190,12 +191,12 @@ npx vitest run <相关测试>          # 全量：npx vitest run
 | `npm run typecheck` | 0 错误 |
 | `npm run build` | 通过 |
 | `npm run lint` | 0 error，98 条既有 warning |
-| `npx vitest run` | 372/372 个文件通过（4376 过，9 跳过；D-10 删了只测插件面板的 `plugin-menu.test.ts`） |
+| `npx vitest run` | 312/312 个文件通过（3282 过，9 跳过；D-11 删了只测插件/page-picker/MCP/预设的用例） |
 | 干净 HOME 跑 `./setup.sh` | 退出码 0，重跑仍为 0 |
 | 首装浏览器 E2E | 14/14，含首次配置填 key 后同一页的真实对话往返 |
 | `verify-cockpit.mjs`（隔离实例） | 15/15 |
 | `node tests/loop-bar-test.mjs`（双胶囊 + 代码 loop 弹窗） | 14/14 |
-| 冒烟 `node tests/run-smoke.mjs`（零 token，各自起服务） | **74/74 全部通过** |
+| 冒烟 `node tests/run-smoke.mjs`（零 token，各自起服务） | D-10：74/74；D-11 后清单 59 条：58/59，失败的 `terminal-smoke-test` 是本机 zsh 启动偶发，单跑 3 次过 2 次 |
 
 此前冒烟套件的 17 个失败及 `loop-bar-test.mjs` 过期问题已全部修复/清理完毕：
 

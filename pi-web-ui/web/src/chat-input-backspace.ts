@@ -2,7 +2,7 @@
  * 退格键原子化整块删除 @提及 并联动摘掉对应附件 chip 的纯函数逻辑。
  *
  * 两段式：
- * ① chip 精确匹配 —— 优先按精确相对路径（@path）、页面标题（@name）及短名匹配；
+ * ① chip 精确匹配 —— 优先按精确相对路径（@path）、对话标题（@name）及短名匹配；
  *    覆盖带空格路径、带中文文件名等通用正则无法识别的名字；
  *    多个候选时以尾部最长匹配优先，彻底杜绝同名条目（如 报告 vs 方案/报告）错位误删。
  * ② 通用有边界 @词元 —— 覆盖手打的 @引用；查找待联动附件时遵循
@@ -34,8 +34,8 @@ export function resolveBackspaceMention<T extends BackspaceAttachmentLike>(
 	let bestHit: { attachment: T; tokenLen: number; withSpace: boolean } | null = null;
 
 	for (const a of attachments) {
-		const isPageOrConv = a.mode === "page" || a.mode === "conversation";
-		const primary = isPageOrConv ? a.name : a.path;
+		const isConv = a.mode === "conversation";
+		const primary = isConv ? a.name : a.path;
 		const fallback = a.name;
 
 		const candidates = [primary, fallback].filter((s): s is string => typeof s === "string" && s.trim().length > 0);
@@ -78,7 +78,7 @@ export function resolveBackspaceMention<T extends BackspaceAttachmentLike>(
 			hitAttachment =
 				attachments.find((a) => a.path && a.path === rawToken) ??
 				attachments.find((a) => a.name && a.name === rawToken) ??
-				attachments.find((a) => a.mode !== "page" && a.mode !== "conversation" && a.name === baseName);
+				attachments.find((a) => a.mode !== "conversation" && a.name === baseName);
 		}
 	}
 

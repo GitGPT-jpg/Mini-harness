@@ -1,8 +1,13 @@
 /* 侧边停靠栏（SideDock）的**竖向三段**回归（issue：侧边按钮也要能指定靠上/靠下/居中）。
  *
+ * 停靠栏默认是空的（BUILTIN_UI_ITEMS 没有条目落在 sidebar.left / sidebar.right），用户经
+ * 布局偏好把内置条目挪进来：设置 → 界面布局的「位置」「对齐」下拉、顶栏条目右键「移到左侧悬浮 /
+ * 右侧悬浮」写的都是同一份 `uiLayout.slots` + `uiLayout.align`。本测试直接种这份偏好，把三个
+ * 内置顶栏条目分别以 start / center / end 挪进左、右停靠栏。
+ *
  * 盯三条不变量（都是渲染几何，单测测不到）：
  *   1. `entry.align` 在左右停靠栏里读作**竖轴**：start 在上、center 正中、end 在下，
- *      且三颗药丸的竖向次序与设置页说的段一致；
+ *      且三颗药丸的竖向次序与设置页说的段一致（每段里就是被挪进来的那个内置条目）；
  *   2. 药丸是**内容高**的贴边小药丸 —— 弹性格子被拉满整列，但药丸不许跟着被拉高
  *      （曾经一圈 1 个图标拓成一整条竖色块）；
  *   3. 折叠按钮只在**悬浮浮层**里出现（流内模式停靠栏只占一条窄边，收起省不下宽度还多
@@ -26,6 +31,7 @@ const WORK = join(base, "work");
 const DATA_DIR = join(base, "data");
 const AGENT_DIR = join(base, "agent");
 mkdirSync(WORK, { recursive: true });
+mkdirSync(DATA_DIR, { recursive: true });
 const PORT = 21000 + Math.floor(Math.random() * 3000);
 
 let passed = 0;
@@ -44,31 +50,28 @@ if (!CHROME_PATH) {
 	process.exit(0);
 }
 
-// 假插件：左右两侧各三条，align 分别是 start / center / end。
-const plugDir = join(DATA_DIR, "plugins", "docktest");
-mkdirSync(join(plugDir, "client"), { recursive: true });
-const items = (p) => [
-	{ id: `${p}1`, label: `${p}-TOP`, labelEn: `${p}-TOP`, kind: "action", action: `docktest:${p}1`, align: "start" },
-	{ id: `${p}2`, label: `${p}-MID`, labelEn: `${p}-MID`, kind: "action", action: `docktest:${p}2`, align: "center" },
-	{ id: `${p}3`, label: `${p}-BOT`, labelEn: `${p}-BOT`, kind: "action", action: `docktest:${p}3`, align: "end" },
-];
-writeFileSync(
-	join(plugDir, "manifest.json"),
-	JSON.stringify({
-		name: "Dock Test",
-		version: "0.0.1",
-		view: false,
-		permissions: ["ui"],
-		ui: { "sidebar.left": items("L"), "sidebar.right": items("R") },
-	}),
-);
-writeFileSync(join(plugDir, "client", "entry.mjs"), "export default {};");
+// 挪进停靠栏的内置条目（顺序 = start / center / end）。都是普通动作 / 视图按钮：避开
+// host:settings（必留顶栏的入口）与按运行能力隐藏的 host:new-sandbox / host:new-ephemeral-chat。
+const DOCK_ITEMS = {
+	"sidebar.left": ["host:search", "host:task-desk", "host:tasks"],
+	"sidebar.right": ["host:new-chat", "host:open-project", "host:terminal"],
+};
+const ALIGNS = ["start", "center", "end"];
 
-/** 停靠栏形态是全局设置（client-state.json）：两轮各起一次服务，免得靠 UI 点开关。 */
+/** 停靠栏形态是全局设置（client-state.json）：两轮各起一次服务，免得靠 UI 点开关。
+ *  条目落点（slots）与段（align）一起种进同一份 uiLayout。 */
 function seedPrefs(sideDockFloat) {
+	const slots = {};
+	const align = {};
+	for (const [slot, ids] of Object.entries(DOCK_ITEMS)) {
+		ids.forEach((id, i) => {
+			slots[id] = slot;
+			align[id] = ALIGNS[i];
+		});
+	}
 	writeFileSync(
 		join(DATA_DIR, "client-state.json"),
-		JSON.stringify({ __settings__: { projects: [], settings: { uiLayout: { sideDockFloat } } } }),
+		JSON.stringify({ __settings__: { projects: [], settings: { uiLayout: { sideDockFloat, slots, align } } } }),
 	);
 }
 
@@ -125,12 +128,19 @@ const geoScript = () => {
 	const dock = document.querySelector(".side-dock-left");
 	const dump = (sel) =>
 		[...document.querySelectorAll(sel)].map((s) => ({ ...rect(s), pe: getComputedStyle(s).pointerEvents }));
+	/** 每颗药丸里条目的 id（按竖向次序），用来核对「哪个内置条目落在哪一段」。 */
+	const segIds = (sel) =>
+		[...document.querySelectorAll(sel)].map((s) =>
+			[...s.querySelectorAll("[data-bar-item]")].map((n) => n.getAttribute("data-bar-item")).join(","),
+		);
 	return {
 		dockCls: dock.className,
 		dock: rect(dock),
 		slots: dump(".side-dock-left .side-dock-slot"),
 		segs: dump(".side-dock-left .side-dock-seg"),
 		rightSegs: dump(".side-dock-right .side-dock-seg"),
+		leftIds: segIds(".side-dock-left .side-dock-seg"),
+		rightIds: segIds(".side-dock-right .side-dock-seg"),
 		collapseButtons: document.querySelectorAll(".side-dock-collapse-btn").length,
 		toggleButtons: document.querySelectorAll(".side-dock-toggle-btn").length,
 	};
@@ -160,11 +170,17 @@ async function main() {
 		const { page, errors } = await openPage();
 		const g = await page.evaluate(geoScript);
 		check(
-			"左停靠栏画了三颗药丸（插件按 start/center/end 声明的三条都渲染）",
+			"左停靠栏画了三颗药丸（布局偏好挪进来的三个内置条目按 start/center/end 都渲染）",
 			g.segs.length === 3,
 			`segs=${g.segs.length}`,
 		);
 		check("右停靠栏同口径", g.rightSegs.length === 3, `segs=${g.rightSegs.length}`);
+		check(
+			"每段就是挪进来的那个内置条目（靠上 → 居中 → 靠下）",
+			g.leftIds.join("|") === DOCK_ITEMS["sidebar.left"].join("|") &&
+				g.rightIds.join("|") === DOCK_ITEMS["sidebar.right"].join("|"),
+			`left=${g.leftIds.join("|")} right=${g.rightIds.join("|")}`,
+		);
 		const [top, mid, bot] = g.segs;
 		check("竖向次序 = 靠上 → 居中 → 靠下", top.top < mid.top && mid.bottom < bot.bottom);
 		check("靠上那颗贴着停靠栏顶端", Math.abs(top.top - (g.dock.top + 6)) <= 2, `top=${top.top} dockTop=${g.dock.top}`);

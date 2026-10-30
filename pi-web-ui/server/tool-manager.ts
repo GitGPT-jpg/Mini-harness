@@ -51,9 +51,6 @@ export const EDIT_SOFT_TOOL_NAME = "edit_soft";
 export const DELEGATE_TASK_TOOL_NAME = "delegate_task";
 /** 问卷提问工具（定义见 agent-service.ts makeAskUserQuestionTool）。 */
 export const ASK_USER_QUESTION_TOOL_NAME = "ask_user_question";
-/** 浏览器页面操作工具（定义见 agent-service.ts makeBrowserPageTool）：模型经
- *  page-picker 浏览器扩展读/操作用户已授权的页面。 */
-export const BROWSER_PAGE_TOOL_NAME = "browser_page";
 /** 别的对话读取工具（定义见 conversation-read-tool.ts）：运行中对话（含子代理）+
  *  历史会话转录，只读。 */
 export const CONVERSATION_READ_TOOL_NAME = "conversation_read";
@@ -82,8 +79,6 @@ export const COMPACT_CONTEXT_TOOL_NAME = "compact_context";
 export const PATCH_TOOL_NAME = "patch";
 /** 原生语言服务器工具（定义见 lsp-tool.ts）：代码定义跳转、引用查询、类型悬停与诊断。 */
 export const LSP_TOOL_NAME = "lsp";
-/** MCP 服务器检测与安装管理工具（定义见 mcp-agent-tool.ts）：检查/安装/移除/重载 MCP 服务器。 */
-export const MCP_MANAGE_TOOL_NAME = "mcp_manage";
 /** 隔离沙盒项目管理工具（定义见 sandbox-tool.ts）：创建空白/导入型隔离沙盒、查看 diff、重置或销毁。 */
 export const SANDBOX_TOOL_NAME = "sandbox";
 /** Git 工作树管理工具（定义见 worktree-tool.ts）：创建/切换/清理工作树，保持多 PR 开发与界面工作区同步。 */
@@ -105,7 +100,7 @@ export type AgentToolGroup = "terminal" | "subagent" | "other";
 export interface AgentToolEntry {
 	name: string;
 	group: AgentToolGroup;
-	/** 默认开关（终端组/edit_soft/browser_page 默认关，其余默认开：AI 动用户浏览器须 opt-in）。 */
+	/** 默认开关（终端组/edit_soft 等默认关，其余默认开）。 */
 	defaultOn: boolean;
 	/** DSH 引擎是否展示（DSH 无子代理/edit_soft 概念；目前 DSH 不用本表，预留）。 */
 	dshVisible: boolean;
@@ -158,16 +153,6 @@ export const AGENT_TOOL_CATALOG: AgentToolEntry[] = [
 		dshVisible: true,
 		descKey: "questionnaireEnabledDesc",
 		offHintKey: "questionnaireOffHint",
-	},
-	// 默认关（AI 动用户浏览器，opt-in 才开）且 dshVisible=false：DSH 引擎没有页面桥
-	// （page_request 由 pi 引擎的 customTool 发出），列在那里只会让用户关一个不存在的工具。
-	{
-		name: BROWSER_PAGE_TOOL_NAME,
-		group: "other",
-		defaultOn: false,
-		dshVisible: false,
-		descKey: "browserPageEnabledDesc",
-		offHintKey: "browserPageOffHint",
 	},
 	// 只读别的对话（含子代理实时消息与历史转录），默认开；DSH 引擎没有该 customTool。
 	{
@@ -281,16 +266,6 @@ export const AGENT_TOOL_CATALOG: AgentToolEntry[] = [
 		dshVisible: false,
 		descKey: "compactContextEnabledDesc",
 		offHintKey: "compactContextOffHint",
-	},
-	// MCP 服务器检测与安装管理（单 action：list/check/install/remove/reload）：默认关（opt-in），
-	// 开启后 AI 可检查某个 MCP 是否已安装并一键写入 mcp.json 热加载挂载。
-	{
-		name: MCP_MANAGE_TOOL_NAME,
-		group: "other",
-		defaultOn: false,
-		dshVisible: false,
-		descKey: "mcpManageEnabledDesc",
-		offHintKey: "mcpManageOffHint",
 	},
 	// 隔离沙盒项目管理（单 action：list/create/diff/reset/persist/promote/apply_to_source/destroy）：默认开，
 	// 支持 AI 自主创建空白或导入型隔离副本实验，写回源项目强制经过用户审批。
@@ -549,8 +524,8 @@ export const PI_AGENT_PRESETS: UiAgentPreset[] = [
 		isDefault: false,
 		name: "极简模式",
 		nameEn: "Minimal",
-		description: "仅保留 bash 与 read；插件工具、技能名录与终端引导同步隐藏",
-		descriptionEn: "Keeps only bash and read; plugin tools, skill catalog and terminal guidance are hidden too",
+		description: "仅保留 bash 与 read；技能名录与终端引导同步隐藏",
+		descriptionEn: "Keeps only bash and read; skill catalog and terminal guidance are hidden too",
 		order: 1,
 	},
 	{
@@ -559,9 +534,9 @@ export const PI_AGENT_PRESETS: UiAgentPreset[] = [
 		isDefault: false,
 		name: "代码开发",
 		nameEn: "Code development",
-		description: "专注于代码读写与执行（bash, read, edit, write, edit_soft）；插件工具与技能名录同步隐藏",
+		description: "专注于代码读写与执行（bash, read, edit, write, edit_soft）；技能名录同步隐藏",
 		descriptionEn:
-			"Focused on reading, writing and running code (bash, read, edit, write, edit_soft); plugin tools and skill catalog are hidden too",
+			"Focused on reading, writing and running code (bash, read, edit, write, edit_soft); skill catalog is hidden too",
 		order: 2,
 	},
 	{
@@ -570,9 +545,8 @@ export const PI_AGENT_PRESETS: UiAgentPreset[] = [
 		isDefault: false,
 		name: "只读分析",
 		nameEn: "Read-only analysis",
-		description: "仅保留只读工具，禁止写操作；插件工具同步隐藏（读写未知，保守处理）",
-		descriptionEn:
-			"Keeps only read-only tools and forbids writes; plugin tools are hidden too (read/write unknown, handled conservatively)",
+		description: "仅保留只读工具，禁止写操作",
+		descriptionEn: "Keeps only read-only tools and forbids writes",
 		order: 3,
 	},
 	{
@@ -581,8 +555,8 @@ export const PI_AGENT_PRESETS: UiAgentPreset[] = [
 		isDefault: false,
 		name: "纯对话",
 		nameEn: "Chat only",
-		description: "无工具问答模式，模型不调用任何工具；插件工具与技能名录同步隐藏",
-		descriptionEn: "No-tools Q&A: the model never calls a tool; plugin tools and skill catalog are hidden too",
+		description: "无工具问答模式，模型不调用任何工具；技能名录同步隐藏",
+		descriptionEn: "No-tools Q&A: the model never calls a tool; skill catalog is hidden too",
 		order: 4,
 	},
 ];
@@ -673,15 +647,11 @@ export function filterToolsByPreset(tools: Iterable<string>, preset?: string): s
  * pi 预设语义总表（唯一事实源，本文件是唯一定义处）：
  *
  * 预设是「禁用名单之外」的第二层门控，按会话生效（conv.agentPreset），新对话
- * 取默认预设、首轮发言后锁定。标准预设不过滤；其余预设同时约束四处：
+ * 取默认预设、首轮发言后锁定。标准预设不过滤；其余预设同时约束三处：
  *
  * - 目录/内置工具（ActiveSet）：filterToolsByPreset 直接过滤活跃集
  *   （standard 全留 / ask 全拔 / minimal 仅 bash+read /
  *   code 仅 bash+read+edit+write+edit_soft / reader 拔写类）。
- * - 插件工具（registerAgentTool 动态注册）：presetAllowsPluginTools —— 只有
- *   standard 保留，其余已知预设一律拔掉。插件工具读写性质未知，保守按最严处理
- *   （minimal/code/ask 是白名单语义本来就过不去；reader 是 deny 名单，
- *   未知工具同样不放行；未知预设 id 按不过滤，与 filterToolsByPreset 同口径）。
  * - 技能名录段（{{skills}} 名录＋全文注入）：presetShowsSkillCatalog —— 与
  *   skill 加载工具同进退（minimal/code/ask 下 loader 不在，列出来只是噪音；
  *   reader 下 loader 可用，保留）。子代理模板的技能白名单是显式配置，
@@ -693,20 +663,10 @@ export function filterToolsByPreset(tools: Iterable<string>, preset?: string): s
  *   presetHasQuestionnaire 切换措辞——有问卷工具时调工具，否则正文提问。
  *   认领信息是事实层，照常展示（store 是按项目全局的）。
  *
- * 显式配置永远优先于预设：disabledAgentTools / disabledPluginTools /
+ * 显式配置永远优先于预设：disabledAgentTools /
  * disabledSkills / 子代理模板白名单照常生效，预设只做减法不做加法
  * （开关关掉的东西，standard 也不会加回来）。
  */
-
-/**
- * 预设是否允许插件工具（动态注册，读写未知）：只有 standard 允许；
- * 其余已知预设一律拒绝。未知 id 按不过滤（与 filterToolsByPreset 同口径，
- * 防手写脏配置把插件工具全灭）。
- */
-export function presetAllowsPluginTools(preset?: string): boolean {
-	if (!preset || preset === "standard") return true;
-	return !PI_AGENT_PRESETS.some((p) => p.id === preset);
-}
 
 /**
  * 预设下是否展示技能名录段（与 skill 加载工具同进退，由 filterToolsByPreset
@@ -742,7 +702,7 @@ export interface LegacyToolSwitches {
  */
 export function legacyToDisabled(s: LegacyToolSwitches): string[] {
 	if (Array.isArray(s.disabledAgentTools)) return normalizeDisabledAgentTools(s.disabledAgentTools);
-	// 从目录默认关名单起步：否则全新安装（无存档）会把 eval / browser_page / codemode /
+	// 从目录默认关名单起步：否则全新安装（无存档）会把 eval / codemode /
 	// tool_search 等 defaultOn=false 的工具一并打开。
 	const off: string[] = defaultDisabledAgentTools();
 	if (s.terminalToolsEnabled !== true) off.push(...TERMINAL_TOOL_NAMES);

@@ -3,16 +3,13 @@
  *   1. 默认值为 true（保持开箱即用兼容性）；
  *   2. ClientStateStore 持久化与加载保真；
  *   3. SettingsService.set() 可更新并通过 current 暴露；
- *   4. 预设白名单与净化收录该字段；
- *   5. i18n 多语言翻译完整且对齐。
+ *   4. i18n 多语言翻译完整且对齐。
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ClientStateStore } from "../../server/client-state.js";
-import { PRESET_FIELD_META, PRESET_FIELD_NAMES } from "../../server/preset-fields.js";
-import { sanitizePresetSettings } from "../../server/preset-share.js";
 import { SettingsService, type SettingsHost } from "../../server/settings-service.js";
 
 const roots: string[] = [];
@@ -77,24 +74,5 @@ describe("openRecentSessionOnProjectSwitch 配置项", () => {
 		// 重新设为 true
 		await svc2.set({ openRecentSessionOnProjectSwitch: true });
 		expect(svc2.current.openRecentSessionOnProjectSwitch).toBe(true);
-	});
-
-	it("预设字段名单收录了 openRecentSessionOnProjectSwitch", () => {
-		expect(PRESET_FIELD_NAMES).toContain("openRecentSessionOnProjectSwitch");
-		const meta = PRESET_FIELD_META.openRecentSessionOnProjectSwitch;
-		expect(meta).toBeDefined();
-		expect(meta.labelZh).toContain("切换项目");
-		expect(meta.labelEn).toContain("Project Switch");
-	});
-
-	it("预设净化支持 openRecentSessionOnProjectSwitch 的导出与导入", () => {
-		const input = {
-			openRecentSessionOnProjectSwitch: false,
-			unknownGarbageField: "should be stripped",
-		};
-		const sanitized = sanitizePresetSettings(input);
-		expect(sanitized.fields).toContain("openRecentSessionOnProjectSwitch");
-		expect(sanitized.settings.openRecentSessionOnProjectSwitch).toBe(false);
-		expect(sanitized.ignored).toContain("unknownGarbageField");
 	});
 });

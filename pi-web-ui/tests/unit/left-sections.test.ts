@@ -11,7 +11,6 @@ import {
 	LP_SECTION_DEFAULT_ORDER,
 	LP_SECTION_ENTRY_ID,
 	flexSectionKeys,
-	isPluginSectionKey,
 	parseLpWeights,
 	planLeftSections,
 	sashPairs,
@@ -104,57 +103,11 @@ describe("sashPairs（分隔条配对）", () => {
 	});
 });
 
-describe("P4：插件自定义分区（plugin:<条目id>）", () => {
-	const pluginView = (id: string, extra: Record<string, unknown> = {}) => ({
-		id,
-		source: "plugin:" + id.split(":")[0],
-		kind: "view",
-		...extra,
-	});
-
-	it("插件 view 条目成为 plugin:<id> 分区，位置跟随引擎给出的顺序", () => {
-		const plan = planLeftSections([
-			entry(LP_SECTION_ENTRY_ID.projects),
-			pluginView("notes:fav"),
-			entry(LP_SECTION_ENTRY_ID.sessions),
-		]);
-		expect(plan.map((p) => p.key)).toEqual(["projects", "plugin:notes:fav", "sessions", "convs"]);
-		expect(plan[1]!.entry?.id).toBe("notes:fav");
-	});
-
-	it("插件分区的 hidden 生效；插件分区不会被缺省顺序补出来", () => {
-		const plan = planLeftSections([pluginView("notes:fav", { hidden: true })]);
-		expect(plan.find((p) => p.key === "plugin:notes:fav")?.shown).toBe(false);
-		expect(plan.map((p) => p.key).filter((k) => k.startsWith("plugin:"))).toEqual(["plugin:notes:fav"]);
-	});
-
-	it("只认 kind=view 且来自插件的条目：宿主 action、其它种类一律不成为分区", () => {
-		const plan = planLeftSections([
-			{ id: "notes:bad", source: "plugin:notes", kind: "action" },
-			{ id: "host:whatever", source: "host", kind: "view" },
-			{ id: "x", source: undefined, kind: "view" },
-		]);
-		expect(plan.some((p) => p.key.startsWith("plugin:"))).toBe(false);
-		expect(plan.map((p) => p.key)).toEqual(["projects", "convs", "sessions"]);
-	});
-
-	it("插件分区参与 flex（有内容由调用方判定，插件分区视为有内容）", () => {
-		const plan = planLeftSections([pluginView("notes:fav")]);
-		const flex = flexSectionKeys(plan, (k) => k !== "convs");
-		expect(flex).toContain("plugin:notes:fav");
-		expect(flex).not.toContain("convs");
-	});
-
-	it("isPluginSectionKey 区分宿主键与插件键", () => {
-		expect(isPluginSectionKey("plugin:a:b")).toBe(true);
-		expect(isPluginSectionKey("plugin:")).toBe(false);
-		expect(isPluginSectionKey("projects")).toBe(false);
-	});
-
-	it("权重存档：插件分区键保留，宿主键只收已知键，非法值丢弃", () => {
+describe("parseLpWeights（权重存档）", () => {
+	it("权重存档：只收已知宿主键，非法值丢弃（plugin:* 等未知键一律丢弃）", () => {
 		const defaults = { projects: 1, convs: 1, sessions: 1 };
 		const raw = JSON.stringify({ projects: 2, "plugin:notes:fav": 3, bogus: 9, convs: -1, sessions: "x" });
-		expect(parseLpWeights(raw, defaults)).toEqual({ projects: 2, convs: 1, sessions: 1, "plugin:notes:fav": 3 });
+		expect(parseLpWeights(raw, defaults)).toEqual({ projects: 2, convs: 1, sessions: 1 });
 	});
 
 	it("权重存档：坏 JSON / 空值回落默认", () => {

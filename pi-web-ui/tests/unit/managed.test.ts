@@ -42,20 +42,12 @@ describe("managed instances", () => {
 		// check_updates_all, and "install pi" calls install_pi_agent. Leaving one
 		// open would leave a way to reinstall around the deploy.
 		expect([...MANAGED_MESSAGES].sort()).toEqual(
-			[
-				"check_update",
-				"check_updates_all",
-				"install_pi_agent",
-				"update_engine",
-				// 插件安装/更新/卸载的后台作业（issue #152）与目录同步（#148，可带安装）
-				// 都是网络安装入口：托管实例一并拒绝。
-				"plugin_job",
-			].sort(),
+			["check_update", "check_updates_all", "install_pi_agent", "update_engine"].sort(),
 		);
 	});
 
-	it("touches nothing else: chatting, git, terminal and plugins already there", () => {
-		for (const type of ["prompt", "scm_status", "terminal_create", "plugins_reload", "plugin_catalog_remove"]) {
+	it("touches nothing else: chatting, git and terminal", () => {
+		for (const type of ["prompt", "scm_status", "terminal_create"]) {
 			expect(managedRefusal(type, true), type).toBeNull();
 		}
 	});

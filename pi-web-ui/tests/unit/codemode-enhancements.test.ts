@@ -5,7 +5,6 @@ import {
 	normalizeCodemodeInlineBudget,
 	normalizeCodemodeMode,
 } from "../../server/client-state.js";
-import { sanitizePresetSettings } from "../../server/preset-share.js";
 import { parseCodemodeArgs } from "../../web/src/tool-args.js";
 
 describe("codemode 进阶特性与配置增强", () => {
@@ -29,34 +28,6 @@ describe("codemode 进阶特性与配置增强", () => {
 			expect(normalizeCodemodeInlineBudget(Number.POSITIVE_INFINITY)).toBe(3000);
 			expect(normalizeCodemodeInlineBudget("5000")).toBe(3000);
 			expect(DEFAULT_CODEMODE_INLINE_BUDGET).toBe(3000);
-		});
-	});
-
-	describe("预设分享净化 (sanitizePresetSettings)", () => {
-		it("接受合法的 codemodeMode 和 codemodeInlineBudget", () => {
-			const res = sanitizePresetSettings({
-				codemodeMode: "only",
-				codemodeInlineBudget: 6000,
-			});
-			expect(res.settings.codemodeMode).toBe("only");
-			expect(res.settings.codemodeInlineBudget).toBe(6000);
-			expect(res.rejected).toEqual([]);
-		});
-
-		it("拒绝非法的 codemodeMode 值", () => {
-			const res = sanitizePresetSettings({
-				codemodeMode: "banana",
-			});
-			expect(res.settings.codemodeMode).toBeUndefined();
-			expect(res.rejected).toContain("codemodeMode");
-		});
-
-		it("拒绝非法的 codemodeInlineBudget 值", () => {
-			const res = sanitizePresetSettings({
-				codemodeInlineBudget: -10,
-			});
-			expect(res.settings.codemodeInlineBudget).toBeUndefined();
-			expect(res.rejected).toContain("codemodeInlineBudget");
 		});
 	});
 

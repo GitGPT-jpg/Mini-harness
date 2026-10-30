@@ -3,7 +3,6 @@ import { handleSettingsMessage } from "../../server/dispatch-domain-handlers.js"
 import type { ClientMessage } from "../../server/protocol.js";
 import type { DispatchSession } from "../../server/index.js";
 import { PUBLIC_SKILLS } from "../../web/src/skill-catalog.js";
-import { PUBLIC_MCP_SERVERS } from "../../web/src/mcp-catalog.js";
 
 describe("Skill 技能市场消息分发与清单体检", () => {
 	it("分发 install_skill 消息", () => {
@@ -51,17 +50,6 @@ describe("Skill 技能市场消息分发与清单体检", () => {
 			expect(sk.descriptionZh.trim().length).toBeGreaterThan(0);
 			expect(sk.content.startsWith("---")).toBe(true);
 			expect(sk.content).toContain(`name: ${sk.id}`);
-		}
-	});
-
-	it("PUBLIC_MCP_SERVERS 目录清单规范性校验", () => {
-		expect(PUBLIC_MCP_SERVERS.length).toBeGreaterThanOrEqual(12);
-		for (const srv of PUBLIC_MCP_SERVERS) {
-			expect(/^[a-zA-Z0-9_-]+$/.test(srv.id)).toBe(true);
-			expect(srv.name.trim().length).toBeGreaterThan(0);
-			expect(srv.package.trim().length).toBeGreaterThan(0);
-			expect(srv.description.trim().length).toBeGreaterThan(0);
-			expect(srv.descriptionZh.trim().length).toBeGreaterThan(0);
 		}
 	});
 });

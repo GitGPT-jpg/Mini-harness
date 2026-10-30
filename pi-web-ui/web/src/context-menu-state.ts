@@ -12,8 +12,8 @@
  *    `useSyncExternalStore` 订阅；宿主组件只渲染（见 components/ContextMenu.tsx）。
  *
  * 分层（谁算什么）：
- *  - **宿主/调用方**：用 `buildUiSlots()`（web/src/ui-slots.ts）把「宿主内置 + 插件贡献 +
- *    用户偏好」合并成该槽位的最终条目，连坐标、槽位、被右键的对象一起交给本模块。
+ *  - **宿主/调用方**：用 `buildUiSlots()`（web/src/ui-slots.ts）把「宿主内置 + 用户偏好」
+ *    合并成该槽位的最终条目，连坐标、槽位、被右键的对象一起交给本模块。
  *  - **本模块**：只做纯计算（钳制坐标、过滤+分组排序、键盘下标推进）与状态广播。
  *  - **渲染层**：ContextMenu.tsx 读状态 → portal 到 body 画出来，点击回 `onAction`；
  *    `source === "host"` 的**内置**条目先回请求里带的 `onHostAction`（见 ContextMenuRequest）。
@@ -47,10 +47,10 @@ export interface ContextMenuRequest {
 	/**
 	 * **host 内置条目**的分派器（可选；由打开菜单的那个宿主组件随请求带进来）。
 	 *
-	 * 为什么需要它：`onAction` 只把 `(entry, target)` 交回宿主 App，而 App 只分发**插件**
-	 * 动作 —— 它不知道「右键的是哪个目录 / 哪条对话」。而 `host:*` 这类内置条目的实现就住在
-	 * 打开菜单的那个组件里（右栏文件树 / 左栏会话行），所以让它随请求把分派器一起带进来：
-	 * ContextMenu 对 `source === "host"` 的条目先调它，插件条目才落到 App 的 onAction。
+	 * 为什么需要它：`onAction` 只把 `(entry, target)` 交回宿主 App —— 它不知道「右键的是哪个
+	 * 目录 / 哪条对话」。而 `host:*` 这类内置条目的实现就住在打开菜单的那个组件里（左栏会话行等），
+	 * 所以让它随请求把分派器一起带进来：ContextMenu 对 `source === "host"` 的条目先调它，
+	 * 没带分派器时才落到 App 的 onAction。
 	 *
 	 * 返回值：`true` = 「先别关菜单」（分派器自己把菜单换成了下一段内容，例如强行关闭对话的
 	 * 第一段确认 —— 见 LeftPanel）；其余（含 undefined）照常点完即关。
@@ -271,7 +271,6 @@ export function expandSelectEntries(entries: UiSlotEntry[]): {
 			align: "start" as const,
 			hidden: false,
 			userOverrides: [],
-			arrangedBy: [],
 		}));
 		children.forEach((c, i) => parents.set(c.id, { parent: it, value: it.options![i]!.value }));
 		return { ...it, kind: "menu" as const, children };

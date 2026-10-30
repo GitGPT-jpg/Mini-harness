@@ -12,9 +12,8 @@
  * 判定全部是纯函数（无 IO），单测见 tests/unit/goal-review-gate.test.ts。
  * 包裹形态与 withPlanModeGate / withDelegationGate 同构，见 agent-service.ts。
  *
- * 已知局限（与计划/审查者闸门同口径）：创建时注册进 customTools 的插件工具
- * 同样被包裹；但之后经 refreshPluginTools 动态补入已有会话的不在覆盖面。
- * 自研插件若绕过 wrapper 直接写文件同样拦不住 —— 只读是硬闸门，不是安全边界。
+ * 已知局限（与计划/审查者闸门同口径）：只覆盖创建时注册进 customTools 的工具；
+ * 扩展若绕过 wrapper 直接写文件同样拦不住 —— 只读是硬闸门，不是安全边界。
  */
 import { bashCommandIsReadOnly, SESSION_DISPATCH_TOOLS } from "./plan-mode.js";
 
@@ -56,7 +55,6 @@ const WRITE_TOOLS = new Set([
 	"eval",
 	// QuickJS 沙箱代码执行（可嵌套调用写工具/命令；与 plan-mode/delegate-mode 同口径）
 	"codemode",
-	"mcp_manage",
 	"sandbox",
 	// 形态变换（会重写整个文件树）
 	"format",

@@ -1,7 +1,7 @@
 /**
  * client-state — 每浏览器客户端的持久化 UI 状态（<dataDir>/client-state.json）：
- * 最近项目/工作目录、目标审查偏好、设置面板状态（提示词模式 + 技能/插件开关 +
- * 视觉桥偏好）、命名预设。文件 I/O 一律 best-effort：持久化故障绝不能
+ * 最近项目/工作目录、目标审查偏好、设置面板状态（提示词模式 + 技能/扩展开关 +
+ * 视觉桥偏好）。文件 I/O 一律 best-effort：持久化故障绝不能
  * 弄崩 server 或阻塞会话。
  *
  * 从 agent-service.ts 抽出，行为保持不变。
@@ -13,7 +13,7 @@ import { writeJsonAtomicSync } from "./atomic-file.js";
 import { normalizeSoftCapByModel, normalizeSoftCapTokens } from "./soft-cap.js";
 import { deriveLegacy, legacyToDisabled, normalizeDisabledAgentTools } from "./tool-manager.js";
 import { normalizeToolPromptOverrides, type ToolPromptOverrideMap } from "./tool-prompt-overrides.js";
-import { UI_SLOTS } from "./plugin-ui-slots.js";
+import { UI_SLOTS } from "./ui-slots.js";
 import type { EngineId, UiAlign, UiLayoutPrefs, UiSlotId } from "./protocol.js";
 
 /** System-prompt mode: append the custom text to the built prompt, or replace
@@ -88,23 +88,6 @@ export function effectiveToolWatchdogMs(baseMs: number, toolName?: string, args?
 	return ms;
 }
 
-/** 归一化插件 AI 工具禁用名单：只收非空字符串（去重，上限 256 个）。
- *  与 disabledAgentTools 不同——插件工具名是动态的（注册才知道），不能按
- *  固定目录校验；未知/已卸载插件的条目刻意保留（重装后仍保持关闭）。
- *  纯函数，可单测。 */
-export function normalizeDisabledPluginTools(v: unknown): string[] {
-	if (!Array.isArray(v)) return [];
-	const out: string[] = [];
-	for (const x of v) {
-		if (typeof x !== "string") continue;
-		const name = x.trim();
-		if (!name || name.length > 128 || out.includes(name)) continue;
-		out.push(name);
-		if (out.length >= 256) break;
-	}
-	return out;
-}
-
 /** 归一化重试次数：非数值回落默认，钳制到 [0, 100] 整数。 */
 export function normalizeRetryMaxAttempts(v: unknown): number {
 	const n = Math.floor(Number(v));
@@ -115,7 +98,7 @@ export function normalizeRetryMaxAttempts(v: unknown): number {
 /**
  * 归一化 UI 布局偏好（UiLayoutPrefs）：只收字符串数组 / 字符串字典，去重 + 长度上限。
  * 脏数据（数字、对象、超长 key、嵌套）一律丢弃而不是整份回落 —— 用户手动调过的那部分
- * 不该因为插件写坏了一个字段就全丢。
+ * 不该因为一个字段被写坏就全丢。
  */
 export function normalizeUiLayout(v: unknown): UiLayoutPrefs {
 	if (!v || typeof v !== "object" || Array.isArray(v)) return {};
@@ -334,21 +317,18 @@ export interface ClientSettings {
 	codemodeInlineBudget: number;
 	/** Agent 工具禁用名单（统一开关，见 tool-manager.ts；live 生效无需 reload）。 */
 	disabledAgentTools: string[];
-	/** 插件 AI 工具禁用名单（工具名全局唯一；live 生效无需 reload；
-	 *  可选字段：旧存档缺省 = 空（全开）。运行时门控，随设置预设走（同 disabledAgentTools）。 */
-	disabledPluginTools?: string[];
 	/** edit_soft 工具开关（遗留别名，兼容旧客户端/旧存档；以 disabledAgentTools 为准同步）。 */
 	editSoftEnabled: boolean;
-	/** 问卷提问开关（默认开；关 → 不弹对话框且 ask_user_question 工具同步禁用。不进预设）。 */
+	/** 问卷提问开关（默认开；关 → 不弹对话框且 ask_user_question 工具同步禁用）。 */
 	questionnaireEnabled: boolean;
 	/** 工具执行审批（人机协同）总开关（默认开）。关 → 一切审批都不弹：内置高危检测
-	 *  直接放行、插件 pre guard 的 ask 也按放行处理。纯运行开关，不进预设、不需 reload。 */
+	 *  直接放行。纯运行开关，不需 reload。 */
 	toolApprovalEnabled: boolean;
 	/** 同项目并行提醒开关（默认开）。关 → 同一项目另有对话在跑时不再发 notice，
-	 *  也不给 AI 注提醒、不通知对端。纯运行开关，不进预设、不需 reload。 */
+	 *  也不给 AI 注提醒、不通知对端。纯运行开关，不需 reload。 */
 	parallelReminderEnabled: boolean;
 	/** 目标模式（目标条 + 调研向导 + 审查循环）总开关（默认开）。关 → 目标条
-	 *  隐藏、无法设目标/启动调研/触发审查。纯运行开关，不进预设、不需 reload。 */
+	 *  隐藏、无法设目标/启动调研/触发审查。纯运行开关，不需 reload。 */
 	goalModeEnabled: boolean;
 	/** Vision bridge on/off (default on). Off → images are sent as-is. */
 	visionBridgeEnabled: boolean;
@@ -371,30 +351,26 @@ export interface ClientSettings {
 	reviewPrompt: string;
 	/** Skills disabled only for the isolated goal-reviewer. */
 	reviewDisabledSkills: string[];
-	/** Installed UI plugins hidden in the settings panel (UI-only toggle).
-	 *  Optional: presets deliberately do NOT capture it (same as the
-	 *  vision-bridge prefs) — applying a preset keeps the current toggles. */
-	disabledPlugins?: string[];
-	/** 宿主 UI 布局的用户偏好（插件 UI 贡献 + 宿主内置条目的隐藏/排序/分组，
-	 *  见 protocol 的 UiLayoutPrefs）。纯 UI 偏好，与 disabledPlugins 一样不进预设。 */
+	/** 宿主 UI 布局的用户偏好（宿主内置条目的隐藏/排序/分组，
+	 *  见 protocol 的 UiLayoutPrefs）。纯 UI 偏好。 */
 	uiLayout?: UiLayoutPrefs;
 	/** 思考块默认折叠与否（默认关 = 折叠；开 = 始终完整展开并自动换行，流式推理
-	 *  也实时可见）。纯 UI 偏好，与视觉桥 / disabledPlugins 一样不进预设。 */
+	 *  也实时可见）。纯 UI 偏好。 */
 	thinkingWrap: boolean;
 	/** 开发模式：index.html 不缓存（源码运行默认开，安装包默认关）。 */
 	devNoCache?: boolean;
 	/** 新构建就绪自动重载页面（源码运行默认开，安装包默认关）。 */
 	autoReload?: boolean;
 	/** 新构建就绪自动重载页面（源码运行默认开，安装包默认关）。 */
-	/** 工具调用是否默认展开（默认开 = 展开；关 = 折叠）。纯 UI 偏好，不进预设。 */
+	/** 工具调用是否默认展开（默认开 = 展开；关 = 折叠）。纯 UI 偏好。 */
 	toolsWrap: boolean;
 	/** 工具结果里的图片直接显示（默认开 = 卡片里出缩略图、点开放大；关 = 不渲染）。
-	 *  纯 UI 偏好，不进预设。 */
+	 *  纯 UI 偏好。 */
 	toolImagesEnabled: boolean;
 	/** 消息列表尾部保持完整渲染的消息条数（默认 15 = 与原硬编码一致）；更早的消息
-	 *  折叠为摘要行，点开再展开。纯 UI 偏好，不进预设。 */
+	 *  折叠为摘要行，点开再展开。纯 UI 偏好。 */
 	keepRecentMessages: number;
-	/** 向上分页加载模式（默认关）。开 → 默认仅挂载最近历史消息，向上滚动或点击加载更早历史，完全跳过视口占位符获得原生流畅度。纯 UI 偏好，不进预设。 */
+	/** 向上分页加载模式（默认关）。开 → 默认仅挂载最近历史消息，向上滚动或点击加载更早历史，完全跳过视口占位符获得原生流畅度。纯 UI 偏好。 */
 	reversePagination?: boolean;
 	/** 历史对话列表中是否显示已被 fork 派生的父会话（默认 false = 仅显示每条 fork 链最新的链尾分支）。 */
 	showForkedParentSessions?: boolean;
@@ -405,7 +381,7 @@ export interface ClientSettings {
 	openRecentSessionOnProjectSwitch?: boolean;
 	/** skill 全文注入名单（默认空 = 名录模式）。名单里的技能 {{skills}} 展开正文
 	 *  （oh-my-pi 式全文注入；单文件 8KB、总量 32KB 封顶，超限回落名录）。
-	 *  进预设；逐 run 实时读取，改动下一轮即生效。 */
+	 *  逐 run 实时读取，改动下一轮即生效。 */
 	skillsFullText: string[];
 	/** 技能名录单描述最大字符数截断（默认 250，0 = 不截断）。 */
 	skillsCatalogMaxDesc: number;
@@ -426,44 +402,17 @@ export interface ClientSettings {
 	softCapTokens: number;
 	/** 按模型覆盖软上限（key = "provider/id"，value > 0 才生效，缺省用全局）。 */
 	softCapByModel: Record<string, number>;
-	/** 输入框上方的快捷短语（点击即发送）。纯 UI 偏好，不进预设、不需 reload。 */
+	/** 输入框上方的快捷短语（点击即发送）。纯 UI 偏好，不需 reload。 */
 	quickPhrases: string[];
 	quickPhrasesEnabled: boolean;
 	/** 极简新对话开关（默认关；开 = 新对话隐藏提示词模板并隐藏快捷短语，呈现现代极简风格）。 */
 	minimalNewChat: boolean;
 	/** 输入框文字跨对话保留（默认关；开 = 切换别的会话不清空；关 = 各会话独立保留草稿）。 */
 	preserveDraftAcrossConversations: boolean;
-	/** DSH Agent 预设默认（新会话取值；pi 引擎忽略）。全局共享，不进设置预设。 */
+	/** DSH Agent 预设默认（新会话取值；pi 引擎忽略）。全局共享。 */
 	defaultAgentPreset?: string;
-	/** DSH 新会话默认权限预设（三档之一；pi 引擎忽略）。全局共享，不进设置预设。 */
+	/** DSH 新会话默认权限预设（三档之一；pi 引擎忽略）。全局共享。 */
 	defaultPermissionPreset?: string;
-}
-
-/**
- * 一条命名预设 = 当前设置的一份快照。
- *
- * **全量**：`ClientSettings` 的每个字段都可以进预设（字段清单/分组见
- * `server/preset-fields.ts`，导出/分享/导入共用同一张白名单）。
- * 字段一律**可选**：早期预设只有 19 个字段，导入时也可以只勾选一部分 ——
- * 应用预设时缺哪个字段就保持当前值（见 `SettingsService.applyPreset`）。
- */
-export interface SettingsPreset extends Partial<ClientSettings> {
-	name: string;
-}
-
-/** 预设 → 设置面板列表用的 UI 形状（协议要求字段完整：旧/部分预设用默认值补齐）。 */
-export function settingsPresetToUi(p: SettingsPreset): import("./protocol.js").UiSettingsPreset {
-	return {
-		name: p.name,
-		promptMode: p.promptMode === "replace" ? "replace" : "append",
-		customSystemPrompt: p.customSystemPrompt ?? "",
-		promptTemplate: p.promptTemplate ?? "",
-		promptOverrides: { ...p.promptOverrides },
-		disabledSkills: [...(p.disabledSkills ?? [])],
-		disabledExtensions: [...(p.disabledExtensions ?? [])],
-		reviewPrompt: p.reviewPrompt ?? "",
-		reviewDisabledSkills: [...(p.reviewDisabledSkills ?? [])],
-	};
 }
 
 /** Stable identity of an extension for the enable/disable toggle: the npm
@@ -593,8 +542,6 @@ export interface ClientState {
 	/** Settings-panel state (system prompt mode/text + disabled skills/
 	 *  extensions) so toggles survive a reload. */
 	settings?: ClientSettings;
-	/** Named settings presets (prompt + skill/extension toggles combos). */
-	presets?: SettingsPreset[];
 	/** Conversations that were STILL STREAMING when the server last shut down
 	 *  (SIGTERM / self-update restart). Consumed once on the next attach so
 	 *  the user learns a run was lost instead of wondering where it went. */
@@ -604,8 +551,7 @@ export interface ClientState {
 	 *  the workspace is opened again. */
 	removedProjects?: string[];
 	/** 每个项目（cwd）的**额外工作区根**（宿主侧多根，issue #146，见 protocol 的
-	 *  set_workspace_roots）。AI 仍只在主 cwd 里干活；右栏文件树可跨这些根浏览，
-	 *  插件的受支持路径（host.fs / host.project.create）也把这些根当作「工作区内」。
+	 *  set_workspace_roots）。AI 仍只在主 cwd 里干活；右栏文件树可跨这些根浏览。
 	 *  空数组/缺省 = 单根。按项目存：切项目各带各自的多根。 */
 	workspaceRoots?: Record<string, string[]>;
 	/** Per-project provider key preference: cwd -> provider -> keyName.
@@ -704,7 +650,7 @@ export class ClientStateStore {
 
 	constructor(private filePath: string) {}
 
-	/** 长期设置（设置面板 config + 预设 + 标记开关）的固定存储键。
+	/** 长期设置（设置面板 config + 标记开关）的固定存储键。
 	 *
 	 * 为什么用固定全局键而非 per-clientId：clientId 存 sessionStorage（每标签页独立、
 	 * 关浏览器即失），按 clientId 存设置会在每次新会话/重启后生成新 id → 设置全部重置、
@@ -777,7 +723,7 @@ export class ClientStateStore {
 	 *   save 落盘。完全无时间戳可推断的（无法判定活跃度）不按年龄淘汰，仅受数量上限约束。
 	 * - 淘汰后仍超过 MAX_TRACKED_CLIENTS（50）时按最近活跃保留前 50，其余淘汰
 	 *   （无时间戳的排最旧优先淘汰）。
-	 * - 全局键 __settings__ 永不淘汰：设置面板 config / 预设 / 墓碑都在它下面，
+	 * - 全局键 __settings__ 永不淘汰：设置面板 config / 墓碑都在它下面，
 	 *   与任何 clientId 无关。
 	 *
 	 * 返回淘汰的键数（0 = 无变化，调用方无需为此 save）。 */
@@ -1103,7 +1049,6 @@ export class ClientStateStore {
 			disabledSkills: stored?.disabledSkills ?? [],
 			disabledExtensions: stored?.disabledExtensions ?? [],
 			disabledAgentTools: legacyToDisabled(stored ?? {}),
-			disabledPluginTools: normalizeDisabledPluginTools(stored?.disabledPluginTools),
 			// 新字段已存在时遗留三开关以它为准推导（旧文件才读遗留值），保证两边一致。
 			terminalToolsEnabled:
 				stored?.disabledAgentTools !== undefined
@@ -1161,7 +1106,6 @@ export class ClientStateStore {
 			preserveDraftAcrossConversations: stored?.preserveDraftAcrossConversations ?? false,
 			reviewPrompt: stored?.reviewPrompt ?? "",
 			reviewDisabledSkills: stored?.reviewDisabledSkills ?? [],
-			disabledPlugins: stored?.disabledPlugins ?? [],
 			uiLayout: normalizeUiLayout(stored?.uiLayout),
 			defaultAgentPreset:
 				typeof stored?.defaultAgentPreset === "string" && stored.defaultAgentPreset
@@ -1188,7 +1132,6 @@ export class ClientStateStore {
 			disabledSkills: settings.disabledSkills ?? cur.disabledSkills ?? [],
 			disabledExtensions: settings.disabledExtensions ?? cur.disabledExtensions ?? [],
 			disabledAgentTools: normalizeDisabledAgentTools(settings.disabledAgentTools ?? cur.disabledAgentTools),
-			disabledPluginTools: normalizeDisabledPluginTools(settings.disabledPluginTools ?? cur.disabledPluginTools),
 			terminalToolsEnabled: settings.terminalToolsEnabled ?? cur.terminalToolsEnabled ?? false,
 			terminalBash: settings.terminalBash ?? cur.terminalBash ?? false,
 			terminalBashIdleMs: settings.terminalBashIdleMs ?? cur.terminalBashIdleMs ?? 15_000,
@@ -1255,7 +1198,6 @@ export class ClientStateStore {
 			planModePrompt: settings.planModePrompt ?? cur.planModePrompt ?? "",
 			reviewPrompt: settings.reviewPrompt ?? cur.reviewPrompt ?? "",
 			reviewDisabledSkills: settings.reviewDisabledSkills ?? cur.reviewDisabledSkills ?? [],
-			disabledPlugins: settings.disabledPlugins ?? cur.disabledPlugins ?? [],
 			uiLayout: normalizeUiLayout(settings.uiLayout ?? cur.uiLayout),
 			quickPhrases: settings.quickPhrases ?? cur.quickPhrases ?? [],
 			quickPhrasesEnabled: settings.quickPhrasesEnabled ?? cur.quickPhrasesEnabled ?? true,
@@ -1266,29 +1208,6 @@ export class ClientStateStore {
 			defaultPermissionPreset:
 				settings.defaultPermissionPreset ?? cur.defaultPermissionPreset ?? "workspace-write-never",
 		};
-		this.save();
-	}
-
-	/** Named settings presets for a client (empty if never saved) — global shared. */
-	getPresets(_clientId: string): SettingsPreset[] {
-		return (this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY]?.presets ?? []).map((p) => ({
-			...p,
-			// Older client-state files predate review settings.
-			reviewPrompt: p.reviewPrompt ?? "",
-			reviewDisabledSkills: p.reviewDisabledSkills ?? [],
-			// Older presets predate the configurable retry count.
-			retryMaxAttempts: normalizeRetryMaxAttempts(p.retryMaxAttempts),
-			// Older presets predate the compaction soft cap (issue #229).
-			softCapTokens: normalizeSoftCapTokens((p as { softCapTokens?: unknown }).softCapTokens),
-			softCapByModel: normalizeSoftCapByModel((p as { softCapByModel?: unknown }).softCapByModel),
-		}));
-	}
-
-	/** Persist the named settings presets — global shared config. */
-	savePresets(_clientId: string, presets: SettingsPreset[]): void {
-		const all = this.load();
-		const state = (all[ClientStateStore.GLOBAL_SETTINGS_KEY] ??= { projects: [] });
-		state.presets = presets;
 		this.save();
 	}
 

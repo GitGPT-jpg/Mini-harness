@@ -104,7 +104,6 @@ const TOOL_ICONS: Record<string, ReactNode> = {
 	skill: <FiBookOpen />,
 	schedule: <FiClock />,
 	compact_context: <FiArchive />,
-	mcp_manage: <FiBox />,
 	sandbox: <FiBox />,
 	worktree: <FiGitBranch />,
 	sftp: <FiServer />,
@@ -145,7 +144,6 @@ const TOOL_ICON_CLASSES: Record<string, string> = {
 	[PRESENT_FILES_TOOL_NAME]: "toolcall-icon tc-tone-ui",
 	browser_page: "toolcall-icon tc-tone-ui",
 	mail: "toolcall-icon tc-tone-ui",
-	mcp_manage: "toolcall-icon tc-tone-ui",
 	sandbox: "toolcall-icon tc-tone-ui",
 };
 

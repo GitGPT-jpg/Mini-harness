@@ -201,14 +201,22 @@ describe("collectQuestionAttachments", () => {
 		expect(kept).toEqual([]);
 	});
 
-	it("网页引用（mode:page）→ 原样恢复 path=origin + name=标题（不被当成工作区 reference）", () => {
+	it("旧版网页引用卡（mode:page，page-picker 已删除）→ 丢弃，不被当成工作区 reference 重发", () => {
 		const aside = fileCard("c1", [{ type: "text", text: '<browser-page url="https://a.example" title="A 页" />' }], {
 			name: "A 页",
 			path: "https://a.example",
 			mode: "page",
 		});
-		const atts = collectQuestionAttachments([user("u1", "q"), aside]).get("u1") ?? [];
-		expect(atts).toEqual([{ path: "https://a.example", mode: "page", name: "A 页" }]);
+		expect(collectQuestionAttachments([user("u1", "q"), aside]).get("u1")).toBeUndefined();
+		// 丢弃不打断 aside 序列：紧随其后的工作区引用照常收集
+		const ref = fileCard("c2", [{ type: "text", text: '<file path="src/a.ts" size="10" />' }], {
+			name: "a.ts",
+			path: "src/a.ts",
+			mode: "reference",
+		});
+		expect(collectQuestionAttachments([user("u1", "q"), aside, ref]).get("u1")).toEqual([
+			{ path: "src/a.ts", mode: "reference" },
+		]);
 	});
 
 	it("防御性去重：历史会话中残留重复的对话引用/图片/文件附件时自动去重", () => {

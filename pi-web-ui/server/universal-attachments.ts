@@ -133,24 +133,7 @@ export function createAttachmentUiMessages(attachments: PromptAttachment[], time
 			continue;
 		}
 
-		// 3. 授权网页
-		if (att.mode === "page") {
-			out.push({
-				id: cardId,
-				role: "custom",
-				customType: "file",
-				timestamp,
-				content: [{ type: "text", text: `<browser-page url="${att.path}" title="${att.name || att.path}" />` }],
-				details: {
-					name: att.name || att.path,
-					path: att.path,
-					mode: "page",
-				},
-			});
-			continue;
-		}
-
-		// 4. 工作区文件/目录/行范围
+		// 3. 工作区文件/目录/行范围
 		if (att.path) {
 			const isLines = att.mode === "lines" && att.lines;
 			let isDir = false;

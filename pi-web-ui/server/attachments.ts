@@ -393,38 +393,6 @@ export async function buildAttachmentMessages(
 			});
 			continue;
 		}
-		// Granted web page (page-picker extension): `path` is the page origin,
-		// NOT a workspace path — never stat/read it. The model gets the exact
-		// browser_page target plus the fact that this page is already granted,
-		// so it doesn't have to guess an origin out of the prose.
-		if (att.mode === "page") {
-			const url = att.path;
-			let target = url;
-			try {
-				// The extension matches pages by origin — keep the hint in the same
-				// shape as `browser_page`'s `target` (sub-paths are not part of it).
-				target = new URL(url).origin;
-			} catch {
-				// Not a full URL (hand-written string) → pass it through as-is and
-				// let the extension decide.
-			}
-			const pageTitle = att.name ?? url;
-			out.push({
-				message: {
-					customType: "file",
-					content: [
-						{
-							type: "text",
-							text: `\n<browser-page url="${attr(url)}" title="${attr(pageTitle)}">\nThe user attached this web page; it is already granted to the AI through the browser extension. Use the browser_page tool with target="${attr(target)}" to read or act on it — do not fetch it over the network.\n</browser-page>`,
-						},
-					],
-					display: true,
-					details: { name: pageTitle, path: url, mode: "page" },
-				},
-			});
-			continue;
-		}
-
 		// Raw pasted/dropped/uploaded image — no workspace path involved (the
 		// browser downscales client-side; this guard only prevents abuse).
 		if (att.imageData) {

@@ -34,7 +34,6 @@ function entry(id: string, slot: UiSlotId, opts: { hidden?: boolean; align?: UiA
 		align: opts.align ?? "start",
 		hidden: opts.hidden ?? false,
 		userOverrides: [],
-		arrangedBy: [],
 	};
 }
 

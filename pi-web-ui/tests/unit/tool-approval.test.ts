@@ -3,7 +3,6 @@ import {
 	approvalSuppressionReason,
 	checkDangerousToolCall,
 	isApprovalPolicyEmpty,
-	pluginApprovalCategory,
 	type ApprovalPolicy,
 } from "../../server/tool-approval.js";
 
@@ -121,13 +120,6 @@ describe("高危操作识别与人机协同拦截 (Tool Approval / Human-in-the-
 			const a = checkDangerousToolCall("write", { path: "../a.txt" }, cwd);
 			const b = checkDangerousToolCall("edit", { path: "/tmp/b.txt" }, cwd);
 			expect(a.category?.id).toBe(b.category?.id);
-		});
-
-		it("插件要求确认按插件分档", () => {
-			const cat = pluginApprovalCategory("demo-plugin");
-			expect(cat.id).toBe("plugin:demo-plugin");
-			expect(cat.label).toContain("demo-plugin");
-			expect(pluginApprovalCategory("other").id).not.toBe(cat.id);
 		});
 	});
 

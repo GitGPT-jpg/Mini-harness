@@ -192,24 +192,6 @@ describe("issue #640: server pick() preserves computed values in translated pack
 			expect(convAll).toContain("project");
 			expect(convAll).not.toMatch(/\{[a-zA-Z0-9_.]+\}/);
 
-			// MCP manage
-			const mcpFail = pick("pt", "失败", "fail", "mcp_manage.install.fail", { error: "bad package" });
-			expect(mcpFail).toContain("bad package");
-			expect(mcpFail).not.toMatch(/\{[a-zA-Z0-9_.]+\}/);
-
-			const mcpEmpty = pick("pt", "空", "empty", "mcp_manage.list.empty", {
-				projectPath: "/proj/.pi/mcp.json",
-				globalPath: "~/.pi/mcp.json",
-			});
-			expect(mcpEmpty).toContain("/proj/.pi/mcp.json");
-			expect(mcpEmpty).toContain("~/.pi/mcp.json");
-			expect(mcpEmpty).not.toMatch(/\{[a-zA-Z0-9_.]+\}/);
-
-			// Plugin installer timeout
-			const piTimeout = pick("pt", "超时", "timeout", "plugininstaller.timeout", { min: 15 });
-			expect(piTimeout).toContain("15");
-			expect(piTimeout).not.toMatch(/\{[a-zA-Z0-9_.]+\}/);
-
 			// SCM commitmsg
 			const scmTerm = pick("pt", "异常终止", "terminated", "scm.commitmsg.model.terminated", {
 				stopReason: "tool_use",

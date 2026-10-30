@@ -52,11 +52,8 @@ tmp/
 /dist/
 
 # ---- 上游 pi-web-ui 源码（v0.111.0 vendored，见 pi-web-ui/PROVENANCE.md）----
-# 上游预编译插件产物（约 205MB；精简版将删除相关插件）
-pi-web-ui/plugins/office/artifacts/
 # 源码构建产物与依赖
 pi-web-ui/node_modules/
 pi-web-ui/dist/
 pi-web-ui/web/dist/
-pi-web-ui/plugins/mermaid/vendor/
 pi-web-ui/.theme-audit/

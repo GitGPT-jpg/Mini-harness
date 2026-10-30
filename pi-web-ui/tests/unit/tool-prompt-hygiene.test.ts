@@ -6,9 +6,7 @@
  * （zh 文案仅在 per-call 返回文本与 UI 层保留）。本测试防回潮：
  *  1. server/*.ts 工具定义文件不得再调用 bilingual()（白名单外的残留即失败）；
  *  2. server/*.ts 的 description/promptSnippet/promptGuidelines 值不得含中文；
- *  3. 主 description 长度上限（patch-tool 这类操作语法参考单独豁免）；
- *  4. 插件 *.mjs 的 description/promptSnippet 行不得含中文（label/execute 返回
- *     文本/注释是 UI 与对话内容，允许中文，不在检查范围）。
+ *  3. 主 description 长度上限（patch-tool 这类操作语法参考单独豁免）。
  *
  * ―― 同一份工具信息在上下文里最多只说一遍（口径，2024 全量收敛时定）――
  * 模型能同时看到三处：tool schema 的 description、系统提示词 Available tools 列表里
@@ -21,7 +19,7 @@
  * ② 各字段长度上限；③ snippet 不得以工具名开头。
  */
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -30,20 +28,19 @@ const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 /** 仍允许使用 bilingual() 的文件（面向用户的 relay 文案，非工具定义）。 */
 const BILINGUAL_ALLOW = new Set(["i18n.ts", "dsh-client.ts", "dsh-agent-service.ts"]);
 
-/** CJK 检查豁免（非模型提示词）：斜杠命令 UI、用户可编辑模板数据（含其繁中视图）、宿主 API 目录、
+/** CJK 检查豁免（非模型提示词）：斜杠命令 UI、用户可编辑模板数据（含其繁中视图）、
  *  tool-manager 的工具预设说明（设置面板 UI）。 */
 const CJK_ALLOW = new Set([
 	"slash-commands.ts",
 	"subagent-templates.ts",
 	"subagent-templates-hant.ts",
-	"plugin-api-catalog.ts",
 	"tool-manager.ts",
 ]);
 
 /** 主 description 长度上限（字符）；操作语法参考类工具单独豁免。 */
 const MAIN_DESC_CAP = 600;
-/** 操作语法参考类工具：整份 op/语法表本身就是工具的唯一文档位（patch 的补丁语法、
- *  browser_page 的 ops 参数矩阵），不能再移去别处，因此豁免主描述上限。 */
+/** 操作语法参考类工具：整份 op/语法表本身就是工具的唯一文档位（patch 的补丁语法），
+ *  不能再移去别处，因此豁免主描述上限。 */
 const MAIN_DESC_EXEMPT = new Set(["patch-tool.ts"]);
 /** promptSnippet 上限：只写触发条件，一句话以内。 */
 const SNIPPET_CAP = 80;
@@ -158,32 +155,6 @@ describe("tool prompt hygiene（工具提示词纯英文精简）", () => {
 		}
 		expect(offenders, `以下 description 超过 ${MAIN_DESC_CAP}c：\n${offenders.join("\n")}`).toEqual([]);
 	});
-
-	it("插件 *.mjs 的 description/promptSnippet 行不含中文", () => {
-		const offenders: string[] = [];
-		const walk = (dir: string) => {
-			for (const f of readdirSync(dir)) {
-				const p = join(dir, f);
-				if (statSync(p).isDirectory()) {
-					if (f !== "node_modules") walk(p);
-					continue;
-				}
-				if (!f.endsWith(".mjs")) continue;
-				const lines = readFileSync(p, "utf8").split("\n");
-				for (let i = 0; i < lines.length; i++) {
-					if (!/^\s*(description|promptSnippet|promptGuidelines)\s*[:=]/.test(lines[i])) continue;
-					// registerCommand 的 description/descriptionEn 是 UI 文案，跳过
-					const context = lines.slice(Math.max(0, i - 4), Math.min(lines.length, i + 5)).join("\n");
-					if (context.includes("registerCommand") || context.includes("descriptionEn")) continue;
-					// 单行含中文即报（跨行描述的续行由同组审查保证）；变量插值/动态拼接跳过
-					const m = lines[i].match(/(["'`])((?:\\.|(?!\1).)*)\1/);
-					if (m && CJK.test(m[2])) offenders.push(`${p}:${i + 1} ${m[2].slice(0, 60)}`);
-				}
-			}
-		};
-		walk(join(ROOT, "plugins"));
-		expect(offenders, `以下插件提示词行含中文：\n${offenders.join("\n")}`).toEqual([]);
-	}, 20_000);
 });
 // ────────────────────────────────────────────────────────────────────────────
 // 三处职责分离（description / promptSnippet / promptGuidelines）的机器守卫
@@ -332,26 +303,9 @@ function toolNamesIn(src: string): string[] {
 	return out;
 }
 
-/** 插件里参与提示词检查的文件：跳过 node_modules 与第三方 vendor bundle。 */
-function pluginPromptFiles(): string[] {
-	const out: string[] = [];
-	const walk = (dir: string) => {
-		for (const f of readdirSync(dir)) {
-			const p = join(dir, f);
-			if (statSync(p).isDirectory()) {
-				if (f !== "node_modules" && f !== "vendor" && f !== "artifacts") walk(p);
-				continue;
-			}
-			if (f.endsWith(".mjs")) out.push(p);
-		}
-	};
-	walk(join(ROOT, "plugins"));
-	return out;
-}
-
-/** 参与检查的全部文件（server 根目录 + 插件）。 */
+/** 参与检查的全部文件（server 根目录）。 */
 function promptFiles(): string[] {
-	return [...serverFiles(), ...pluginPromptFiles()];
+	return serverFiles();
 }
 
 describe("tool prompt hygiene（三处职责分离：description / snippet / guidelines）", () => {

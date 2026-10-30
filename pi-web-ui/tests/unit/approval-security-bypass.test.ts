@@ -51,8 +51,8 @@ describe("Approval System Security Bypass & Path Traversal Fixes (#333)", () => 
 		});
 	});
 
-	describe("Plugin guard ask bypass prevention (A3)", () => {
-		it("ensures built-in deny rule blocks execution even if plugin guard returned ask", async () => {
+	describe("withToolGuard approval gate (A3)", () => {
+		it("ensures built-in deny rule blocks execution without asking for approval", async () => {
 			const denyRule: ApprovalRule = {
 				id: "custom.bash.deny-echo",
 				enabled: true,
@@ -72,19 +72,9 @@ describe("Approval System Security Bypass & Path Traversal Fixes (#333)", () => 
 				execute: async () => ({ content: [{ type: "text", text: "executed" }] }),
 			};
 
-			// 模拟一个总是返回 ask 的插件守卫
-			const mockGuard = {
-				pre: async () => ({
-					verdict: { decision: "ask" as const, reason: "Plugin ask confirmation" },
-					pluginId: "mock-plugin",
-				}),
-				post: async () => ({}),
-			};
-
 			let askCalled = false;
 			const guardedTool = withToolGuard(mockTool as any, {
 				toolName: "bash",
-				guard: mockGuard as any,
 				cwd,
 				getLang: () => "en",
 				askApproval: async () => {
@@ -102,14 +92,14 @@ describe("Approval System Security Bypass & Path Traversal Fixes (#333)", () => 
 				{} as any,
 			)) as any;
 
-			// 验证：直接被 deny 阻断，没有被插件的 ask 覆盖，也没有调 askApproval
+			// 验证：直接被 deny 阻断，没有调 askApproval
 			expect(askCalled).toBe(false);
 			expect(result.isError).toBe(true);
 			expect(result.details.ruleDenied).toBe(true);
 			expect(result.content[0].text).toContain("blocked by approval rule");
 		});
 
-		it("preserves system high-risk approval reason when both system and plugin ask", async () => {
+		it("asks with the system high-risk approval reason and category", async () => {
 			const mockTool = {
 				name: "bash",
 				description: "bash tool",
@@ -117,19 +107,10 @@ describe("Approval System Security Bypass & Path Traversal Fixes (#333)", () => 
 				execute: async () => ({ content: [{ type: "text", text: "executed" }] }),
 			};
 
-			const mockGuard = {
-				pre: async () => ({
-					verdict: { decision: "ask" as const, reason: "Plugin harmless note" },
-					pluginId: "harmless-plugin",
-				}),
-				post: async () => ({}),
-			};
-
 			let askedReason: string | undefined;
 			let askedCategory: any;
 			const guardedTool = withToolGuard(mockTool as any, {
 				toolName: "bash",
-				guard: mockGuard as any,
 				cwd,
 				getLang: () => "en",
 				askApproval: async (_id, _tool, _params, reason, _reasonEn, _convId, cat) => {
@@ -143,7 +124,7 @@ describe("Approval System Security Bypass & Path Traversal Fixes (#333)", () => 
 
 			await guardedTool.execute("call-2", { command: "rm -rf /" }, undefined, undefined, {} as any);
 
-			// 验证：弹窗审批原因为系统的高危删除原因，而非被插件的 harmless note 覆盖
+			// 验证：弹窗审批原因为系统的高危删除原因与档位
 			expect(askedReason).toContain("递归/强制删除");
 			expect(askedCategory?.id).toBe("bash.rm-rf");
 		});

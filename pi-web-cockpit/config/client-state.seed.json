@@ -29,10 +29,8 @@
         "terminal_read",
         "terminal_wait",
         "edit_soft",
-        "eval",
-        "browser_page"
+        "eval"
       ],
-      "disabledPluginTools": [],
       "terminalToolsEnabled": false,
       "terminalBash": false,
       "terminalBashIdleMs": 15000,
@@ -74,7 +72,6 @@
       "planModePrompt": "",
       "reviewPrompt": "",
       "reviewDisabledSkills": [],
-      "disabledPlugins": [],
       "uiLayout": {},
       "quickPhrases": [
         "继续",

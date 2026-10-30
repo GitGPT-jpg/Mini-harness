@@ -11,16 +11,15 @@
  *
  * 本测试是**静态**体检（零端口、零浏览器，CI 必跑），两道关：
  *   1. 每套主题：--accent 上的实际前景令牌对比度 >= 3.0（灾难性地板，非 WCAG AA 线）；
- *   2. styles.css 与所有内置插件：不得出现「accent 实底 + 硬编码白字」。
+ *   2. styles.css：不得出现「accent 实底 + 硬编码白字」。
  */
-import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const THEMES_DIR = join(ROOT, "themes");
-const PLUGINS_DIR = join(ROOT, "plugins");
 const STYLES_PATH = join(ROOT, "web", "src", "styles.css");
 
 /** 灾难性不可读的地板（与 theme-inline-code-contrast 同口径）。 */
@@ -104,17 +103,6 @@ function findAccentWhiteViolations(text: string): string[] {
 	return bad;
 }
 
-function walk(dir: string, out: string[] = []): string[] {
-	for (const entry of readdirSync(dir)) {
-		if (entry === "node_modules" || entry === "vendor" || entry.startsWith(".")) continue;
-		const p = join(dir, entry);
-		const st = statSync(p);
-		if (st.isDirectory()) walk(p, out);
-		else out.push(p);
-	}
-	return out;
-}
-
 // ---------------------------------------------------------------- 用例
 
 describe("强调色实底的前景对比度", () => {
@@ -149,22 +137,6 @@ describe("强调色实底的前景对比度", () => {
 		const bad = findAccentWhiteViolations(readFileSync(STYLES_PATH, "utf8"));
 		expect(bad, `styles.css 违规：\n${bad.join("\n")}`).toEqual([]);
 	});
-
-	it("内置插件不再出现「accent 实底 + 硬编码白字」", () => {
-		const files = walk(PLUGINS_DIR).filter((f) => /\.(mjs|js|cjs|css)$/.test(f));
-		// 精简发行版：官方 UI 插件已删光（0 个），跳过插件面检查
-		if (files.length === 0) return;
-		const bad: string[] = [];
-		for (const f of files) {
-			if (statSync(f).size > 4_000_000) continue;
-			const text = readFileSync(f, "utf8");
-			// 廉价预筛：既没有 accent 变量也没有白色字面的文件直接跳过
-			if (!/var\(--accent/.test(text) || !/(#fff(?:fff)?|white)/i.test(text)) continue;
-			const rel = relative(ROOT, f).replace(/\\/g, "/");
-			for (const v of findAccentWhiteViolations(text)) bad.push(`${rel}: ${v}`);
-		}
-		expect(bad, `插件违规：\n${bad.join("\n")}`).toEqual([]);
-	}, 30_000);
 
 	it(".cwd-choose-btn.primary 具备强调色实底与反色前景，且纯白主题不误伤非实底按钮", () => {
 		const stylesCss = readFileSync(STYLES_PATH, "utf8");
