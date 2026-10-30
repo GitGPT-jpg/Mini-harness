@@ -1951,7 +1951,6 @@
 		"goal.wizard.answer.return": "ユーザーの回答：{ans}",
 		"goal.wizard.ask.failed": "質問に失敗しました：{errMsg}",
 		"goal.wizard.cancelled.aborted": "（調査はキャンセルされました。質問を中止し、会話を終了してください）",
-		"goal.wizard.cancelled.best": "（ユーザーが調査をキャンセルしました。現時点での最善の目標文を最終回答として返してください）",
 		"goal.wizard.cancelled.stop": "（調査はキャンセルされました。質問を中止し、会話を終了してください）",
 		"goal.wizard.idle.timeout": "目標調査がタイムアウトしました（回答の待機時間が長すぎました）",
 		"goal.wizard.kick": "【目標を設定しました】\n\n{wgoal.goal}\n\nこの目標の実装を今すぐ開始してください。",

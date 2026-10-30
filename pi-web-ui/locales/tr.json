@@ -1998,7 +1998,6 @@
 		"goal.wizard.cancelled.aborted": "(Anket iptal edildi — sormaya devam etmeyin, konuşmayı doğrudan sonlandırın)",
 		"goal.wizard.answer.return": "Kullanıcı yanıtı: {ans}",
 		"goal.wizard.answer.card": "↳ Yanıtınız: {ans}",
-		"goal.wizard.cancelled.best": "(Kullanıcı anketi iptal etti — şu anda yakınsadığınız hedef metnini nihai yanıt olarak doğrudan verin)",
 		"goal.wizard.cancelled.stop": "(Anket iptal edildi — sormaya devam etmeyin, konuşmayı doğrudan sonlandırın)",
 		"goal.wizard.question.card": "🔍 Soru {qStep}: {params.question}{choiceSuffixZh}",
 		"goal.wizard.question.title": "🔍 Soru {qStep}: {params.question}",

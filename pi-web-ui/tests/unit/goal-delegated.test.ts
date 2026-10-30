@@ -850,3 +850,61 @@ STEPS:
 		expect(conv.sameErrorRounds).toBe(0);
 	});
 });
+
+describe("暂停 / 继续（任务台）", () => {
+	it("审查回合中暂停：停掉执行者、旧循环静默退出、被打断的轮次在继续时重做", async () => {
+		const h = makeHarness();
+		await h.svc.setGoal("目标 P", { maxRounds: 0, locked: true });
+		expect(await h.svc.whenAwaitingVerdict("conv-a")).toBe(true);
+		expect(h.conv().goal.round).toBe(1);
+
+		await h.svc.pauseGoal();
+		await h.svc.whenDelegatedSettled("conv-a");
+		const g = h.conv().goal;
+		expect(g.paused).toBe(true);
+		expect(g.phase).toBe("paused");
+		expect(g.round).toBe(0);
+		expect(g.goal).toBe("目标 P");
+		expect(h.stopped).toContain(EXEC_ID);
+		// 暂停不是收尾：执行者保留（没被移出），也没有受阻通知
+		expect(h.dismissed).toHaveLength(0);
+		expect(notices(h).some((t) => t.includes("受阻"))).toBe(false);
+		// 重复暂停是 no-op
+		await h.svc.pauseGoal();
+		expect(h.stopped.filter((id) => id === EXEC_ID)).toHaveLength(1);
+
+		await h.svc.resumeGoal();
+		expect(h.conv().goal.paused).toBe(false);
+		expect(await h.svc.whenAwaitingVerdict("conv-a")).toBe(true);
+		// 同一个执行者续跑（记忆连续），不重新 spawn；轮次重做为第 1 轮
+		expect(h.spawned).toHaveLength(1);
+		expect(h.steered).toHaveLength(1);
+		expect(h.conv().goal.round).toBe(1);
+		expect(h.conv().goal.phase).toBe("reviewing");
+	});
+
+	it("没有在飞循环时暂停/继续都是 no-op", async () => {
+		const h = makeHarness();
+		await h.svc.pauseGoal();
+		await h.svc.resumeGoal();
+		expect(h.conv().goal.paused).toBeFalsy();
+		expect(h.spawned).toHaveLength(0);
+	});
+
+	it("暂停后清目标：paused 复位", async () => {
+		const h = makeHarness();
+		await h.svc.setGoal("目标 Q", { maxRounds: 0, locked: true });
+		await h.svc.whenAwaitingVerdict("conv-a");
+		await h.svc.pauseGoal();
+		await h.svc.clearGoal();
+		expect(h.conv().goal.goal).toBeNull();
+		expect(h.conv().goal.paused).toBe(false);
+	});
+
+	it("执行者快照带上 sessionId（任务台据此读工具调用时间线）", async () => {
+		const h = makeHarness();
+		await h.svc.setGoal("目标 S", { maxRounds: 0, locked: true });
+		await h.svc.whenAwaitingVerdict("conv-a");
+		expect(h.conv().goal.roles?.executor).toHaveProperty("sessionId");
+	});
+});

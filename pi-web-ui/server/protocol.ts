@@ -859,6 +859,10 @@ export type ClientMessage =
 			execModel?: string;
 	  }
 	| { type: "clear_goal" }
+	/** 暂停目标：停掉执行者当前回合，保留目标与产物，不再自动派下一轮。 */
+	| { type: "pause_goal" }
+	/** 继续已暂停的目标：从当前轮次接着派活。 */
+	| { type: "resume_goal" }
 	/** Start the collaborative target wizard: a user requirement goes into an
 	 *  ISOLATED wizard session which questions the user (multiple-choice + free
 	 *  text bridges) to scope details, then AUTO-SETS the refined goal. `text` is
@@ -1832,6 +1836,8 @@ export interface GoalRoleRef {
 	activity?: string;
 	/** activity 的英文版（客户端按 locale 二选一，与 status/statusEn 同口径）。 */
 	activityEn?: string;
+	/** 执行者会话的 sessionId（任务台据此读 session 文件里的工具调用时间线）。 */
+	sessionId?: string | null;
 }
 
 /** 一条已终结的目标（目标条「历史」下拉用；内存态，随重启丢失）。 */
@@ -1877,7 +1883,9 @@ export interface GoalStatus {
 	 *  questions, then auto-sets the goal. */
 	wizard: WizardStatus;
 	/** 2.0：循环相位。 */
-	phase?: "idle" | "executing" | "reviewing" | "blocked";
+	phase?: "idle" | "executing" | "reviewing" | "blocked" | "paused";
+	/** 用户暂停了目标（执行者回合已停，目标与产物保留；resume_goal 继续）。 */
+	paused?: boolean;
 	/** 本目标累计用量（执行者各轮 + 审查者各轮的输入/输出 token；轮次边界累计）。 */
 	usage?: { inputTokens: number; outputTokens: number };
 	/** 本对话的目标历史（终态落袋，cap 20；内存态，与目标状态同寿命；清目标不清空）。 */

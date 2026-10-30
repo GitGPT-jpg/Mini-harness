@@ -42,6 +42,8 @@ import { isAudioFile, previewKind } from "./text-sniff.js";
 import { isOfficeFile, OFFICE_MAX_FILE_BYTES, unzipFiles } from "./office-parse.js";
 import { startControlServer } from "./control-socket.js";
 import { scheduleUploadCleanup } from "./uploads.js";
+import { configureGoalLog } from "./goal-history-log.js";
+import { registerLoopRoutes } from "./loop/routes.js";
 import { ensureWindowsBash, windowsBashDir } from "./ensure-bash.js";
 import { listThemes, readThemeCss, resolveThemeFile } from "./themes.js";
 import { isManaged, managedRefusal } from "./managed.js";
@@ -412,6 +414,9 @@ const SERVICE_INFO = toServiceInfo(ORIGIN);
 const TABS = parseTabs();
 
 registerFileTransferRoutes(app, (clientId) => service.get(clientId)?.cwd);
+// Loop 任务台 / 代码 loop 表单 / 连接集群（/api/mini-harness/*，token 鉴权由上方中间件覆盖）。
+configureGoalLog(DATA_DIR);
+registerLoopRoutes(app, { dataDir: DATA_DIR, agentDir: getAgentDir() });
 
 app.get("/api/health", (_req, res) => {
 	// 审查 #352：该端点对未鉴权开放（监控探针需要），故只保留版本/引擎与 SDK
@@ -1370,6 +1375,8 @@ export interface DispatchSession {
 		},
 	): Promise<void>;
 	clearGoal(): Promise<void>;
+	pauseGoal(): Promise<void>;
+	resumeGoal(): Promise<void>;
 	startGoalWizard(text: string, opts?: { wizardModel?: string; maxRounds?: number; locked?: boolean }): Promise<void>;
 	setGoalPrefs(opts?: {
 		reviewModel?: string;

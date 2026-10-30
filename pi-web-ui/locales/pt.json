@@ -2011,7 +2011,6 @@
 		"goal.wizard.answer.return": "Resposta do usuário: {ans}",
 		"goal.wizard.ask.failed": "Falha ao perguntar: {errMsg}",
 		"goal.wizard.cancelled.aborted": "(A pesquisa foi cancelada — pare de fazer perguntas e encerre a conversa)",
-		"goal.wizard.cancelled.best": "(O usuário cancelou a pesquisa — responda com o melhor texto de objetivo possível como resposta final)",
 		"goal.wizard.cancelled.stop": "(A pesquisa foi cancelada — pare de fazer perguntas e encerre a conversa)",
 		"goal.wizard.draft.card": "🎯 Rascunho do objetivo original: {draft}",
 		"goal.wizard.idle.timeout": "Tempo limite da pesquisa de objetivo excedido (esperou muito por uma resposta)",

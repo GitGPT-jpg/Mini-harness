@@ -41,7 +41,7 @@ type LoopCtx = {
 };
 
 /** 运行状态（state.json 的结构；字段与旧运行时保持兼容）。 */
-interface LoopState {
+export interface LoopState {
 	runId: string;
 	taskId: string | null;
 	goal: string;
@@ -127,6 +127,11 @@ function now() {
 	return new Date().toISOString();
 }
 
+/** 运行状态根目录（~/.mini-harness/runs，可由 MINI_HARNESS_RUNTIME_ROOT 覆盖）。 */
+export function runsRoot(): string {
+	return ROOT;
+}
+
 function runDir(runId: string) {
 	return path.join(ROOT, runId);
 }
@@ -168,7 +173,8 @@ function journal(st: LoopState, event: string, extra: Record<string, unknown> = 
 	} catch {}
 }
 
-function listRuns(): LoopState[] {
+/** 全部运行（读 state.json；任务台 / 运行状态接口也用它）。 */
+export function listRuns(): LoopState[] {
 	try {
 		return fs
 			.readdirSync(ROOT)
@@ -222,7 +228,7 @@ function notify(ctx: LoopCtx, message: string, type = "info") {
 // ---------- 模型家族与选择 ----------
 
 /** 按模型 id 归类家族。planner / reviewer 必须与主模型、彼此都不同家族。 */
-function familyOf(id: string): string {
+export function familyOf(id: string): string {
 	const s = String(id || "").toLowerCase();
 	const rules: Array<[RegExp, string]> = [
 		[/^(gpt|o[1-9])/, "openai"],

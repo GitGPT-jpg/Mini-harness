@@ -486,6 +486,12 @@ export function handlePlanAndGoalMessage(msg: ClientMessage, cs: DispatchSession
 		case "clear_goal":
 			void cs.clearGoal();
 			return true;
+		case "pause_goal":
+			void cs.pauseGoal();
+			return true;
+		case "resume_goal":
+			void cs.resumeGoal();
+			return true;
 		case "start_goal_wizard":
 			void cs.startGoalWizard(msg.text, {
 				wizardModel: msg.wizardModel,

@@ -13687,6 +13687,14 @@ export class ClientSession {
 		return this.goalSvc.clearGoal();
 	}
 
+	async pauseGoal(): Promise<void> {
+		return this.goalSvc.pauseGoal();
+	}
+
+	async resumeGoal(): Promise<void> {
+		return this.goalSvc.resumeGoal();
+	}
+
 	/**
 	 * Run a git diff (unstaged + staged) in a conversation's workspace, or
 	 * "" when not a repo.

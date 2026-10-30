@@ -22,6 +22,7 @@
  */
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { recordGoalEvent } from "./goal-history-log.js";
 import { Type } from "typebox";
 import {
 	createAgentSessionFromServices,
@@ -485,17 +486,26 @@ function wizardPrompt(draft: string, contextSummary = ""): string {
 		`Use your goal_ask tool to ask the user focused questions to pin down the essential, ambiguous details.`,
 		`Convergence guidelines:`,
 		`- Ground your understanding in the conversation context above so you already know what files, models, and prior work the user is referring to. Do NOT re-ask things already clear from context.`, // eslint-disable-line max-len
-		`- If you need to verify a specific file or directory in the workspace, do at most 1 to 3 quick read-only checks (read/ls/find/grep), then IMMEDIATELY call goal_ask. Never do exhaustive exploration or attempt the actual task during scoping.`, // eslint-disable-line max-len
+		`- Call goal_ask FIRST: this session has no read/ls/find/grep tools. Base every question on the requirement and the conversation context above. Never attempt the actual task during scoping.`, // eslint-disable-line max-len
 		`- Ask ONE question at a time, strictly 1 to 3 questions total: what exactly to build/do, scope boundaries (what NOT to do), acceptance criteria / done-definition, and any constraints (style, performance, environment).`, // eslint-disable-line max-len
 		`- Prefer multiple-choice with 2-4 mutually exclusive options and place your recommended choice FIRST.`,
 		`- In each option, concisely explain the impact or tradeoff. Use open questions only for things that genuinely need free text.`, // eslint-disable-line max-len
-		`Once you have enough to write an unambiguous, reviewable goal, STOP asking and reply with EXACTLY this format and nothing else (no preamble, no bullets):`, // eslint-disable-line max-len
+		`Once you have enough information, do NOT emit the goal yet: the plan MUST be approved by the user first.`,
+		`PLAN CHECK (mandatory, never skip): call goal_ask one final time to present the plan outline and get explicit approval.`, // eslint-disable-line max-len
+		`- question: begin with "计划大纲：" then one goal line and 2 to 6 numbered steps, each with how to verify, for example:`, // eslint-disable-line max-len
+		`  计划大纲：`,
+		`  目标：<一句话说清交付物与验收标准>`,
+		`  步骤：1) <做什么> -- <怎么验证> 2) <做什么> -- <怎么验证>`,
+		`  确认后开始执行。`,
+		`- options, recommended first: "开始执行：按上面的计划跑" / "我要修改：先调整目标或步骤" / "取消：不执行"`,
+		`- If the user picks 开始执行, reply with EXACTLY this format and nothing else (no preamble, no bullets):`,
 		`GOAL: <one concrete, verifiable sentence describing the deliverable and its acceptance criteria>`, // eslint-disable-line max-len
 		`STEPS:`,
 		`1. <first step title> | <brief description / acceptance check>`,
 		`2. <second step title> | <brief description / acceptance check>`,
 		`(include 2 to 6 concrete, sequential steps for executing the goal)`,
-		`If the user cancels or stops answering (the tool reports a cancellation), still produce a sensible best-effort goal from what you already know.`, // eslint-disable-line max-len
+		`- If the user picks 我要修改, ask what to change via goal_ask, apply it, then present the plan outline again.`,
+		`- If the user picks 取消, reply with exactly CANCELLED and nothing else.`,
 	].join("\n");
 }
 
@@ -729,6 +739,7 @@ export class GoalService {
 		goal.verdict = "pending";
 		goal.feedback = undefined;
 		goal.phase = "idle";
+		goal.paused = false;
 		goal.roles = {};
 		goal.wizard.active = false;
 		goal.wizard.status = "";
@@ -742,6 +753,7 @@ export class GoalService {
 			text: `🎯 已设目标：${text.slice(0, 80)}${text.length > 80 ? "…" : ""}`,
 			textEn: `🎯 Goal set: ${text.slice(0, 80)}${text.length > 80 ? "…" : ""}`,
 		});
+		this.logGoal(conv, "created");
 		// Auto-start generation right after setting the goal (unless this setGoal is
 		// the wizard's internal one, which kicks off itself). This makes the direct
 		// goal-bar path behave like the AI-提炼 path: set a target → agent begins.
@@ -1071,9 +1083,9 @@ export class GoalService {
 										type: "text",
 										text: pick(
 											lang,
-											"(用户已取消调研，请直接给出你当前收敛的目标文本作为最终答案)",
-											"(The user cancelled the survey — reply with your best-effort goal text as the final answer)",
-											"goal.wizard.cancelled.best",
+											"(用户关闭了对话框，请直接回复 CANCELLED 结束调研)",
+											"(The user dismissed the dialog — reply with exactly CANCELLED and end the survey)",
+											"goal.wizard.cancelled.dismissed",
 										),
 									},
 								],
@@ -1137,7 +1149,7 @@ export class GoalService {
 				customTools: [goalAsk],
 				// 仅暴露提问工具与只读检索工具：允许向导在提问前查阅工作区文件细节，
 				// 但严禁调用 bash/edit/write 等具破坏性或耗时不可控的写/执行工具。
-				tools: ["goal_ask", "read", "ls", "find", "grep"],
+				tools: ["goal_ask"],
 				...(model ? { model } : {}),
 			});
 			srvSession = srv.session;
@@ -1220,6 +1232,8 @@ export class GoalService {
 				unsubscribe();
 			}
 			const rawAssistantText = wizard.getLastAssistantText()?.trim() ?? "";
+			// 计划确认门禁里选「取消」/ 关掉对话框 → 向导只回 CANCELLED：不设目标、不开跑。
+			if (/^\s*CANCELLED\b/i.test(rawAssistantText)) this.wizardCancelled = true;
 			const parsed = parseWizardOutput(rawAssistantText);
 			refinedGoal = parsed.goal;
 			parsedSteps = parsed.steps;
@@ -1376,6 +1390,56 @@ export class GoalService {
 			execModel: this.prefs.execModel,
 		});
 		this.emitGoalStatus();
+	}
+
+	/** 暂停目标：作废在飞循环的代次并停掉执行者当前回合（执行者、目标与产物都保留）。
+	 *  被打断的那一轮在继续时重做；审查回合在飞时一并唤醒等待者，旧循环按代次静默退出。 */
+	async pauseGoal(): Promise<void> {
+		const conv = this.host.activeConv();
+		const g = conv.goal;
+		if (!g.goal || g.paused || !this.delegatedLoops.has(conv.id)) return;
+		conv.goalGeneration += 1;
+		this.delegatedPending.delete(conv.id);
+		if (conv.awaitingVerdict) {
+			conv.awaitingVerdict = undefined;
+			void this.flushDeferredPrompts(conv);
+			const settle = this.verdictWaiters.get(conv.id);
+			this.verdictWaiters.delete(conv.id);
+			settle?.("gone");
+		}
+		g.round = Math.max(0, g.round - 1);
+		g.paused = true;
+		g.reviewing = false;
+		g.phase = "paused";
+		g.status = "已暂停（点继续接着跑）";
+		g.statusEn = "Paused (resume to continue)";
+		this.emitGoalStatus();
+		const execId = conv.roleExec?.convId;
+		if (execId) {
+			try {
+				await this.host.stopRoleAgent?.(execId);
+			} catch {}
+		}
+		this.host.emit({
+			type: "notice",
+			level: "info",
+			text: "⏸ 已暂停：当前回合已停止，目标与产物保留。",
+			textEn: "⏸ Paused: the current round stopped; the goal and its artifacts are kept.",
+		});
+	}
+
+	/** 继续已暂停的目标：从被打断的那一轮接着派活（同一个执行者，记忆连续）。 */
+	async resumeGoal(): Promise<void> {
+		const conv = this.host.activeConv();
+		const g = conv.goal;
+		if (!g.goal || !g.paused || !this.host.goalModeEnabled()) return;
+		g.paused = false;
+		g.phase = "executing";
+		g.status = "继续执行…";
+		g.statusEn = "Resuming…";
+		this.emitGoalStatus();
+		this.host.emit({ type: "notice", level: "info", text: "▶ 继续执行。", textEn: "▶ Resumed." });
+		this.startDelegatedLoop(conv, conv.goalGeneration, g.goal);
 	}
 
 	/** Clear the active goal (cancels the review loop AND aborts a running
@@ -1702,6 +1766,7 @@ export class GoalService {
 		goal.status = "";
 		goal.statusEn = "";
 		goal.phase = "idle";
+		goal.paused = false;
 		goal.roles = {};
 		goal.wizard.active = false;
 		goal.wizard.status = "";
@@ -1819,6 +1884,8 @@ export class GoalService {
 		for (;;) {
 			if (!this.isCurrentDelegated(conv, goalGeneration)) return;
 			const g = conv.goal;
+			// 暂停态不派活（pause_goal 会作废代次，这里只兜「暂停中被别处拉起循环」）。
+			if (g.paused) return;
 			// quiesce（服务排空）：中途不再派单 —— 存量回合跑完，下一轮不再派
 			// （设计文档 §4.6；与 prompt/编辑入口「新的拒绝、存量跑完」同口径）。
 			if (this.host.quiesceBlocked()) {
@@ -2033,7 +2100,14 @@ export class GoalService {
 			activity = head;
 			activityEn = head;
 		}
-		g.roles = { ...g.roles, executor: { ...role, streaming, activity, activityEn } };
+		// 执行者 sessionId：任务台据此读 session 文件里的工具调用时间线。
+		let sessionId: string | null = null;
+		try {
+			sessionId = this.host.getConv(execId)?.session?.sessionId ?? null;
+		} catch {
+			sessionId = null;
+		}
+		g.roles = { ...g.roles, executor: { ...role, streaming, activity, activityEn, sessionId } };
 	}
 
 	/** 取样一轮：工作区 diff 指纹 + 执行者会话错误特征（熔断信号独立于 verdict）。 */
@@ -2297,6 +2371,21 @@ export class GoalService {
 		].slice(0, 20);
 	}
 
+	/** 任务台的永久目录（goal-history.jsonl）：created / finished:<kind>。 */
+	private logGoal(conv: GoalConversation, kind: string, verdict?: string, round?: number): void {
+		const g = conv.goal;
+		recordGoalEvent({
+			convId: conv.id,
+			convTitle: conv.title ?? "",
+			goal: g.goal ?? "",
+			kind,
+			phase: g.phase ?? "",
+			round: round ?? g.round ?? 0,
+			verdict: verdict ?? g.verdict ?? "",
+			status: g.status ?? "",
+		});
+	}
+
 	/** 收尾：pass / blocked / exhausted / 异常 → 状态、通知、角色对话清理。 */
 	private async finishDelegated(
 		conv: GoalConversation,
@@ -2308,6 +2397,7 @@ export class GoalService {
 	): Promise<void> {
 		if (!this.isCurrentDelegated(conv, goalGeneration)) return;
 		const g = conv.goal;
+		this.logGoal(conv, `finished:${kind}`, kind === "pass" ? "pass" : kind === "exhausted" ? "fail" : "blocked", round);
 		// 先落历史（此时目标文本还在；pass 分支后面会清掉它）。
 		this.recordHistory(conv, kind === "pass" ? "pass" : kind === "exhausted" ? "fail" : "blocked", round, feedback);
 		if (conv.awaitingVerdict) {
