@@ -645,33 +645,6 @@ export function BarItem({
 		);
 	}
 
-	// 7. 特殊条目：审查者模式
-	if (id === "host:status-delegate") {
-		if (!state?.delegateMode) return null;
-		return (
-			<span
-				className="bar-item status-item delegate-badge bar-item-delegate"
-				title={state.delegateConvId ? t("delegateModeOpenTip") : t("delegateModeBadgeTip")}
-				data-tip={state.delegateConvId ? t("delegateModeOpenTip") : t("delegateModeBadgeTip")}
-				onContextMenu={handleContextMenu}
-				data-bar-item={id}
-			>
-				<span className="bar-item-icon">🔎</span>
-				<span className="bar-item-text">{named(t("delegateModeBadge"))}</span>
-				{state.delegateConvId ? (
-					<button
-						type="button"
-						className="delegate-badge-open"
-						title={t("delegateModeOpenTip")}
-						onClick={() => appSend({ type: "switch_conversation", id: state.delegateConvId as string })}
-					>
-						↗
-					</button>
-				) : null}
-			</span>
-		);
-	}
-
 	// 8. 特殊条目：主机资源占用
 	if (id === "host:host-metrics") {
 		const metrics = chat.hostMetrics;

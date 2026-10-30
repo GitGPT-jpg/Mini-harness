@@ -91,7 +91,6 @@ describe("目标条内置条目改名落地", () => {
 			true,
 		);
 		expect(container.textContent).toContain("MY-SET");
-		expect(container.textContent).toContain("MY-PLAN");
 		act(() => root.unmount());
 		container.remove();
 	});

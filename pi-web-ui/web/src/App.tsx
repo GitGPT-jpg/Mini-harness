@@ -84,7 +84,6 @@ import { RollbackDialog } from "./components/RollbackDialog";
 import { openRollbackDialog } from "./rollback-state";
 import { ToolApprovalDialog } from "./components/ToolApprovalDialog";
 import { TuiOverlayModal } from "./components/TuiOverlayModal";
-import { PlanBoard } from "./components/PlanBoard";
 // 工具定义说明弹窗（工具卡右键 → 「显示工具详细信息」）：状态在 tool-info-state.ts 的模块级 store 里，
 // 这里只挂一份渲染（触发点在消息流里的每张工具卡）。
 import { ToolInfoDialog } from "./components/ToolInfoDialog";
@@ -2537,14 +2536,6 @@ export function App() {
 									}
 								/>
 							)}
-							{/* 任务执行看板 (Plan Mode) */}
-							<PlanBoard
-								plan={
-									chat.activeConversationId && chat.state?.conversationId !== chat.activeConversationId
-										? null
-										: chat.state?.plan
-								}
-							/>
 							<ChatInput
 								composerLeading={uiSlots["composer.leading"]}
 								composerActions={uiSlots["composer.actions"]}

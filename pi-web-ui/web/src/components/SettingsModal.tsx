@@ -4755,15 +4755,6 @@ export function SettingsModal({
 									enabled={settings.goalModeEnabled}
 									onToggle={() => setPartial({ goalModeEnabled: !settings.goalModeEnabled })}
 								/>
-								{/* 审查者模式（会话级，默认关）：开启后本对话只审阅，用户请求由服务端
-								    转给一个常驻落盘执行对话；写类/派发类工具被服务端硬闸门拒。
-								    不是全局设置 → 直接发协议消息，不走 setPartial。 */}
-								<ToggleRow
-									title={t("delegateMode")}
-									tip={`${t("delegateModeDesc")}\n${t("delegateModeOffHint")}`}
-									enabled={chat.state?.delegateMode === true}
-									onToggle={() => appSend({ type: "set_delegate_mode", enabled: !(chat.state?.delegateMode === true) })}
-								/>
 								<textarea
 									className="set-prompt-input"
 									rows={5}

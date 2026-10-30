@@ -580,16 +580,6 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		order: 16,
 		group: "status",
 	},
-	// 审查者模式标识：开启时才画（渲染层看 state.delegateMode），点开执行对话。
-	{
-		id: "host:status-delegate",
-		slot: "bottombar",
-		labelKey: "delegateModeBadge",
-		icon: "eye",
-		kind: "badge",
-		order: 16,
-		group: "status",
-	},
 	{
 		id: "host:host-metrics",
 		slot: "bottombar",

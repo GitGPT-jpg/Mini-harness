@@ -137,17 +137,6 @@ export const GoalBar = memo(function GoalBar({
 		setCollapsed(false);
 	};
 
-	/** 「计划」= 一次性动作，不是开关：开服务端只规划闸门 + 把目标输入直接发出去。
-	 *  闸门本身是会话级且热生效（服务端 `set_plan_mode` 重建提示词 + 挂工具硬闸门），
-	 *  两条消息同一条 WS 按序到达 → 本轮就在闸门内跑。输入为空则只开闸门。 */
-	const runPlan = () => {
-		const trimmed = text.trim();
-		appSend({ type: "set_plan_mode", enabled: true });
-		if (!trimmed) return;
-		appSend({ type: "prompt", text: trimmed });
-		setText("");
-	};
-
 	/** Start the collaborative wizard: AI asks questions to refine the draft
 	 *  into a goal, then auto-sets it. Reuses the reviewer-model picker as the
 	 *  optional wizard model. */
@@ -172,7 +161,6 @@ export const GoalBar = memo(function GoalBar({
 		"host:goal-pill",
 		"host:goal-set",
 		"host:goal-wizard",
-		"host:goal-plan",
 		"host:goal-lock",
 		"host:goal-collapse",
 		"host:goal-model",
@@ -220,19 +208,6 @@ export const GoalBar = memo(function GoalBar({
 				onClick={startWizard}
 			>
 				{goalLabel("host:goal-wizard", t("goalWizardBtn"))}
-			</button>
-		),
-		// 计划：与提炼/发送同列的一次性动作按钮（无常亮态、无 aria-pressed ——
-		// 开关语义已删；「退出计划」的唯一出口是计划看板里的「开始实施」）。底座不支持计划模式时隐藏。
-		"host:goal-plan": !capabilities.planMode ? null : (
-			<button
-				type="button"
-				className="goalbar-btn action plan"
-				disabled={!text.trim()}
-				title={t("planActionTip")}
-				onClick={runPlan}
-			>
-				{goalLabel("host:goal-plan", t("planActionBtn"))}
 			</button>
 		),
 		"host:goal-lock": (
@@ -533,7 +508,7 @@ export const GoalBar = memo(function GoalBar({
 					}}
 				/>
 				{renderMergedToolbar(
-					goalZone(["host:goal-set", "host:goal-wizard", "host:goal-plan", "host:goal-lock", "host:goal-collapse"]),
+					goalZone(["host:goal-set", "host:goal-wizard", "host:goal-lock", "host:goal-collapse"]),
 					goalHostNodes,
 					onUiAction,
 				)}
