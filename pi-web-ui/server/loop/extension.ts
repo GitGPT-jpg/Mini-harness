@@ -11,9 +11,14 @@
  *     不再以 reviewer-error 停止；
  *  4) loop_start 支持 taskId（外部批量/编排显式关联用），落进运行状态。
  *
+ * D-12（见 HANDOFF §13.1）：完成态可信度 acceptance（评审出错不算完成，可重试评审 /
+ * 按代码验证收下）；服务端结构化启动 createLoopRun（先建 run 再让模型干活，模型准备
+ * 挪到 before_agent_start）。
+ *
  * 状态落盘在仓库之外（默认 ~/.mini-harness/runs/<id>/state.json + journal.jsonl），
  * 进程重启后可识别孤立运行（alive 判定在服务层）。
  */
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -39,6 +44,14 @@ type LoopCtx = {
 	cwd?: string;
 	ui?: { notify?: (message: string, type?: string) => void } | null;
 };
+
+/**
+ * 完成态可信度（D-12-1），只在 status=done 时有值：
+ *  - passed：代码验证 + 模型评审都过（LLM 模式：评审通过）；
+ *  - passed-validator-only：只有代码验证（没开评审 / 没有可用评审模型，或评审掉线后用户按代码验证收下）；
+ *  - self-declared：LLM 模式关了评审，按模型自述完成。
+ */
+export type LoopAcceptance = "passed" | "passed-validator-only" | "self-declared";
 
 /** 运行状态（state.json 的结构；字段与旧运行时保持兼容）。 */
 export interface LoopState {
@@ -77,6 +90,19 @@ export interface LoopState {
 	createdAt: string;
 	updatedAt?: string;
 	history: Array<{ round: number; verdict: string; code: number | null; at: string; evidence: string | null }>;
+	/** 完成态可信度（见 LoopAcceptance）；未完成 = null。旧 state.json 没有该字段，读入按 null。 */
+	acceptance: LoopAcceptance | null;
+	/** 是否启用模型评审（默认 true）。旧 state.json 没有该字段，读入按「有没有评审模型」推断。 */
+	useReviewer: boolean;
+	/** 用户写的验收标准（自然语言），进规划 / 评审提示词与状态块。 */
+	criteria?: string;
+	/** 服务端建的 run 还没做模型准备（D-12-2）：before_agent_start 做完家族解析与规划即清掉。 */
+	setupPending?: boolean;
+	/** 模型准备失败原因（stopReason=setup-error 时有值）。 */
+	setupError?: string;
+	/** 请求的规划 / 评审模型（provider/id 或 id；缺省 = 自动挑选），模型准备时解析。 */
+	plannerSpec?: string;
+	reviewerSpec?: string;
 }
 
 // ---------- 事件上报（服务层接线用：run 状态变化 / 启动请求失败） ----------
@@ -105,8 +131,8 @@ function reportEvent(e: LoopEvent) {
 	} catch {}
 }
 
-// 挂起的启动请求：服务层在把启动提示词发进会话**之前**登记（先有记录再有执行），
-// loop_start 成功即消费；回合结束仍是挂起 → 上报 request-failed。
+// 挂起的启动请求：登记后 loop_start 成功即消费；回合结束仍是挂起 → 上报 request-failed。
+// D-12-2 起服务层改为 createLoopRun 直接建 run，不再登记；这条路保留给仍走「提示词→loop_start」的调用方。
 const pendingRequests = new Map<string, { taskId: string; goal: string; at: string }>();
 
 /** 服务层登记挂起启动请求（按 sessionId；重复登记覆盖旧的）。 */
@@ -150,10 +176,17 @@ function newRunId() {
 
 function loadState(runId: string): LoopState | null {
 	try {
-		return JSON.parse(fs.readFileSync(statePath(runId), "utf8")) as LoopState;
+		return normalizeState(JSON.parse(fs.readFileSync(statePath(runId), "utf8")) as LoopState);
 	} catch {
 		return null;
 	}
+}
+
+/** 旧 state.json（D-12 之前）没有 acceptance / useReviewer：前者按 null，后者按「有没有评审模型」推断。 */
+function normalizeState(st: LoopState): LoopState {
+	if (st.acceptance === undefined) st.acceptance = null;
+	if (typeof st.useReviewer !== "boolean") st.useReviewer = !!st.reviewerModel;
+	return st;
 }
 
 function saveState(st: LoopState) {
@@ -208,10 +241,32 @@ function real(p: string): string {
  * 恢复必须显式绑定（服务层按 runId 重开会话，sessionId 天然一致）。
  */
 function findActiveRun(ctx: LoopCtx): LoopState | null {
-	const sid = sessionIdOf(ctx);
+	return activeRunOf(sessionIdOf(ctx));
+}
+
+/** 按 sessionId 精确找活跃 run（空 sid 不匹配任何 run；工具调用与服务端建 run 共用）。 */
+function activeRunOf(sid: string): LoopState | null {
 	if (!sid) return null;
 	const runs = listRuns().filter((r) => r.status === "active" && ACTIVE_STAGES.has(r.stage));
 	return runs.find((r) => r.sessionId === sid) || null;
+}
+
+/** 评审结论的对外摘要（快照 conv.loop 与运行列表共用）：最多 5 条理由，每条不超过 300 字。 */
+export function reviewBrief(review: LoopState["lastReview"]): { verdict: string; reasons: string[] } | null {
+	if (!review) return null;
+	return {
+		verdict: String(review.verdict || ""),
+		reasons: (review.reasons || []).slice(0, 5).map((r) => {
+			const s = String(r);
+			return s.length > 300 ? `${s.slice(0, 299)}…` : s;
+		}),
+	};
+}
+
+/** 本 run 的模型评审是否生效：要求开启，且已解析出评审模型（模型准备完成前按请求值算）。 */
+export function reviewerEnabledOf(st: LoopState): boolean {
+	if (st.useReviewer === false) return false;
+	return st.setupPending === true || !!st.reviewerModel;
 }
 
 function tail(s: unknown, n: number) {
@@ -313,6 +368,61 @@ function mainModel(ctx: LoopCtx) {
 	}
 }
 
+type RegModel = { provider?: string; id: string };
+type RunModels = { main: RegModel | null; mainFam: string; planner: RegModel | null; reviewer: RegModel | null };
+
+/**
+ * 规划 / 评审模型解析（loop_start 与服务端建的 run 共用）：planner / reviewer 必须与主模型、
+ * 彼此都不同家族；没指定就按家族偏好自动挑。纯解析，不落盘；失败返回给用户看的原因。
+ */
+function resolveRunModels(
+	ctx: LoopCtx,
+	req: { plannerSpec: string; reviewerSpec: string; useReviewer: boolean },
+): ({ ok: true } & RunModels) | { ok: false; error: string } {
+	const main = mainModel(ctx);
+	const mainFam = main ? familyOf(main.id) : "unknown";
+	let planner: RegModel | null = req.plannerSpec ? resolveModel(ctx, req.plannerSpec) : null;
+	let reviewer: RegModel | null = req.reviewerSpec ? resolveModel(ctx, req.reviewerSpec) : null;
+	if (req.plannerSpec && !planner) {
+		return { ok: false, error: `无法解析 plannerModel「${req.plannerSpec}」。` };
+	}
+	const used = new Set([mainFam]);
+	if (planner) {
+		const f = familyOf(planner.id);
+		if (used.has(f)) {
+			return {
+				ok: false,
+				error: `planner 家族冲突：主模型 ${main?.id || "?"} 属于 ${mainFam}，planner ${planner.id} 也属于 ${f}。请选择不同家族的模型。`,
+			};
+		}
+		used.add(f);
+	} else {
+		planner = pickModelByFamily(ctx, used);
+		if (planner) used.add(familyOf(planner.id));
+	}
+	if (req.useReviewer) {
+		if (req.reviewerSpec && !reviewer) {
+			return { ok: false, error: `无法解析 reviewerModel「${req.reviewerSpec}」。` };
+		}
+		if (reviewer) {
+			const f = familyOf(reviewer.id);
+			if (used.has(f)) {
+				return {
+					ok: false,
+					error:
+						"reviewer 家族冲突：必须与主模型、planner 都不同家族。" +
+						`当前已用 ${[...used].join("/")}，reviewer ${reviewer.id} 属于 ${f}。`,
+				};
+			}
+		} else {
+			reviewer = pickModelByFamily(ctx, used);
+		}
+	} else {
+		reviewer = null;
+	}
+	return { ok: true, main, mainFam, planner, reviewer };
+}
+
 // ---------- validator ----------
 
 function resolveValidator(st: LoopState) {
@@ -370,6 +480,7 @@ function stateBlock(st: LoopState) {
 		`runId: ${st.runId}`,
 		`mode: ${st.mode} | stage: ${st.stage} | round: ${st.round}/${st.maxRounds}`,
 		`goal: ${st.goal}`,
+		st.criteria ? `criteria（用户给定的验收标准）: ${tail(st.criteria, 800)}` : "",
 		st.plannerModel ? `planner: ${st.plannerModel.family}/${st.plannerModel.id}` : "",
 		st.reviewerModel ? `reviewer: ${st.reviewerModel.family}/${st.reviewerModel.id}` : "",
 		st.plan ? `plan: ${tail(st.plan, 600)}` : "",
@@ -381,11 +492,22 @@ function stateBlock(st: LoopState) {
 		st.lastEvidence ? `last_evidence_tail:\n${tail(st.lastEvidence, 1600)}` : "",
 		"规则：",
 		"- 完成本轮工作后调用 loop_done(summary) 声明完成；运行时会在本轮结束时自动执行 validator。",
-		"- 不要自行宣布完成；只有 validator 通过（且 reviewer 不否决）才算完成。",
+		"- 不要自行宣布完成；只有 validator 通过（且开了评审时 reviewer 通过）才算完成。",
 		"- 若验证失败：按证据修复，不要重复已完成的步骤，也不要向用户提问。",
 		"</mini_harness_loop>",
 	];
 	return lines.filter(Boolean).join("\n");
+}
+
+/** run 没启动起来（模型准备失败 / 准备期间被停止）时注入的状态块：让模型别再开工。 */
+function setupFailedBlock(st: LoopState, reason: string) {
+	return [
+		"<mini_harness_loop>",
+		`runId: ${st.runId}`,
+		`status: stopped | reason: ${reason}`,
+		"这个受控运行没有启动起来：不要开始这项工作，也不要调用 loop_start 另起运行；把上面的原因原样告诉用户，然后结束本轮。",
+		"</mini_harness_loop>",
+	].join("\n");
 }
 
 function nextRoundPrompt(st: LoopState, v: { code?: number | null; output?: string } | null, feedback: string) {
@@ -484,7 +606,7 @@ function extractJson(text: unknown): Record<string, unknown> | null {
 }
 
 async function runReview(ctx: LoopCtx, st: LoopState, v: { code?: number | null; output?: string }, pi: ExtensionAPI) {
-	if (!st.reviewerModel) {
+	if (!st.reviewerModel || st.useReviewer === false) {
 		return { verdict: "skip", reasons: [] as string[], diff: "" };
 	}
 	const model = st.reviewerModel.provider
@@ -502,6 +624,7 @@ async function runReview(ctx: LoopCtx, st: LoopState, v: { code?: number | null;
 		"证据不足、或与目标/验收条件不符时，必须输出 block。";
 	const user = [
 		`目标：${st.goal}`,
+		st.criteria ? `验收标准（用户给定）：\n${tail(st.criteria, 1500)}` : "",
 		st.plannerOutput ? `规划与验收条件：\n${tail(st.plannerOutput, 2000)}` : "",
 		st.plan ? `执行计划：\n${tail(st.plan, 1200)}` : "",
 		st.summary ? `执行者自述：\n${tail(st.summary, 1200)}` : "",
@@ -555,6 +678,12 @@ async function runReview(ctx: LoopCtx, st: LoopState, v: { code?: number | null;
 function stillCurrent(runId: string, epoch: number) {
 	const fresh = loadState(runId);
 	return !!fresh && fresh.status === "active" && fresh.epoch === epoch;
+}
+
+/** 完成后的收尾（提交 worktree）只核代次：此时 status 已是 done，不能再要求 active。 */
+function sameEpoch(runId: string, epoch: number) {
+	const fresh = loadState(runId);
+	return !!fresh && fresh.epoch === epoch;
 }
 
 function advanceOrStop(
@@ -615,24 +744,29 @@ async function handleVerdict(
 			return;
 		}
 		if (review.verdict === "error") {
-			// reviewer 模型不可用（404/过载/输出非法）——这是评审层故障，不是实质性否决。
-			// validator 才是硬门禁：validator 已通过即视为达成，降级为 validator-only，但要显式告警。
-			st.stage = "done";
-			st.status = "done";
+			// D-12-1：reviewer 掉线（404/超时/输出非法）不算完成——停在 review-error 等用户
+			// 「重试评审」（reactivateForReview）或「按代码验证收下」（acceptRunValidatorOnly）。
+			// lastVerdict 仍是 validator 的 pass；不提交 worktree（还没被收下）。
+			st.stage = "review-error";
+			st.status = "stopped";
+			st.stopReason = "reviewer-error";
+			st.epoch += 1;
 			saveState(st);
-			journal(st, "reviewer-degraded", { code: v.code, reasons: review.reasons });
+			journal(st, "reviewer-error", { mode: "code", code: v.code, reasons: review.reasons, epoch: st.epoch });
 			notify(
 				ctx,
-				`⚠️ mini-harness：validator 通过，但 reviewer 不可用（第 ${st.round} 轮），` +
-					`按 validator-only 判定完成。${(review.reasons || []).join("; ")}`,
+				`⚠️ mini-harness：第 ${st.round} 轮代码验证已通过，但模型评审出错，未判定完成；` +
+					`可重试评审或按代码验证收下。${(review.reasons || []).join("; ")}`,
 				"warning",
 			);
 			return;
 		}
+		// pass = 代码验证 + 模型评审都过；skip = 没开评审 / 没有可用评审模型，只有代码验证
 		st.stage = "done";
 		st.status = "done";
+		st.acceptance = review.verdict === "pass" ? "passed" : "passed-validator-only";
 		saveState(st);
-		journal(st, "validate-pass", { code: v.code, review: review.verdict });
+		journal(st, "validate-pass", { code: v.code, review: review.verdict, acceptance: st.acceptance });
 		if (st.worktreeDir && st.worktreeBranch && !st.worktreeCommitted) {
 			try {
 				await pi.exec("git", ["-C", st.worktreeDir, "add", "-A"], { cwd: st.worktreeDir, timeout: 60000 });
@@ -646,7 +780,7 @@ async function handleVerdict(
 						timeout: 60000,
 					});
 				}
-				if (!stillCurrent(st.runId, epoch)) {
+				if (!sameEpoch(st.runId, epoch)) {
 					journal(st, "late-callback-dropped", { at: "handleVerdict/worktree", epoch });
 					return;
 				}
@@ -660,7 +794,7 @@ async function handleVerdict(
 		notify(
 			ctx,
 			`✅ mini-harness：第 ${st.round} 轮验证通过` +
-				`${review.verdict === "skip" ? "" : `（reviewer ${review.verdict}）`}，目标达成。`,
+				`${review.verdict === "skip" ? "（仅代码验证，未经模型评审）" : `（reviewer ${review.verdict}）`}，目标达成。`,
 			"info",
 		);
 		return;
@@ -701,8 +835,9 @@ async function handleLlmVerdict(pi: ExtensionAPI, ctx: LoopCtx, st: LoopState) {
 	if (review.verdict === "pass") {
 		st.stage = "done";
 		st.status = "done";
+		st.acceptance = "passed";
 		saveState(st);
-		journal(st, "validate-pass", { mode: "llm", review: review.verdict });
+		journal(st, "validate-pass", { mode: "llm", review: review.verdict, acceptance: st.acceptance });
 		notify(ctx, "✅ mini-harness（LLM loop）：reviewer 判定达成。", "info");
 	} else if (review.verdict === "block") {
 		if (st.round < st.maxRounds) {
@@ -732,6 +867,7 @@ async function handleLlmVerdict(pi: ExtensionAPI, ctx: LoopCtx, st: LoopState) {
 		st.lastVerdict = "self-declared";
 		st.stage = "done";
 		st.status = "done";
+		st.acceptance = "self-declared";
 		saveState(st);
 		journal(st, "llm-self-declared", {});
 		notify(ctx, "✅ mini-harness（LLM loop）：reviewer 已关闭，按模型自述完成（self-declared）。", "info");
@@ -799,6 +935,221 @@ function buildTimelineText(st: LoopState) {
 	);
 }
 
+// ---------- 运行创建与模型准备（D-12-2） ----------
+
+/** createLoopRun 的入参（服务端 startLoop 与 loop_start 工具共用）。 */
+export interface CreateLoopRunInput {
+	sessionId: string;
+	cwd: string;
+	goal: string;
+	criteria?: string;
+	validateCmd?: string;
+	mode?: "code" | "llm";
+	maxRounds?: number;
+	useReviewer?: boolean;
+	plannerModel?: string;
+	reviewerModel?: string;
+	worktree?: boolean;
+	artifactRoots?: string[];
+	taskId?: string;
+	harnessRoot?: string;
+	/** 是否自动验证并自动下一轮（loop_start 的 auto 参数，默认 true）。 */
+	auto?: boolean;
+	/** journal 里记谁建的 run：server = 界面启动（默认），tool = 模型自己调 loop_start。 */
+	source?: "server" | "tool";
+}
+
+function gitSync(args: string[], cwd: string, timeout: number): string {
+	return execFileSync("git", args, { cwd, timeout, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+}
+
+/**
+ * 建 run，只做文件与 git 操作、不调模型：校验 → runId → 可选 worktree → 落盘 state.json
+ * （绑定 sessionId、stage=intake、setupPending=true）→ journal start。同会话已有活跃 run 时拒绝。
+ * 家族解析与规划留给 setupRun（服务端建的 run 在 before_agent_start 里做）。
+ * saveState 会上报 run-state 事件，界面立刻能看到这个 run。
+ */
+export function createLoopRun(
+	input: CreateLoopRunInput,
+): { ok: true; runId: string; st: LoopState } | { ok: false; error: string } {
+	const goal = String(input.goal ?? "").trim();
+	if (!goal) return { ok: false, error: "goal 不能为空" };
+	const sessionId = String(input.sessionId ?? "").trim();
+	if (!sessionId) return { ok: false, error: "缺少 sessionId，run 无法绑定会话" };
+	const existing = activeRunOf(sessionId);
+	if (existing) return { ok: false, error: `当前会话已有运行中的任务 ${existing.runId}` };
+
+	const runId = newRunId();
+	const maxRounds = Math.max(1, Math.min(20, Number(input.maxRounds) || DEFAULT_MAX_ROUNDS));
+	const baseWorkspace = real(input.cwd || process.cwd());
+	// worktree 隔离：可选，在 git 仓库里开一个独立 worktree，避免并行任务互相污染
+	let workspace = baseWorkspace;
+	let worktreeDir: string | null = null;
+	let worktreeBranch: string | null = null;
+	if (input.worktree) {
+		try {
+			const inside = gitSync(["-C", baseWorkspace, "rev-parse", "--is-inside-work-tree"], baseWorkspace, 15000);
+			if (inside.trim() === "true") {
+				const dir = path.join(ROOT, runId, "worktree");
+				const branch = `mini-harness/${runId}`;
+				gitSync(["-C", baseWorkspace, "worktree", "add", "-b", branch, dir], baseWorkspace, 60000);
+				worktreeDir = dir;
+				worktreeBranch = branch;
+				workspace = real(dir);
+			}
+		} catch {
+			// 不是 git 仓库 / worktree 建不出来：照旧在原工作区执行
+		}
+	}
+	const criteria = String(input.criteria ?? "").trim();
+	const plannerSpec = String(input.plannerModel ?? "").trim();
+	const reviewerSpec = String(input.reviewerModel ?? "").trim();
+	const st: LoopState = {
+		runId,
+		taskId: input.taskId ? String(input.taskId) : null,
+		goal,
+		workspace,
+		baseWorkspace,
+		worktreeDir,
+		worktreeBranch,
+		worktreeCommitted: false,
+		harnessRoot: input.harnessRoot || null,
+		artifactRoots: (input.artifactRoots ?? [])
+			.map((x) => String(x).trim())
+			.filter(Boolean)
+			.map((x) => real(x)),
+		validateCmd: String(input.validateCmd ?? "").trim() || null,
+		maxRounds,
+		auto: input.auto !== false,
+		mode: input.mode === "llm" ? "llm" : "code",
+		round: 1,
+		stage: "intake",
+		status: "active",
+		epoch: 0,
+		sessionId,
+		mainModel: null,
+		plannerModel: null,
+		reviewerModel: null,
+		plannerOutput: "",
+		lastReview: null,
+		plan: "",
+		summary: "",
+		lastVerdict: null,
+		lastCode: null,
+		lastEvidence: "",
+		validatedRound: 0,
+		createdAt: now(),
+		history: [],
+		acceptance: null,
+		useReviewer: input.useReviewer !== false,
+		...(criteria ? { criteria } : {}),
+		setupPending: true,
+		...(plannerSpec ? { plannerSpec } : {}),
+		...(reviewerSpec ? { reviewerSpec } : {}),
+	};
+	saveState(st);
+	journal(st, "start", {
+		source: input.source ?? "server",
+		goal,
+		taskId: st.taskId,
+		mode: st.mode,
+		useReviewer: st.useReviewer,
+		worktree: worktreeBranch,
+	});
+	return { ok: true, runId, st };
+}
+
+function plannerPrompt(st: LoopState) {
+	return [
+		`目标：${st.goal}`,
+		st.criteria ? `验收标准（用户给定）：${st.criteria}` : "",
+		`工作区：${st.workspace}`,
+		st.validateCmd ? `validator：${st.validateCmd}` : "",
+		st.mode === "llm" ? "（LLM loop：无代码 validator，验收条件由 reviewer 判定）" : "",
+		"请输出：1) 拆解步骤；2) 验收条件（明确文件/命令/指标，能被 validator 或人工直接核验）；3) 风险与需要人工确认的点。",
+	]
+		.filter(Boolean)
+		.join("\n");
+}
+
+/** 模型准备失败：stopped / setup-error（epoch+1，在途回调全部失效），记下原因并告警。 */
+function failSetup(ctx: LoopCtx, st: LoopState, error: string) {
+	st.status = "stopped";
+	st.stage = "stopped";
+	st.stopReason = "setup-error";
+	st.setupError = error;
+	st.setupPending = false;
+	st.epoch += 1;
+	saveState(st);
+	journal(st, "setup-error", { error, epoch: st.epoch });
+	notify(ctx, `⚠️ mini-harness：任务 ${st.runId} 没启动起来：${error}`, "warning");
+}
+
+/**
+ * 模型准备（loop_start 与 before_agent_start 共用）：家族解析（loop_start 传入已解析的结果）→
+ * 落盘主/规划/评审模型 → planner 规划（失败不阻塞，只记录）→ 清 setupPending、stage=plan。
+ * 解析失败 → failSetup。planner 的 await 前后核对代次：准备期间被停止的 run 不得被复活。
+ */
+async function setupRun(
+	ctx: LoopCtx,
+	st: LoopState,
+	resolved?: RunModels,
+): Promise<{ ok: true; plannerNote: string } | { ok: false; error: string }> {
+	let models: RunModels;
+	if (resolved) {
+		models = resolved;
+	} else {
+		const r = resolveRunModels(ctx, {
+			plannerSpec: st.plannerSpec || "",
+			reviewerSpec: st.reviewerSpec || "",
+			useReviewer: st.useReviewer !== false,
+		});
+		if (!r.ok) {
+			failSetup(ctx, st, r.error);
+			return { ok: false, error: r.error };
+		}
+		models = r;
+	}
+	st.mainModel = modelBrief(models.main);
+	st.plannerModel = modelBrief(models.planner);
+	st.reviewerModel = modelBrief(models.reviewer);
+	saveState(st);
+	journal(st, "setup", { main: st.mainModel, planner: st.plannerModel, reviewer: st.reviewerModel });
+
+	let plannerNote = "";
+	if (models.planner) {
+		const epoch = st.epoch;
+		let plan = "";
+		let error = "";
+		try {
+			plan = await callModel(
+				ctx,
+				models.planner,
+				"你是任务规划者。只输出可执行的计划与机器可验证的验收条件，不要调用工具、不要臆测环境。",
+				plannerPrompt(st),
+			);
+		} catch (e) {
+			error = String((e as Error)?.message || e);
+		}
+		if (!stillCurrent(st.runId, epoch)) {
+			journal(st, "late-callback-dropped", { at: "setupRun/planner", epoch });
+			return { ok: false, error: "模型准备期间运行已被停止" };
+		}
+		if (error) {
+			plannerNote = `\n⚠️ planner 调用失败（不影响运行）：${error}`;
+			journal(st, "planner-error", { error });
+		} else {
+			st.plannerOutput = plan;
+			journal(st, "planner", { family: st.plannerModel?.family, chars: plan.length });
+			plannerNote = `\nplanner（${st.plannerModel?.family}/${st.plannerModel?.id}）已产出验收条件，见状态块。`;
+		}
+	}
+	st.setupPending = false;
+	st.stage = "plan";
+	saveState(st);
+	return { ok: true, plannerNote };
+}
+
 // ---------- 扩展入口 ----------
 
 /**
@@ -809,6 +1160,8 @@ function buildTimelineText(st: LoopState) {
 export function createLoopExtension() {
 	return (pi: ExtensionAPI): void => {
 		const busy = new Set<string>();
+		// 模型准备在途的 runId（before_agent_start 不重复做同一个 run 的家族解析与规划）
+		const setupBusy = new Set<string>();
 
 		// ---- 工具：loop_start ----
 		pi.registerTool({
@@ -816,7 +1169,8 @@ export function createLoopExtension() {
 			label: "Loop Start",
 			description:
 				"启动一个受 validator 约束的任务运行（状态机 intake→plan→run→validate）。" +
-				"validator 不通过会自动进入下一轮。状态落盘，可断点续跑。",
+				"validator 不通过会自动进入下一轮。状态落盘，可断点续跑。" +
+				"当前会话已有活跃运行时直接返回该运行，不重复创建。",
 			parameters: Type.Object({
 				goal: Type.String({ description: "要达成的目标（写清可验证的完成条件）" }),
 				validateCmd: Type.Optional(
@@ -860,173 +1214,81 @@ export function createLoopExtension() {
 			}),
 			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 				const c = ctx as unknown as LoopCtx;
-				// 家族约束：planner / reviewer 必须与主模型、彼此都不同家族
-				const main = mainModel(c);
-				const mainFam = main ? familyOf(main.id) : "unknown";
+				// D-12-2：同会话已有活跃 run（多半是服务端点启动时建好的）→ 直接返回它，不重复创建
+				const existing = findActiveRun(c);
+				if (existing) {
+					return {
+						content: [
+							{
+								type: "text",
+								text:
+									`当前会话已有运行中的任务 ${existing.runId}（mode=${existing.mode}，stage=${existing.stage}，` +
+									`第 ${existing.round}/${existing.maxRounds} 轮），不要再调用 loop_start。\n` +
+									(existing.stage === "intake" || existing.stage === "plan"
+										? "下一步：调用 loop_plan 写出计划，然后直接修改工作区，完成时调用 loop_done(summary)。"
+										: "按状态块继续当前这一轮，完成时调用 loop_done(summary)。"),
+							},
+						],
+						details: {
+							runId: existing.runId,
+							taskId: existing.taskId,
+							mode: existing.mode,
+							stage: existing.stage,
+							round: existing.round,
+							existing: true,
+						},
+					};
+				}
+				// 家族约束先校验：冲突 / 无法解析照旧直接报错，不建 run
 				const plannerSpec = params.plannerModel ? String(params.plannerModel) : "";
 				const reviewerSpec = params.reviewerModel ? String(params.reviewerModel) : "";
-				let planner = plannerSpec ? resolveModel(c, plannerSpec) : null;
-				let reviewer = reviewerSpec ? resolveModel(c, reviewerSpec) : null;
-
-				if (plannerSpec && !planner) {
-					return { content: [{ type: "text", text: `无法解析 plannerModel「${plannerSpec}」。` }], details: {} };
+				const useReviewer = params.useReviewer !== false;
+				const models = resolveRunModels(c, { plannerSpec, reviewerSpec, useReviewer });
+				if (!models.ok) {
+					return { content: [{ type: "text", text: models.error }], details: {} };
 				}
-				const used = new Set([mainFam]);
-				if (planner) {
-					const f = familyOf(planner.id);
-					if (used.has(f)) {
-						return {
-							content: [
-								{
-									type: "text",
-									text: `planner 家族冲突：主模型 ${main?.id || "?"} 属于 ${mainFam}，planner ${planner.id} 也属于 ${f}。请选择不同家族的模型。`,
-								},
-							],
-							details: {},
-						};
-					}
-					used.add(f);
-				} else {
-					planner = pickModelByFamily(c, used);
-					if (planner) used.add(familyOf(planner.id));
-				}
-
-				if (params.useReviewer !== false) {
-					if (reviewerSpec && !reviewer) {
-						return { content: [{ type: "text", text: `无法解析 reviewerModel「${reviewerSpec}」。` }], details: {} };
-					}
-					if (reviewer) {
-						const f = familyOf(reviewer.id);
-						if (used.has(f)) {
-							return {
-								content: [
-									{
-										type: "text",
-										text:
-											"reviewer 家族冲突：必须与主模型、planner 都不同家族。" +
-											`当前已用 ${[...used].join("/")}，reviewer ${reviewer.id} 属于 ${f}。`,
-									},
-								],
-								details: {},
-							};
-						}
-					} else {
-						reviewer = pickModelByFamily(c, used);
-					}
-				} else {
-					reviewer = null;
-				}
-
-				const runId = newRunId();
-				const maxRounds = Math.max(1, Math.min(20, Number(params.maxRounds) || DEFAULT_MAX_ROUNDS));
-
-				// worktree 隔离：可选，在 git 仓库里开一个独立 worktree，避免并行任务互相污染
-				let baseWorkspace = real(c?.cwd || process.cwd());
-				let worktreeDir: string | null = null;
-				let worktreeBranch: string | null = null;
-				if (params.worktree) {
-					try {
-						const inside = await pi.exec("git", ["-C", baseWorkspace, "rev-parse", "--is-inside-work-tree"], {
-							cwd: baseWorkspace,
-							timeout: 15000,
-						});
-						if ((inside.stdout || "").trim() === "true") {
-							worktreeDir = path.join(ROOT, runId, "worktree");
-							worktreeBranch = `mini-harness/${runId}`;
-							const add = await pi.exec(
-								"git",
-								["-C", baseWorkspace, "worktree", "add", "-b", worktreeBranch, worktreeDir],
-								{ cwd: baseWorkspace, timeout: 60000 },
-							);
-							if (add.code === 0) baseWorkspace = real(worktreeDir);
-							else {
-								worktreeDir = null;
-								worktreeBranch = null;
-							}
-						}
-					} catch {}
-				}
-
-				const st: LoopState = {
-					runId,
-					taskId: params.taskId ? String(params.taskId) : null,
-					goal: String(params.goal || "").trim(),
-					workspace: baseWorkspace,
-					baseWorkspace: real(c?.cwd || process.cwd()),
-					worktreeDir,
-					worktreeBranch,
-					worktreeCommitted: false,
-					harnessRoot: params.harnessRoot || null,
-					artifactRoots: Array.isArray(params.artifactRoots) ? params.artifactRoots.map((x) => real(String(x))) : [],
-					validateCmd: params.validateCmd || null,
-					maxRounds,
-					auto: params.auto !== false,
-					mode: params.mode === "llm" ? "llm" : "code",
-					round: 1,
-					stage: "intake",
-					status: "active",
-					epoch: 0,
+				const created = createLoopRun({
 					sessionId: sessionIdOf(c),
-					mainModel: modelBrief(main),
-					plannerModel: modelBrief(planner),
-					reviewerModel: modelBrief(reviewer),
-					plannerOutput: "",
-					lastReview: null,
-					plan: "",
-					summary: "",
-					lastVerdict: null,
-					lastCode: null,
-					lastEvidence: "",
-					validatedRound: 0,
-					createdAt: now(),
-					history: [],
-				};
-				saveState(st);
-				journal(st, "start", {
-					goal: st.goal,
-					taskId: st.taskId,
-					mode: st.mode,
-					main: st.mainModel,
-					planner: st.plannerModel,
-					reviewer: st.reviewerModel,
+					cwd: c?.cwd || process.cwd(),
+					goal: String(params.goal || ""),
+					validateCmd: params.validateCmd,
+					harnessRoot: params.harnessRoot,
+					artifactRoots: Array.isArray(params.artifactRoots) ? params.artifactRoots : [],
+					maxRounds: params.maxRounds,
+					auto: params.auto,
+					plannerModel: plannerSpec,
+					reviewerModel: reviewerSpec,
+					useReviewer,
+					worktree: params.worktree,
+					mode: params.mode === "llm" ? "llm" : "code",
+					taskId: params.taskId,
+					source: "tool",
 				});
+				if (!created.ok) {
+					return { content: [{ type: "text", text: created.error }], details: {} };
+				}
+				const st = created.st;
+				const runId = st.runId;
 				// run 已创建：消费服务层登记的挂起启动请求（该回合结束不再上报 request-failed）
 				takePendingLoopRequest(st.sessionId);
-
-				// 规划：不同家族的 planner 产出可验证的验收条件（失败不阻塞运行，只记录）
-				let plannerNote = "";
-				if (planner) {
-					try {
-						const plan = await callModel(
-							c,
-							planner,
-							"你是任务规划者。只输出可执行的计划与机器可验证的验收条件，不要调用工具、不要臆测环境。",
-							[
-								`目标：${st.goal}`,
-								`工作区：${st.workspace}`,
-								st.validateCmd ? `validator：${st.validateCmd}` : "",
-								st.mode === "llm" ? "（LLM loop：无代码 validator，验收条件由 reviewer 判定）" : "",
-								"请输出：1) 拆解步骤；2) 验收条件（明确文件/命令/指标，能被 validator 或人工直接核验）；3) 风险与需要人工确认的点。",
-							]
-								.filter(Boolean)
-								.join("\n"),
-						);
-						st.plannerOutput = plan;
-						saveState(st);
-						journal(st, "planner", { family: st.plannerModel?.family, chars: plan.length });
-						plannerNote = `\nplanner（${st.plannerModel?.family}/${st.plannerModel?.id}）已产出验收条件，见状态块。`;
-					} catch (e) {
-						plannerNote = `\n⚠️ planner 调用失败（不影响运行）：${String((e as Error)?.message || e)}`;
-						journal(st, "planner-error", { error: String((e as Error)?.message || e) });
-					}
+				// 模型准备（与服务端建的 run 共用 setupRun）：落盘模型 + planner 规划，stage → plan
+				const setup = await setupRun(c, st, models);
+				if (!setup.ok) {
+					return {
+						content: [{ type: "text", text: `运行 ${runId} 没有启动起来：${setup.error}` }],
+						details: { runId, taskId: st.taskId, mode: st.mode, stage: st.stage, round: st.round },
+					};
 				}
+				const plannerNote = setup.plannerNote;
+				const mainFam = models.mainFam;
+				const maxRounds = st.maxRounds;
 
 				return {
 					content: [
 						{
 							type: "text",
 							text:
-								`已创建运行 ${runId}（mode=${st.mode}，stage=intake，最多 ${maxRounds} 轮）。\n` +
+								`已创建运行 ${runId}（mode=${st.mode}，stage=${st.stage}，最多 ${maxRounds} 轮）。\n` +
 								`主模型家族：${mainFam}；` +
 								`planner：${st.plannerModel ? `${st.plannerModel.family}/${st.plannerModel.id}` : "(无)"}；` +
 								`reviewer：${st.reviewerModel ? `${st.reviewerModel.family}/${st.reviewerModel.id}` : "(无)"}。\n` +
@@ -1235,9 +1497,31 @@ export function createLoopExtension() {
 			if ((event as { messageType?: string })?.messageType === "custom") {
 				return;
 			}
-			const st = findActiveRun(ctx as unknown as LoopCtx);
+			const c = ctx as unknown as LoopCtx;
+			let st = findActiveRun(c);
 			if (!st || st.status !== "active") {
 				return;
+			}
+			// D-12-2：服务端建的 run 在第一次开跑前做模型准备（家族解析 + 规划，原 loop_start 的逻辑）
+			if (st.setupPending && !setupBusy.has(st.runId)) {
+				const runId = st.runId;
+				setupBusy.add(runId);
+				let setup: Awaited<ReturnType<typeof setupRun>>;
+				try {
+					setup = await setupRun(c, st);
+				} catch (e) {
+					// 意外异常（落盘失败等）也要可见：按 setup-error 收尾，不让模型在没有 run 的情况下开工
+					const msg = String((e as Error)?.message || e);
+					const fresh = loadState(runId);
+					if (fresh && fresh.status === "active") failSetup(c, fresh, msg);
+					setup = { ok: false, error: msg };
+				} finally {
+					setupBusy.delete(runId);
+				}
+				if (!setup.ok) {
+					return { message: { customType: CUSTOM_TYPE, content: setupFailedBlock(st, setup.error), display: false } };
+				}
+				st = findActiveRun(c) ?? st;
 			}
 			return { message: { customType: CUSTOM_TYPE, content: stateBlock(st), display: false } };
 		});
@@ -1344,6 +1628,65 @@ export function stopRunExternal(runId: string, reason = "user-stop"): { ok: bool
 	saveState(st);
 	journal(st, "stop", { source: "server", reason, epoch: st.epoch });
 	return { ok: true };
+}
+
+// ---------- 评审掉线后的两条路（D-12-1；UI「重试评审」/「按代码验证收下」用） ----------
+
+/** 评审掉线的 run：代码验证已过、模型评审出错，停在 review-error 等用户处理。 */
+function isReviewerErrorRun(st: LoopState) {
+	return st.status === "stopped" && st.stopReason === "reviewer-error";
+}
+
+/**
+ * 「按代码验证收下」：只接受 stopped + reviewer-error + lastVerdict=pass 的 run（LLM 模式出错时
+ * lastVerdict 是 error，不能收）→ done、acceptance=passed-validator-only，journal 记 by user。
+ * 与自动通过一样把 worktree 提交到独立分支（失败只记 journal，不影响收下）。saveState 自动上报 run-state 事件。
+ */
+export function acceptRunValidatorOnly(runId: string): { ok: boolean; error?: string } {
+	const st = loadState(runId);
+	if (!st) return { ok: false, error: `run 不存在：${runId}` };
+	if (!isReviewerErrorRun(st) || st.lastVerdict !== "pass") {
+		return { ok: false, error: "只有代码验证已通过、模型评审出错的 run 才能按代码验证收下" };
+	}
+	st.status = "done";
+	st.stage = "done";
+	st.acceptance = "passed-validator-only";
+	delete st.stopReason;
+	saveState(st);
+	journal(st, "accepted-validator-only", { by: "user" });
+	if (st.worktreeDir && st.worktreeBranch && !st.worktreeCommitted) {
+		try {
+			gitSync(["-C", st.worktreeDir, "add", "-A"], st.worktreeDir, 60000);
+			const staged = gitSync(["-C", st.worktreeDir, "diff", "--cached", "--name-only"], st.worktreeDir, 60000);
+			if (staged.trim())
+				gitSync(["-C", st.worktreeDir, "commit", "-m", `mini-harness run ${st.runId}`], st.worktreeDir, 60000);
+			st.worktreeCommitted = true;
+			saveState(st);
+			journal(st, "worktree-commit", { branch: st.worktreeBranch, dir: st.worktreeDir, by: "user-accept" });
+		} catch (e) {
+			journal(st, "worktree-commit-error", { error: String((e as Error)?.message || e) });
+		}
+	}
+	return { ok: true };
+}
+
+/**
+ * 「重试评审」：把 stopped + reviewer-error 的 run 重新激活到 validate 阶段（epoch+1：
+ * 激活前在途 / 迟到的回调全部失效）。validatedRound 清零 → 下一次验收重跑 validator 再评审。
+ * 由服务层（resumeLoop）随后提示模型调 loop_validate；模型没调时本回合结束的 agent_end 也会补跑。
+ */
+export function reactivateForReview(runId: string): { ok: true; st: LoopState } | { ok: false; error: string } {
+	const st = loadState(runId);
+	if (!st) return { ok: false, error: `run 不存在：${runId}` };
+	if (!isReviewerErrorRun(st)) return { ok: false, error: "只有模型评审出错停下的 run 才能重试评审" };
+	st.status = "active";
+	st.stage = "validate";
+	st.validatedRound = 0;
+	delete st.stopReason;
+	st.epoch += 1;
+	saveState(st);
+	journal(st, "retry-review", { epoch: st.epoch });
+	return { ok: true, st };
 }
 
 /** 服务端按 runId 读落盘状态（resume 显式绑定校验用）。 */

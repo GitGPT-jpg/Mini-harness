@@ -55,12 +55,17 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { BG_CLEANUP_FALLBACK_MIN, BgServerTracker } from "./bg-servers.js";
 import {
+	acceptRunValidatorOnly,
 	createLoopExtension,
+	createLoopRun,
 	setLoopEventReporter,
-	markLoopRequestPending,
 	stopRunExternal,
 	loadLoopState,
+	reactivateForReview,
+	reviewBrief,
+	reviewerEnabledOf,
 	type LoopEvent,
+	type LoopState,
 } from "./loop/extension.js";
 import { modelsConfigHasCredentials } from "./pi-setup-state.js";
 import {
@@ -368,6 +373,33 @@ export const OFFLINE_ROW_TTL_MS = (() => {
  *  snapshot (issue #259). Eviction is therefore by "no longer in the
  *  transcript", never FIFO; this constant only says when that sweep runs. */
 const UI_MESSAGE_CACHE_CAP = 4096;
+
+/** mini-harness Loop：落盘的 run 状态 → 快照里的 conv.loop。事件路由、服务端建 run、续跑共用
+ *  这一个口径（D-12-1）；评审理由走 reviewBrief 截断，与 /api/mini-harness/runs 同源。 */
+function loopUiFromState(st: LoopState): LoopUiState {
+	const review = reviewBrief(st.lastReview);
+	return {
+		kind: "run",
+		taskId: st.taskId ?? null,
+		goal: st.goal,
+		runId: st.runId,
+		mode: st.mode,
+		stage: st.stage,
+		round: st.round,
+		maxRounds: st.maxRounds,
+		status: st.status,
+		stopReason: st.stopReason,
+		lastVerdict: st.lastVerdict ?? null,
+		acceptance: st.acceptance ?? null,
+		...(review ? { review } : {}),
+		reviewerEnabled: reviewerEnabledOf(st),
+		// 只有活跃 run 才算「准备中」（准备期间被停止的 run 不再显示成准备中）
+		setupPending: st.status === "active" && st.setupPending === true,
+		...(st.setupError ? { setupError: st.setupError } : {}),
+		...(st.criteria ? { criteria: st.criteria } : {}),
+		createdAt: st.createdAt,
+	};
+}
 /** Preview panel cap: only the first 512KB of a file is ever read/sent. */
 
 /** Thrown when the service is quiesced (draining) and the request is NEW work
@@ -12409,9 +12441,9 @@ export class ClientSession {
 	}
 
 	// -----------------------------------------------------------------------
-	// mini-harness Loop（server/loop/extension.ts）：挂起登记→提示词→扩展上报。
-	// 修#1：提示词发出前先落 pending 记录（快照可见），模型没调 loop_start 的
-	// 回合结束时上报 request-failed（扩展侧），这里路由进快照。
+	// mini-harness Loop（server/loop/extension.ts）：服务端建 run → 提示词 → 扩展上报。
+	// D-12-2：点启动即 createLoopRun 落盘（绑定 sessionId，快照立刻可见），建不出来直接
+	// request-failed（不经过模型）；模型准备由扩展在 before_agent_start 里做。
 	// 修#2：resume 按 runId 显式绑定 + per-runId 互斥（在途续跑拒绝重复）。
 	// -----------------------------------------------------------------------
 	/** 在途续跑互斥（runId 集合；修复#2：同一 run 双续跑并发）。 */
@@ -12425,21 +12457,7 @@ export class ClientSession {
 		);
 		if (!conv) return;
 		if (e.type === "run-state") {
-			const st = e.st;
-			conv.loop = {
-				kind: "run",
-				taskId: st.taskId ?? null,
-				goal: st.goal,
-				runId: st.runId,
-				mode: st.mode,
-				stage: st.stage,
-				round: st.round,
-				maxRounds: st.maxRounds,
-				status: st.status,
-				stopReason: st.stopReason,
-				lastVerdict: st.lastVerdict ?? null,
-				createdAt: st.createdAt,
-			};
+			conv.loop = loopUiFromState(e.st);
 		} else {
 			conv.loop = {
 				kind: "request-failed",
@@ -12453,7 +12471,7 @@ export class ClientSession {
 		this.flushSnapshot();
 	}
 
-	/** 启动受控 Loop：先落 pending 记录（修#1），再把启动提示词发进当前会话。 */
+	/** 启动受控 Loop（D-12-2）：先 createLoopRun 建 run 落盘（界面立刻可见），再发干活提示词。 */
 	async startLoop(msg: {
 		goal: string;
 		validateCmd?: string;
@@ -12467,42 +12485,58 @@ export class ClientSession {
 		criteria?: string;
 		artifactRoots?: string[];
 	}): Promise<void> {
-		const goal = msg.goal?.trim();
-		if (!goal) {
-			this.emitNotice("warning", "Loop 启动失败：goal 不能为空");
-			return;
-		}
 		const conv = this.conv;
 		if (!conv?.session) return;
-		const sessionId = conv.session.sessionId;
+		const goal = msg.goal?.trim() ?? "";
 		const taskId = msg.taskId ?? `loop-${Date.now().toString(36)}`;
-		// 修#1：先有可见记录，再有执行 —— 扩展侧据此在本回合结束时上报 request-failed。
-		markLoopRequestPending(sessionId, taskId, goal);
-		conv.loop = { kind: "pending", taskId, goal, createdAt: new Date().toISOString() };
+		const criteria = msg.criteria?.trim() ?? "";
+		const validateCmd = msg.validateCmd?.trim() ?? "";
+		const roots = (msg.artifactRoots ?? []).map((r) => String(r).trim()).filter(Boolean);
+		// cwd 取会话运行时的 cwd：与扩展 ctx.cwd 同源，run 的工作区就是模型干活的目录
+		const created = createLoopRun({
+			sessionId: conv.session.sessionId,
+			cwd: conv.runtime?.cwd || conv.cwd || this.cwd,
+			goal,
+			criteria,
+			validateCmd,
+			mode: msg.mode,
+			maxRounds: msg.maxRounds,
+			useReviewer: msg.useReviewer,
+			plannerModel: msg.plannerModel,
+			reviewerModel: msg.reviewerModel,
+			worktree: msg.worktree,
+			artifactRoots: roots,
+			taskId,
+		});
+		if (!created.ok) {
+			// 建不出 run（goal 为空 / 同会话已有活跃 run 等）：明确失败态，不经过模型
+			conv.loop = { kind: "request-failed", taskId, goal, reason: created.error, createdAt: new Date().toISOString() };
+			this.emitNotice("warning", `Loop 启动失败：${created.error}`);
+			this.flushSnapshot();
+			return;
+		}
+		const st = created.st;
+		conv.loop = loopUiFromState(st);
 		this.flushSnapshot();
 		const lines = [
-			"用 loop_start 启动一个受控运行（不要用普通对话硬跑），然后 loop_plan 写出计划并直接完成工作，最后 loop_done。",
+			`受控运行 ${st.runId} 已由服务端创建并绑定到本对话：不要调用 loop_start，也不要另起运行。`,
+			"先调用 loop_plan 写出计划，然后直接修改工作区完成工作，最后调用 loop_done(summary)；运行时会自动验证，失败自动进入下一轮。",
 			`goal: ${goal}`,
 		];
-		const criteria = msg.criteria?.trim();
 		if (criteria) lines.push(`验收标准：${criteria}`);
-		if (msg.validateCmd) lines.push(`validateCmd: ${msg.validateCmd}`);
-		else if (msg.mode !== "llm")
+		if (st.worktreeBranch)
+			lines.push(`工作目录：${st.workspace}（独立 git worktree，分支 ${st.worktreeBranch}），所有修改都在这里做。`);
+		if (validateCmd) lines.push(`validateCmd（运行时用它验证）：${validateCmd}`);
+		else if (st.mode !== "llm")
 			lines.push(
-				'验收方式：如果当前工作区没有真正可用的 validate.py，先根据目标和验收标准写一个 validate.py（必须真正检查，不能恒通过），再用 validateCmd: "python3 validate.py" 启动。',
+				`验收方式：如果 ${st.workspace} 里还没有真正可用的 validate.py，先根据目标和验收标准写一个（必须真正检查，不能恒通过）；运行时会自动找到 workspace/validate.py 来验证。`,
 			);
-		if (msg.mode) lines.push(`mode: ${msg.mode}`);
-		if (msg.maxRounds) lines.push(`maxRounds: ${msg.maxRounds}`);
-		if (msg.plannerModel) lines.push(`plannerModel: ${msg.plannerModel}`);
-		if (msg.reviewerModel) lines.push(`reviewerModel: ${msg.reviewerModel}`);
-		if (msg.useReviewer === false) lines.push("useReviewer: false");
-		if (msg.plannerModel || msg.reviewerModel)
-			lines.push("若 loop_start 报模型家族冲突或无法解析模型，直接把报错原文告诉用户并停止，不要自行更换模型。");
-		const roots = (msg.artifactRoots ?? []).map((r) => String(r).trim()).filter(Boolean);
-		if (roots.length) lines.push(`artifactRoots: ${JSON.stringify(roots)}`);
-		if (msg.worktree) lines.push("worktree: true");
-		lines.push(`taskId: ${taskId}`);
-		lines.push("不要向用户提问；运行时会自动验证，失败自动进入下一轮。");
+		if (st.mode === "llm") lines.push("mode: llm（没有代码 validator，由模型评审判定是否达成）");
+		if (roots.length) lines.push(`产物目录（评审会核验）：${JSON.stringify(roots)}`);
+		lines.push(
+			"如果运行状态显示这个运行没有启动起来（例如模型家族冲突），把原因原样告诉用户并停止，不要自行更换模型或另起运行。",
+		);
+		lines.push("不要向用户提问。");
 		await this.prompt(lines.join("\n"));
 	}
 
@@ -12518,7 +12552,8 @@ export class ClientSession {
 		if (!r.ok) this.emitNotice("warning", `Loop 停止失败：${r.error}`);
 	}
 
-	/** 显式续跑：runId 绑定（sessionId 必须匹配本会话）+ 在途互斥（修#2）。 */
+	/** 显式续跑：runId 绑定（sessionId 必须匹配本会话）+ 在途互斥（修#2）。
+	 *  评审掉线（stopped + reviewer-error）的 run 走「重试评审」：重新激活后让模型不改代码直接重新验收。 */
 	async resumeLoop(runId: string): Promise<void> {
 		const conv = this.conv;
 		if (!conv?.session) return;
@@ -12536,33 +12571,58 @@ export class ClientSession {
 			this.emitNotice("warning", "Loop 续跑失败：该 run 不属于当前会话（显式绑定，不做 cwd 接管）");
 			return;
 		}
-		if (st.status !== "active") {
+		const retryReview = st.status === "stopped" && st.stopReason === "reviewer-error";
+		if (st.status !== "active" && !retryReview) {
 			this.emitNotice("warning", `Loop 续跑失败：run 已是终态（${st.status}）`);
 			return;
 		}
 		this.loopResuming.add(runId);
 		try {
-			conv.loop = {
-				kind: "run",
-				taskId: st.taskId ?? null,
-				goal: st.goal,
-				runId: st.runId,
-				mode: st.mode,
-				stage: st.stage,
-				round: st.round,
-				maxRounds: st.maxRounds,
-				status: st.status,
-				lastVerdict: st.lastVerdict ?? null,
-				createdAt: st.createdAt,
-			};
+			let cur = st;
+			if (retryReview) {
+				// 重新激活到 validate（epoch+1，旧代次的迟到回调全部失效）
+				const r = reactivateForReview(runId);
+				if (!r.ok) {
+					this.emitNotice("warning", `Loop 重试评审失败：${r.error}`);
+					return;
+				}
+				cur = r.st;
+			}
+			conv.loop = loopUiFromState(cur);
 			this.flushSnapshot();
 			await this.prompt(
-				`继续执行当前受控运行（runId: ${runId}）：先查看当前状态，从上次中断处继续，` +
-					"完成后调用 loop_done(summary)。不要重复已完成的步骤，不要向用户提问。",
+				retryReview
+					? `受控运行 ${runId} 的代码验证已通过，但上次模型评审出错，现在重新验收：` +
+							"不要修改任何代码或文件，直接调用 loop_validate；运行时会重新执行 validator 并让 reviewer 评审。不要向用户提问。"
+					: `继续执行当前受控运行（runId: ${runId}）：先查看当前状态，从上次中断处继续，` +
+							"完成后调用 loop_done(summary)。不要重复已完成的步骤，不要向用户提问。",
 			);
 		} finally {
 			this.loopResuming.delete(runId);
 		}
+	}
+
+	/** 「按代码验证收下」评审掉线的 run（loop_accept）：run 须属于本会话；落盘即上报 run-state。 */
+	async acceptLoop(runId: string): Promise<void> {
+		const conv = this.conv;
+		if (!conv?.session) return;
+		const st = loadLoopState(runId);
+		if (!st) {
+			this.emitNotice("warning", `按代码验证收下失败：run 不存在（${runId}）`);
+			return;
+		}
+		if (st.sessionId !== conv.session.sessionId) {
+			this.emitNotice("warning", "按代码验证收下失败：该 run 不属于当前会话");
+			return;
+		}
+		const r = acceptRunValidatorOnly(runId);
+		if (!r.ok) {
+			this.emitNotice("warning", `按代码验证收下失败：${r.error}`);
+			return;
+		}
+		const fresh = loadLoopState(runId);
+		if (fresh) conv.loop = loopUiFromState(fresh);
+		this.flushSnapshot();
 	}
 
 	async startGoalWizard(

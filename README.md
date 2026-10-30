@@ -64,7 +64,6 @@ Key 仅保存在本机 `~/.pi/agent/auth.json`，**不会提交到代码库，�
 - `pi-web-cockpit/assets/brand-logo.png` — 左上角 logo（icon1111）
 - `pi-web-cockpit/assets/brand-favicon.png` — 页签 favicon（紫色 C）
 - `pi-web-cockpit/vendor/pi-llm-wiki/` — 审查过的知识库扩展源码
-- `pi-web-cockpit/vendor/mini-harness-runtime/` — 旧版运行时扩展（已并入 `pi-web-ui/server/loop/`，仅留作参考，驾驶舱不加载它）
 - `skills/` — 7 个领域 skill（安装到 `~/.pi/agent/skills`）
 - `assets/icon.jpg` — 桌面启动器图标源
 - `资产清单.md` — 推理底座可利用资产清单

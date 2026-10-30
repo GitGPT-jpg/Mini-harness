@@ -56,10 +56,8 @@
 │   ├── start-hardened.sh            启动脚本（已入库）
 │   ├── verify-cockpit.mjs           浏览器 E2E 验证
 │   ├── config/models.oneapi.json    One API 服务商 + 模型目录种子（无密钥）
-│   ├── config/client-state.seed.json  已不再使用（旧 harden 的首装种子）
 │   ├── assets/brand-*.png           品牌图源（logo = icon1111，favicon = 紫色 C）
 │   ├── vendor/pi-llm-wiki/          审查过的知识库扩展（setup.sh 装依赖并登记）
-│   ├── vendor/mini-harness-runtime/ 已不再使用（已并入 server/loop/，服务端会剔除它的登记）
 │   └── package.json                 只剩 SDK / typebox / playwright-core，setup.sh 不再在这里 npm install
 └── pi-web-ui/            驾驶舱源码。开发规矩看 AGENTS.md，交付清单看 DELIVERABLES.md
 ```
@@ -222,7 +220,7 @@ npx vitest run <相关测试>          # 全量：npx vitest run
 - **`PI_WEB_TOKEN=auto` 是显式开关**：不改上游默认，不设 token 时行为不变。
 - **删掉 FRP 子命令**：`bin/frp-manager.mjs` 依赖的 ssh2 在 D-5 已删，导致整个 CLI 一加载就崩（`systemd-install` 用例连带失败）；FRP 把本地端口暴露到公网，也与驾驶舱只听 127.0.0.1 的安全口径相反。
 - **折叠目标条兜底用例改断言**：上游用例要求 `!important`，与 `css-layers` 契约（整份 styles.css 的 `!important` ≤ 1）冲突。改为断言该规则位于无层区（无层规则天然压过 theme 层）。
-- **不删 `vendor/mini-harness-runtime/`**：服务端在 `extensionsOverride` 里按路径剔除它，老用户 settings.json 里的旧登记不会和内置版抢工具表。
+- **`vendor/mini-harness-runtime/` 已在 D-12 删除**：服务端仍在 `extensionsOverride` 里按路径剔除旧登记；SDK 对 settings.json 里不存在的包路径是跳过的，老用户的旧登记不会报错，也不会和内置版抢工具表。
 - **首次配置判定**：models.json 只声明了目录、密钥要填进 auth.json 的服务商（setup.sh 种入的 oneapi 就是）不算「已配置」，否则新机器永远不弹填 key 的弹窗。
 - **填 key 后补选模型**：优先设置里的默认模型，其次刚配好的服务商的第一个可用模型；已有真实模型的对话不动。
 
@@ -243,7 +241,7 @@ npx vitest run <相关测试>          # 全量：npx vitest run
 2. **icode 同步**：icode 上仍是旧 harden 版（CR #123037970）。要换成源码版就走 `icode push`：先把整棵树压成一个 commit（一次推超过 50 个 change 会被拒），装 Change-Id 钩子，commit 绑卡 luno-5578，推之前 `git stash push --include-untracked` 保持干净；平台不允许自己 +2。
 3. ~~**补齐过期测试**~~（已完成：冒烟套件 `run-smoke.mjs` 74/74 全绿、`loop-bar-test.mjs` 14/14 全绿、`token-auth-test.mjs` 21/21 全绿并加入 `.gitignore` 例外）。
 4. **补实测**：8.5 列出的几项，尤其是真实集群和真实模型下的「帮我细化」与暂停/继续。
-5. **可选清理**：`pi-web-cockpit/config/client-state.seed.json`、`pi-web-cockpit/vendor/mini-harness-runtime/` 已不再使用；`@types/ssh2` 开发依赖残留；98 条 lint warning。
+5. **可选清理**：`@types/ssh2` 开发依赖残留；98 条 lint warning。
 6. **已知小缺口**：
    - 填 key 后的补选模型只作用于保存 key 的那个页面，同时开着的其他标签页要手动选一次模型。
    - 旧版左下角「多 run 状态药丸」没有移植，由 LoopBar 状态条和任务台的运行列表覆盖。
@@ -267,3 +265,29 @@ kill %1; rm -rf "$H"                                       # 首次配置弹窗�
 ```
 
 要点：`env -i` 隔开真实 HOME；`npm_config_prefix` 让 `npm install -g pi` 装进临时目录；共享 npm 缓存只为提速。
+
+## 13. 进行中：D-12（Loop 完成态可信度 / 结构化启动 / 成果查看 / 统一任务入口）
+
+> 2026-10-30 开始。依据用户贴出的评估（对照最初架构基调）分四步做，每步做完在这里打勾并写提交号。中途断了就按这里接着做。
+
+- [ ] **D-12-1 完成态可信度**：代码 loop 里 validator 过了但 reviewer 出错（404/超时/非 JSON）时，现在仍是 `status=done` + `lastVerdict=pass`，界面显示「已完成·通过」。改成区分「代码验证 + 模型评审都过」「只有代码验证（没开评审）」「评审掉线」三种；`LoopUiState` / `LoopRunBrief` 带上 `lastReview`（verdict + reasons）和 `stopReason`；LoopBar / TaskDesk 按新语义显示。
+- [ ] **D-12-2 服务端结构化启动**：用户点启动时服务端直接建 runId、落盘 `state.json`（绑定 sessionId）、立刻推给前端，再让模型干活、干完调 `loop_done`；不再靠模型第一轮自觉调 `loop_start`。
+- [ ] **D-12-3 成果与证据查看器**：`GET /api/mini-harness/runs/:runId/detail` 返回 state、journal 时间线、各轮 review 报告、validator 证据、diff；任务台/状态条点开 run 看详情（目标、各轮结论、失败原因/否决理由、diff、validator 输出、继续/重试/停止）；状态文案改成「正在干活·第 N/M 轮」「还没过关·查看证据」「裁判掉线·等待重试」「交卷了·查看成果」。
+- [ ] **D-12-4 统一任务入口**：一个「新任务」入口（保留模板），填「做什么」「怎么算完成」，选验收方式（代码验证 + 模型评审 / 仅代码验证 / 仅模型评审），不用先选 LLM loop 还是代码 loop。
+- [ ] **D-12-5 收尾**：删掉已不引用的 `pi-web-cockpit/vendor/mini-harness-runtime/`、`pi-web-cockpit/config/client-state.seed.json`；三连验 + vitest + 冒烟 + 新页面浏览器 E2E（无报错）；更新本文件与 `pi-web-ui/DELIVERABLES.md`；本地提交，不推送。
+
+预览：`PI_WEB_PORT=8788 PI_WEB_DATA_DIR=/tmp/mini-harness-cockpit-preview PI_WEB_TOKEN=auto node pi-web-ui/dist/server/index.js --host 127.0.0.1 --port 8788 --cwd <worktree> --no-browser`（独立数据目录，不碰 8787 旧舱）。
+
+### 13.1 设计约定（D-12 各步共用，改代码前先读）
+
+**完成态语义（D-12-1）**：`state.json` 新增 `acceptance`，只在 `status=done` 时有值。
+- 代码 loop、validator 通过：评审通过 → `passed`；没开评审（`useReviewer=false` 或没有可用评审模型，verdict=`skip`）→ `passed-validator-only`；评审否决 → 照旧进下一轮或到上限停（`stopReason=reviewer-block`）；**评审出错 → `status=stopped`、`stage=review-error`、`stopReason=reviewer-error`，不算完成**（`lastVerdict` 仍记 validator 的 `pass`，`lastReview` 记 `error` + 原因）。
+- LLM 模式（mini-harness `mode=llm`）：评审通过 → `passed`；关评审 → `self-declared`；评审出错 → 照旧 stopped/reviewer-error。
+- 评审出错后两条路：①「重试评审」= `loop_resume`，允许 `stopped + reviewer-error` 的 run 重新激活（`status=active`、`stage=validate`、`epoch+1`），让模型调 `loop_validate` 重新验收；②「按代码验证收下」= 新消息 `loop_accept {runId}` → `acceptance=passed-validator-only`，journal 记 `accepted-validator-only`（by user）。
+- `LoopUiState` 与 `LoopRunBrief` 带上 `acceptance`、`stopReason`、`review {verdict, reasons}`（截断）、`reviewerEnabled`、`mode`、`createdAt`；服务层用一个 `loopUiFromState(st)` 组装，事件路由与续跑共用。
+
+**结构化启动（D-12-2）**：`server/loop/extension.ts` 导出 `createLoopRun(input)`，只做文件与 git 操作：建 runId、可选 worktree、落盘 `state.json`（`sessionId` 绑定、`stage=intake`、`setupPending=true`、记下请求的规划/评审模型与 `useReviewer`、`criteria`）。同会话已有活跃 run 时拒绝。`agent-service.startLoop` 先调它：失败 → `conv.loop` 记 `request-failed` + 通知（不经过模型）；成功 → run 立刻出现在界面上，再发提示词让模型干活（明确说 run 已创建、不要再调 `loop_start`，先 `loop_plan`，完成调 `loop_done`；没有 validate.py 先写一个真正检查的）。扩展在 `before_agent_start` 里看到 `setupPending` 就做模型家族解析与规划（原 `loop_start` 的逻辑），完成后清掉标记、`stage=plan`；家族冲突/模型解析失败 → `stopped`、`stopReason=setup-error`、`setupError` 写原因。`loop_start` 工具保留给对话里模型自己发起的任务，但同会话已有活跃 run 时直接返回那个 run，不重复创建。
+
+**成果查看（D-12-3）**：`GET /api/mini-harness/runs/:runId/detail`（runId 正则校验）返回公开状态字段、journal 时间线（尾部若干条）、每轮 `evidence/round-N-review.md` 与 validator 日志尾部、`lastDiff`（截断）。前端加 run 详情面板（任务台点行、状态条点结果都能打开）：目标与验收标准、代码验证/模型评审两行结论、否决或出错原因、各轮记录、validator 输出、diff；按钮：停止 / 重试评审 / 按代码验证收下 / 用同一目标重新开始。人话状态统一由一个函数产出：正在干活·第 N/M 轮；还没过关·查看失败证据；评审没通过·查看理由；裁判掉线了·等待重试；交卷了·查看成果（仅代码验证 / 模型自述时注明）；已停止；运行出错；没启动起来：原因。
+
+**统一任务入口（D-12-4）**：输入框上沿两枚胶囊合成一枚「新任务」，打开统一弹窗（由 CodeLoopModal 演进）：模板、做什么、怎么算完成、验收方式三选一（代码验证 + 模型评审〔默认〕/ 仅代码验证 / 仅模型评审），高级项（检查命令、产物目录、最多轮数、规划/评审模型）。前两种走 mini-harness 代码 loop（`useReviewer` 开/关）；「仅模型评审」走原 LLM loop（GoalService：`set_goal`，保留「帮我细化」、评审模型、最多尝试、暂停/继续）。运行中的状态显示不变（GoalBar 显示 LLM loop 进度，LoopBar 显示代码 loop）。

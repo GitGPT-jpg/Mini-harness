@@ -87,5 +87,5 @@ node pi-web-cockpit/verify-cockpit.mjs  # 浏览器 E2E（可选 KEY_FILE / SHOT
 **仍需注意**
 
 - 默认分支没有改动（是否把 `harness-cockpit` 设为默认分支需要人来定）。
-- `pi-web-cockpit/vendor/mini-harness-runtime/` 与 `config/client-state.seed.json` 已不再使用（运行时已并入 `server/loop/`，默认值已入源码），留作参考；服务端会忽略 `~/.pi/agent` 里登记的旧运行时包。
+- `pi-web-cockpit/vendor/mini-harness-runtime/` 与 `config/client-state.seed.json` 已在 D-12 删除（运行时已并入 `server/loop/`，默认值已入源码）；服务端仍会忽略 `~/.pi/agent` 里登记的旧运行时包。
 - 设 key 后自动补选模型只作用于保存 key 的那个页面；同时开着的其他标签页仍要手动选一次模型。

@@ -26,7 +26,15 @@ import {
 import { basename, join } from "node:path";
 import type { Express } from "express";
 import { deleteGoalLog, listGoalLog } from "../goal-history-log.js";
-import { familyOf, listRuns, runsRoot } from "./extension.js";
+import {
+	familyOf,
+	listRuns,
+	loadLoopState,
+	reviewBrief,
+	reviewerEnabledOf,
+	runsRoot,
+	type LoopAcceptance,
+} from "./extension.js";
 
 export interface LoopRoutesOptions {
 	dataDir: string;
@@ -44,6 +52,16 @@ export interface LoopRunBrief {
 	project: string;
 	models: { main: string | null; planner: string | null; reviewer: string | null };
 	updatedAt: string | null;
+	/** D-12-1：代码 loop / LLM loop。 */
+	mode: "code" | "llm";
+	stopReason: string | null;
+	/** 完成态可信度（只在 status=done 时有值，见 server/loop/extension.ts 的 LoopAcceptance）。 */
+	acceptance: LoopAcceptance | null;
+	/** 最近一次模型评审结论与理由（最多 5 条，每条 ≤300 字；与快照 conv.loop.review 同源截断）。 */
+	reviewVerdict: string | null;
+	reviewReasons: string[];
+	reviewerEnabled: boolean;
+	createdAt: string | null;
 }
 
 export interface ToolEvent {
@@ -80,6 +98,7 @@ export function collectRuns(history: boolean, nowMs = Date.now()): LoopRunBrief[
 		const active = st.status === "active";
 		if (!history && !active && nowMs - t >= RECENT_MS) continue;
 		const ws = String(st.baseWorkspace || st.workspace || "");
+		const review = reviewBrief(st.lastReview);
 		out.push({
 			runId: st.runId,
 			stage: st.stage,
@@ -95,6 +114,13 @@ export function collectRuns(history: boolean, nowMs = Date.now()): LoopRunBrief[
 				reviewer: st.reviewerModel?.id ?? null,
 			},
 			updatedAt: st.updatedAt ?? null,
+			mode: st.mode === "llm" ? "llm" : "code",
+			stopReason: st.stopReason ?? null,
+			acceptance: st.acceptance ?? null,
+			reviewVerdict: review?.verdict ?? null,
+			reviewReasons: review?.reasons ?? [],
+			reviewerEnabled: reviewerEnabledOf(st),
+			createdAt: st.createdAt ?? null,
 		});
 	}
 	out.sort(
@@ -103,6 +129,141 @@ export function collectRuns(history: boolean, nowMs = Date.now()): LoopRunBrief[
 			(Date.parse(b.updatedAt ?? "") || 0) - (Date.parse(a.updatedAt ?? "") || 0),
 	);
 	return out.slice(0, history ? 500 : 8);
+}
+
+/** 详情面板里一轮的证据：本轮评审报告 + validator 原始输出尾部（文件都在 runs/<id>/evidence/）。 */
+export interface LoopRoundEvidence {
+	round: number;
+	review: string | null;
+	logs: Array<{ file: string; tail: string }>;
+}
+
+/** GET /api/mini-harness/runs/:runId/detail 的返回（state.json 公开字段 + 证据 + journal 时间线）。 */
+export interface LoopRunDetail {
+	runId: string;
+	goal: string;
+	criteria: string | null;
+	mode: "code" | "llm";
+	status: string;
+	stage: string;
+	round: number;
+	maxRounds: number;
+	stopReason: string | null;
+	acceptance: string | null;
+	setupError: string | null;
+	validator: { cmd: string | null; verdict: string | null; code: number | null; evidenceTail: string };
+	review: { enabled: boolean; verdict: string | null; reasons: string[] };
+	models: { main: string | null; planner: string | null; reviewer: string | null };
+	project: string;
+	workspace: string;
+	worktreeBranch: string | null;
+	worktreeCommitted: boolean;
+	plannerOutput: string;
+	plan: string;
+	summary: string;
+	history: Array<{ round: number; verdict: string; code: number | null; at: string }>;
+	rounds: LoopRoundEvidence[];
+	diff: string;
+	journal: Array<Record<string, unknown>>;
+	createdAt: string;
+	updatedAt: string | null;
+}
+
+const DETAIL_TEXT_MAX = 4000;
+const DETAIL_REVIEW_MAX = 12_000;
+const DETAIL_LOG_MAX = 6000;
+const DETAIL_DIFF_MAX = 20_000;
+const DETAIL_JOURNAL_MAX = 200;
+
+/** 超长文本留尾部（证据最有用的是结尾的报错 / 结论）。 */
+function clipTail(s: unknown, n: number): string {
+	const text = String(s ?? "");
+	return text.length > n ? `…${text.slice(-n)}` : text;
+}
+
+function readTextSafe(file: string, maxBytes: number): string {
+	try {
+		return readTail(file, maxBytes);
+	} catch {
+		return "";
+	}
+}
+
+/** 一个 run 的完整详情；run 不存在返回 null。 */
+export function collectRunDetail(runId: string): LoopRunDetail | null {
+	const st = loadLoopState(runId);
+	if (!st) return null;
+	const dir = join(runsRoot(), runId);
+	const evDir = join(dir, "evidence");
+	const byRound = new Map<number, LoopRoundEvidence>();
+	const roundOf = (n: number) => {
+		let r = byRound.get(n);
+		if (!r) {
+			r = { round: n, review: null, logs: [] };
+			byRound.set(n, r);
+		}
+		return r;
+	};
+	let files: string[] = [];
+	try {
+		files = readdirSync(evDir).sort();
+	} catch {}
+	for (const name of files) {
+		const review = /^round-(\d+)-review\.md$/.exec(name);
+		if (review) {
+			roundOf(Number(review[1])).review = readTextSafe(join(evDir, name), DETAIL_REVIEW_MAX);
+			continue;
+		}
+		const log = /^round-(\d+)-\d+\.log$/.exec(name);
+		if (log) roundOf(Number(log[1])).logs.push({ file: name, tail: readTextSafe(join(evDir, name), DETAIL_LOG_MAX) });
+	}
+	const journal: Array<Record<string, unknown>> = [];
+	for (const line of readTextSafe(join(dir, "journal.jsonl"), 512 * 1024).split("\n")) {
+		if (!line.trim()) continue;
+		try {
+			journal.push(JSON.parse(line));
+		} catch {}
+	}
+	const review = reviewBrief(st.lastReview);
+	const ws = String(st.baseWorkspace || st.workspace || "");
+	return {
+		runId: st.runId,
+		goal: String(st.goal || ""),
+		criteria: st.criteria ?? null,
+		mode: st.mode,
+		status: st.status,
+		stage: st.stage,
+		round: st.round,
+		maxRounds: st.maxRounds,
+		stopReason: st.stopReason ?? null,
+		acceptance: st.acceptance ?? null,
+		setupError: st.setupError ?? null,
+		validator: {
+			cmd: st.validateCmd ?? null,
+			verdict: st.lastVerdict ?? null,
+			code: st.lastCode ?? null,
+			evidenceTail: clipTail(st.lastEvidence, DETAIL_LOG_MAX),
+		},
+		review: { enabled: reviewerEnabledOf(st), verdict: review?.verdict ?? null, reasons: review?.reasons ?? [] },
+		models: {
+			main: st.mainModel?.id ?? null,
+			planner: st.plannerModel?.id ?? null,
+			reviewer: st.reviewerModel?.id ?? null,
+		},
+		project: ws ? basename(ws) : "",
+		workspace: ws,
+		worktreeBranch: st.worktreeBranch ?? null,
+		worktreeCommitted: Boolean(st.worktreeCommitted),
+		plannerOutput: clipTail(st.plannerOutput, DETAIL_TEXT_MAX),
+		plan: clipTail(st.plan, DETAIL_TEXT_MAX),
+		summary: clipTail(st.summary, DETAIL_TEXT_MAX),
+		history: (st.history ?? []).map((h) => ({ round: h.round, verdict: h.verdict, code: h.code, at: h.at })),
+		rounds: [...byRound.values()].sort((a, b) => a.round - b.round),
+		diff: clipTail(st.lastDiff, DETAIL_DIFF_MAX),
+		journal: journal.slice(-DETAIL_JOURNAL_MAX),
+		createdAt: st.createdAt,
+		updatedAt: st.updatedAt ?? null,
+	};
 }
 
 /** models.json 里配置的模型（家族规则与 loop 运行时 familyOf 同源）。 */
@@ -198,6 +359,19 @@ export function registerLoopRoutes(app: Express, opts: LoopRoutesOptions): void 
 	});
 	app.get("/api/mini-harness/runs/latest", (req, res) => {
 		res.json(collectRuns(Boolean(req.query.history))[0] ?? null);
+	});
+	app.get("/api/mini-harness/runs/:runId/detail", (req, res) => {
+		const id = String(req.params.runId ?? "");
+		if (!RUN_ID_RE.test(id)) {
+			res.status(400).json({ error: "bad runId" });
+			return;
+		}
+		const detail = collectRunDetail(id);
+		if (!detail) {
+			res.status(404).json({ error: "run not found" });
+			return;
+		}
+		res.json(detail);
 	});
 	app.post("/api/mini-harness/runs/delete", (req, res) => {
 		const id = String(req.body?.runId ?? "");

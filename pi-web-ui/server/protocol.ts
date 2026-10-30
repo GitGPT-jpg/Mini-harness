@@ -273,9 +273,9 @@ export interface UiState {
 	plan?: PlanState | null;
 	/**
 	 * 当前会话的 mini-harness Loop 状态（受控代码/LLM Loop 运行时，server/loop/）。
-	 *  - kind="pending"：启动提示词已发出、run 未创建（先有可见记录再有执行）；
-	 *  - kind="run"：扩展已上报 run（stage/round/status 等实时刷新，事件驱动）；
-	 *  - kind="request-failed"：启动请求失败（模型未调 loop_start 等，带 reason）。
+	 *  - kind="run"：run 已落盘（D-12-2 起服务端点启动即建 run，之后每次落盘事件驱动刷新）；
+	 *  - kind="request-failed"：启动失败（服务端建 run 被拒，如 goal 为空 / 同会话已有活跃 run，带 reason）；
+	 *  - kind="pending"：旧流程（模型调 loop_start 之前）的挂起记录，服务端已不再产出。
 	 *  null/缺省 = 该会话没有进行中的 Loop。createdAt 起 UI 可算耗时。
 	 */
 	loop?: LoopUiState | null;
@@ -871,10 +871,10 @@ export type ClientMessage =
 			execModel?: string;
 	  }
 	// -- mini-harness Loop（受控代码/LLM Loop，server/loop/）------------------
-	/** 启动受控 Loop：服务端先落「挂起任务记录」（快照 loop.kind="pending"，先有
-	 *  记录再有执行），再把启动提示词作为用户消息发进当前会话，模型据此调
-	 *  loop_start。本回合结束仍未创建 run → 快照 loop.kind="request-failed"
-	 *  带明确原因（不静默）。validator 缺省自动找 workspace/validate.py。 */
+	/** 启动受控 Loop（D-12-2 结构化启动）：服务端先建 run 落盘（绑定本会话，快照 loop
+	 *  立刻是 kind="run"），再把干活提示词发进当前会话；模型准备（家族解析 + 规划）在
+	 *  开跑前由扩展完成。建 run 被拒 → 快照 loop.kind="request-failed" 带原因（不经过模型）。
+	 *  validator 缺省自动找 workspace/validate.py。 */
 	| {
 			type: "loop_start_request";
 			goal: string;
@@ -895,8 +895,13 @@ export type ClientMessage =
 	 *  即递增 epoch：在途/迟到回调全部失效，不得把 stopped 翻成 done。 */
 	| { type: "loop_stop"; runId?: string }
 	/** 显式续跑：按 runId 绑定（run 的 sessionId 必须匹配本会话，否则拒绝——
-	 *  不做 cwd 兜底接管）。同一 run 的在途续跑会被互斥拒绝（不重复执行）。 */
+	 *  不做 cwd 兜底接管）。同一 run 的在途续跑会被互斥拒绝（不重复执行）。
+	 *  评审掉线（stopped + stopReason=reviewer-error）的 run 走「重试评审」：重新激活
+	 *  到 validate（epoch+1），让模型不改代码直接 loop_validate 重新验收。 */
 	| { type: "loop_resume"; runId: string }
+	/** 「按代码验证收下」：评审掉线（stopped + reviewer-error、代码验证已通过）的 run
+	 *  由用户确认完成 → acceptance=passed-validator-only（run 须属于本会话）。 */
+	| { type: "loop_accept"; runId: string }
 	// -- settings (system prompt / skills / extensions) ----------------------
 	/** Request the current settings state (also pushed automatically on attach). */
 	| { type: "get_settings" }
@@ -1470,7 +1475,7 @@ export interface PlanState {
 
 /** mini-harness Loop 的会话级状态（server/loop/ 运行时的对外视图）。 */
 export interface LoopUiState {
-	/** pending=启动提示词已发出、run 未创建；run=扩展已上报；request-failed=启动请求失败。 */
+	/** run=run 已落盘；request-failed=启动失败；pending=旧流程的挂起记录（服务端已不再产出）。 */
 	kind: "pending" | "run" | "request-failed";
 	taskId: string | null;
 	goal: string;
@@ -1482,8 +1487,23 @@ export interface LoopUiState {
 	round?: number;
 	maxRounds?: number;
 	status?: "active" | "done" | "stopped";
+	/** 停止原因：user-stop / validate-fail / reviewer-block / reviewer-error / setup-error / no-validator 等。 */
 	stopReason?: string;
 	lastVerdict?: string | null;
+	/** 完成态可信度（只在 status=done 时有值）：passed = 代码验证 + 模型评审都过（LLM 模式：评审通过）；
+	 *  passed-validator-only = 只有代码验证（没开评审 / 没有可用评审模型 / 评审掉线后用户收下）；
+	 *  self-declared = LLM 模式关评审、按模型自述完成。 */
+	acceptance?: "passed" | "passed-validator-only" | "self-declared" | null;
+	/** 最近一次模型评审结论（verdict = pass / block / error / skip；最多 5 条理由，每条 ≤300 字）。 */
+	review?: { verdict: string; reasons: string[] };
+	/** 本 run 的模型评审是否生效（开启且有可用评审模型）。 */
+	reviewerEnabled?: boolean;
+	/** 服务端建了 run、还没做模型准备（家族解析与规划在开跑前完成）。 */
+	setupPending?: boolean;
+	/** 模型准备失败原因（stopReason=setup-error）。 */
+	setupError?: string;
+	/** 用户写的验收标准。 */
+	criteria?: string;
 	/** run 创建时间（ISO）；UI 据此算耗时。pending 时为请求发出时间。 */
 	createdAt: string;
 }

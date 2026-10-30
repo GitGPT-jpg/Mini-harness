@@ -504,6 +504,9 @@ export function handlePlanAndGoalMessage(msg: ClientMessage, cs: DispatchSession
 		case "loop_resume":
 			void cs.resumeLoop?.(msg.runId);
 			return true;
+		case "loop_accept":
+			void cs.acceptLoop?.(msg.runId);
+			return true;
 		case "plan_update":
 			cs.updatePlan?.(msg.steps, msg.activeStepId, msg.conversationId);
 			return true;

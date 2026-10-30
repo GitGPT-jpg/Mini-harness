@@ -1244,6 +1244,7 @@ export interface DispatchSession {
 	}): Promise<void>;
 	stopLoop?(runId?: string): Promise<void>;
 	resumeLoop?(runId: string): Promise<void>;
+	acceptLoop?(runId: string): Promise<void>;
 	pushSettings(): void;
 	setSettings(partial: {
 		promptMode?: "append" | "replace";
