@@ -26,6 +26,8 @@ import {
 import { basename, join } from "node:path";
 import type { Express } from "express";
 import { deleteGoalLog, listGoalLog } from "../goal-history-log.js";
+import { distillLoopRun } from "./distill.js";
+import type { BestRoundRecord, HarnessMetrics } from "./metrics.js";
 import {
 	familyOf,
 	listRuns,
@@ -151,7 +153,13 @@ export interface LoopRunDetail {
 	stopReason: string | null;
 	acceptance: string | null;
 	setupError: string | null;
-	validator: { cmd: string | null; verdict: string | null; code: number | null; evidenceTail: string };
+	validator: {
+		precheckCmd?: string | null;
+		cmd: string | null;
+		verdict: string | null;
+		code: number | null;
+		evidenceTail: string;
+	};
 	review: { enabled: boolean; verdict: string | null; reasons: string[] };
 	models: { main: string | null; planner: string | null; reviewer: string | null };
 	project: string;
@@ -161,7 +169,17 @@ export interface LoopRunDetail {
 	plannerOutput: string;
 	plan: string;
 	summary: string;
-	history: Array<{ round: number; verdict: string; code: number | null; at: string }>;
+	history: Array<{
+		round: number;
+		verdict: string;
+		code: number | null;
+		at: string;
+		metrics?: HarnessMetrics;
+		commitSha?: string | null;
+		precheckFailed?: boolean;
+	}>;
+	lastMetrics?: HarnessMetrics | null;
+	bestRound?: BestRoundRecord | null;
 	rounds: LoopRoundEvidence[];
 	diff: string;
 	journal: Array<Record<string, unknown>>;
@@ -239,6 +257,7 @@ export function collectRunDetail(runId: string): LoopRunDetail | null {
 		acceptance: st.acceptance ?? null,
 		setupError: st.setupError ?? null,
 		validator: {
+			precheckCmd: st.precheckCmd ?? null,
 			cmd: st.validateCmd ?? null,
 			verdict: st.lastVerdict ?? null,
 			code: st.lastCode ?? null,
@@ -257,7 +276,17 @@ export function collectRunDetail(runId: string): LoopRunDetail | null {
 		plannerOutput: clipTail(st.plannerOutput, DETAIL_TEXT_MAX),
 		plan: clipTail(st.plan, DETAIL_TEXT_MAX),
 		summary: clipTail(st.summary, DETAIL_TEXT_MAX),
-		history: (st.history ?? []).map((h) => ({ round: h.round, verdict: h.verdict, code: h.code, at: h.at })),
+		history: (st.history ?? []).map((h) => ({
+			round: h.round,
+			verdict: h.verdict,
+			code: h.code,
+			at: h.at,
+			...(h.metrics ? { metrics: h.metrics } : {}),
+			...(h.commitSha ? { commitSha: h.commitSha } : {}),
+			...(h.precheckFailed ? { precheckFailed: true } : {}),
+		})),
+		...(st.lastMetrics ? { lastMetrics: st.lastMetrics } : {}),
+		...(st.bestRound ? { bestRound: st.bestRound } : {}),
 		rounds: [...byRound.values()].sort((a, b) => a.round - b.round),
 		diff: clipTail(st.lastDiff, DETAIL_DIFF_MAX),
 		journal: journal.slice(-DETAIL_JOURNAL_MAX),
@@ -372,6 +401,23 @@ export function registerLoopRoutes(app: Express, opts: LoopRoutesOptions): void 
 			return;
 		}
 		res.json(detail);
+	});
+	app.post("/api/mini-harness/runs/:runId/distill", (req, res) => {
+		const id = String(req.params.runId ?? "");
+		if (!RUN_ID_RE.test(id)) {
+			res.status(400).json({ error: "bad runId" });
+			return;
+		}
+		const st = loadLoopState(id);
+		if (!st) {
+			res.status(404).json({ error: "run not found" });
+			return;
+		}
+		try {
+			res.json(distillLoopRun(st, opts.dataDir));
+		} catch (e) {
+			res.status(500).json({ error: String((e as Error)?.message || e) });
+		}
 	});
 	app.post("/api/mini-harness/runs/delete", (req, res) => {
 		const id = String(req.body?.runId ?? "");

@@ -79,6 +79,7 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 	// 代码 loop（mini-harness）
 	const [planner, setPlanner] = useState("");
 	const [reviewer, setReviewer] = useState("");
+	const [precheck, setPrecheck] = useState("");
 	const [cmd, setCmd] = useState("");
 	const [roots, setRoots] = useState("");
 	const [rounds, setRounds] = useState(5);
@@ -185,6 +186,7 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 				mode: "code",
 				maxRounds: rounds > 0 ? Math.min(rounds, 20) : 5,
 				...(c ? { criteria: c } : {}),
+				...(precheck.trim() ? { precheckCmd: precheck.trim() } : {}),
 				...(cmd.trim() ? { validateCmd: cmd.trim() } : {}),
 				...(artifactRoots.length ? { artifactRoots } : {}),
 				...(planner ? { plannerModel: planner } : {}),
@@ -367,6 +369,16 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 					<summary>{t("codeLoopAdvanced")}</summary>
 					{codeMode && (
 						<>
+							<label className="cockpit-label" htmlFor="task-precheck">
+								{t("codeLoopPrecheck")}
+							</label>
+							<input
+								id="task-precheck"
+								className="cockpit-input"
+								value={precheck}
+								placeholder={t("codeLoopPrecheckPh")}
+								onChange={(e) => setPrecheck(e.target.value)}
+							/>
 							<label className="cockpit-label" htmlFor="task-cmd">
 								{t("codeLoopCmd")}
 							</label>

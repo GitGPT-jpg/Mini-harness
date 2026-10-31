@@ -50,7 +50,7 @@ export const LoopBar = memo(function LoopBar({ loop, goalModeEnabled }: Props) {
 		const st = loopStatus(loop, t);
 		const text = `${st.text} · ${elapsed}`;
 		return (
-			<div className="goalbar">
+			<div className={`goalbar loopbar-card tone-${st.tone} is-active`}>
 				<div className="goalbar-row">
 					<span className="goalbar-icon">
 						<FiRepeat />
@@ -93,7 +93,7 @@ export const LoopBar = memo(function LoopBar({ loop, goalModeEnabled }: Props) {
 		const suffix = loop.kind === "request-failed" ? "" : [loopRoundText(t, loop), elapsed].filter(Boolean).join(" · ");
 		const reviewerDown = st.kind === "reviewer-error" && !!runId;
 		return (
-			<div className="goalbar">
+			<div className={`goalbar loopbar-card tone-${st.tone} is-terminal`}>
 				<div className="goalbar-row">
 					<span className="goalbar-icon">
 						<FiRepeat />
@@ -149,8 +149,7 @@ export const LoopBar = memo(function LoopBar({ loop, goalModeEnabled }: Props) {
 		);
 	}
 
-	// —— 闲置：「新任务」胶囊画在目标条折叠行里（GoalBar）；目标模式关掉时目标条不渲染，
-	//    这里补一枚同款胶囊，入口不丢。弹窗打开时隐藏。 ——
+	// —— 闲置：「新任务」胶囊（复用 TaskCapsule，渲染在输入框上沿）。
 	if (goalModeEnabled || popupOpen) return null;
 	return (
 		<div className="goalbar-collapsed loopbar-collapsed-solo">

@@ -19,6 +19,8 @@
 // MUST be imported before the SDK is loaded so on-disk patches apply cleanly.
 import "./patch-remote-catalog.js";
 import "./patch-turn-end-boundary.js";
+import { syncHarnessEnv } from "./harness-env.js";
+syncHarnessEnv();
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage } from "node:http";
@@ -1231,6 +1233,7 @@ export interface DispatchSession {
 	}): Promise<void>;
 	startLoop?(msg: {
 		goal: string;
+		precheckCmd?: string;
 		validateCmd?: string;
 		mode?: "code" | "llm";
 		maxRounds?: number;

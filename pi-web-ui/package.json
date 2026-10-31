@@ -13,6 +13,8 @@
 		"registry": "https://registry.npmjs.org/"
 	},
 	"bin": {
+		"harness": "bin/harness.mjs",
+		"mini-harness": "bin/harness.mjs",
 		"pi-web-ui": "bin/pi-web-ui.mjs",
 		"piwebui": "bin/pi-web-ui.mjs"
 	},

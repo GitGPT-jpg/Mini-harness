@@ -878,6 +878,8 @@ export type ClientMessage =
 	| {
 			type: "loop_start_request";
 			goal: string;
+			/** L0 快速预检命令（语法/配置检查，失败立即短路，不跑完整 validateCmd）。 */
+			precheckCmd?: string;
 			validateCmd?: string;
 			mode?: "code" | "llm";
 			maxRounds?: number;
@@ -1504,6 +1506,18 @@ export interface LoopUiState {
 	setupError?: string;
 	/** 用户写的验收标准。 */
 	criteria?: string;
+	/** L0 快速预检命令。 */
+	precheckCmd?: string;
+	/** 最近一轮提取的 HARNESS_METRIC 数值指标。 */
+	lastMetrics?: Record<string, number>;
+	/** 历史最优轮次 Checkpoint。 */
+	bestRound?: {
+		round: number;
+		verdict: string;
+		commitSha: string | null;
+		metrics?: Record<string, number>;
+		at: string;
+	};
 	/** run 创建时间（ISO）；UI 据此算耗时。pending 时为请求发出时间。 */
 	createdAt: string;
 }

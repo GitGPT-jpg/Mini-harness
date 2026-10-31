@@ -25,6 +25,14 @@ import os from "node:os";
 import crypto from "node:crypto";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+	collectPreflightSummary,
+	parseHarnessMetrics,
+	pickBetterRound,
+	resolveGitHeadSha,
+	type BestRoundRecord,
+	type HarnessMetrics,
+} from "./metrics.js";
 
 const DEFAULT_MAX_ROUNDS = 5;
 const CUSTOM_TYPE = "mini-harness-loop";
@@ -65,6 +73,8 @@ export interface LoopState {
 	worktreeCommitted: boolean;
 	harnessRoot: string | null;
 	artifactRoots: string[];
+	/** L0 快速预检命令（语法/配置/轻量检查）：失败直接拦截，不跑昂贵的 L1 validateCmd 与 reviewer。 */
+	precheckCmd?: string | null;
 	validateCmd: string | null;
 	maxRounds: number;
 	auto: boolean;
@@ -89,7 +99,22 @@ export interface LoopState {
 	validatedRound: number;
 	createdAt: string;
 	updatedAt?: string;
-	history: Array<{ round: number; verdict: string; code: number | null; at: string; evidence: string | null }>;
+	history: Array<{
+		round: number;
+		verdict: string;
+		code: number | null;
+		at: string;
+		evidence: string | null;
+		metrics?: HarnessMetrics;
+		commitSha?: string | null;
+		precheckFailed?: boolean;
+	}>;
+	/** 最近一轮提取的 HARNESS_METRIC 数值指标。 */
+	lastMetrics?: HarnessMetrics | null;
+	/** 最优轮次 Checkpoint（防止后续轮次退化）。 */
+	bestRound?: BestRoundRecord | null;
+	/** 工作区前置环境摘要（分支、HEAD SHA、关键文件）。 */
+	preflightSummary?: string;
 	/** 完成态可信度（见 LoopAcceptance）；未完成 = null。旧 state.json 没有该字段，读入按 null。 */
 	acceptance: LoopAcceptance | null;
 	/** 是否启用模型评审（默认 true）。旧 state.json 没有该字段，读入按「有没有评审模型」推断。 */
@@ -440,28 +465,66 @@ function resolveValidator(st: LoopState) {
 }
 
 async function runValidation(pi: ExtensionAPI, st: LoopState) {
+	const cwd = st.workspace || process.cwd();
+	// L0 快速预检：若配置了 precheckCmd，先秒级拦截语法/导包/配置错误，不浪费集群与压测资源
+	const preCmd = String(st.precheckCmd ?? "").trim();
+	if (preCmd) {
+		let pre: { stdout?: string; stderr?: string; code?: number | null; killed?: boolean };
+		try {
+			pre = await pi.exec("bash", ["-lc", preCmd], { cwd, timeout: 5 * 60 * 1000 });
+		} catch (e) {
+			pre = { stdout: "", stderr: String((e as Error)?.message || e), code: -1, killed: false };
+		}
+		if (pre.code !== 0) {
+			const output =
+				`[L0 precheck] $ ${preCmd}\n` +
+				`exit=${pre.code}${pre.killed ? " (killed/timeout)" : ""}（快速预检未通过，已跳过 L1 完整验收）\n` +
+				`--- stdout (tail) ---\n${tail(pre.stdout, 4000)}\n` +
+				`--- stderr (tail) ---\n${tail(pre.stderr, 4000)}\n`;
+			let evidence = "";
+			try {
+				const dir = path.join(runDir(st.runId), "evidence");
+				fs.mkdirSync(dir, { recursive: true });
+				evidence = path.join(dir, `round-${st.round}-${Date.now()}.log`);
+				fs.writeFileSync(evidence, output);
+			} catch {}
+			return {
+				pass: false,
+				noValidator: false,
+				precheckFailed: true,
+				code: pre.code ?? -1,
+				evidence,
+				output,
+				metrics: null as HarnessMetrics | null,
+			};
+		}
+	}
 	const r = resolveValidator(st);
 	if (!r) {
 		return {
 			pass: false,
 			noValidator: true,
+			precheckFailed: false,
 			code: null as number | null,
 			evidence: null as string | null,
+			metrics: null as HarnessMetrics | null,
 			output:
 				"未找到 validator。请提供 validateCmd（例如 validate.py 的路径），或在 workspace 放置 validate.py，或设置 HARNESS_ROOT。",
 		};
 	}
 	let res: { stdout?: string; stderr?: string; code?: number | null; killed?: boolean };
 	try {
-		res = await pi.exec(r.cmd, r.args, { cwd: st.workspace || process.cwd(), timeout: 30 * 60 * 1000 });
+		res = await pi.exec(r.cmd, r.args, { cwd, timeout: 30 * 60 * 1000 });
 	} catch (e) {
 		res = { stdout: "", stderr: String((e as Error)?.message || e), code: -1, killed: false };
 	}
 	const output =
+		(preCmd ? `[L0 precheck] $ ${preCmd} -> PASS\n` : "") +
 		`$ ${r.label}\n` +
 		`exit=${res.code}${res.killed ? " (killed/timeout)" : ""}\n` +
 		`--- stdout (tail) ---\n${tail(res.stdout, 6000)}\n` +
 		`--- stderr (tail) ---\n${tail(res.stderr, 4000)}\n`;
+	const metrics = parseHarnessMetrics(`${res.stdout ?? ""}\n${res.stderr ?? ""}`);
 	let evidence = "";
 	try {
 		const dir = path.join(runDir(st.runId), "evidence");
@@ -469,7 +532,53 @@ async function runValidation(pi: ExtensionAPI, st: LoopState) {
 		evidence = path.join(dir, `round-${st.round}-${Date.now()}.log`);
 		fs.writeFileSync(evidence, output);
 	} catch {}
-	return { pass: res.code === 0, noValidator: false, code: res.code ?? null, evidence, output };
+	return {
+		pass: res.code === 0,
+		noValidator: false,
+		precheckFailed: false,
+		code: res.code ?? null,
+		evidence,
+		output,
+		metrics,
+	};
+}
+
+function recordValidationOutcome(
+	st: LoopState,
+	v: {
+		pass: boolean;
+		code: number | null;
+		evidence: string | null;
+		output: string;
+		metrics?: HarnessMetrics | null;
+		precheckFailed?: boolean;
+	},
+) {
+	const at = now();
+	const verdict = v.pass ? "pass" : "fail";
+	const commitSha = resolveGitHeadSha(st.workspace || process.cwd());
+	st.validatedRound = st.round;
+	st.lastVerdict = verdict;
+	st.lastCode = v.code;
+	st.lastEvidence = v.output;
+	if (v.metrics) st.lastMetrics = v.metrics;
+	st.history.push({
+		round: st.round,
+		verdict,
+		code: v.code,
+		at,
+		evidence: v.evidence,
+		...(v.metrics ? { metrics: v.metrics } : {}),
+		...(commitSha ? { commitSha } : {}),
+		...(v.precheckFailed ? { precheckFailed: true } : {}),
+	});
+	st.bestRound = pickBetterRound(st.bestRound, {
+		round: st.round,
+		verdict,
+		commitSha,
+		...(v.metrics ? { metrics: v.metrics } : {}),
+		at,
+	});
 }
 
 // ---------- 提示词 ----------
@@ -485,7 +594,13 @@ function stateBlock(st: LoopState) {
 		st.reviewerModel ? `reviewer: ${st.reviewerModel.family}/${st.reviewerModel.id}` : "",
 		st.plan ? `plan: ${tail(st.plan, 600)}` : "",
 		st.plannerOutput ? `planner_acceptance:\n${tail(st.plannerOutput, 1600)}` : "",
+		st.preflightSummary ? `preflight: ${st.preflightSummary}` : "",
+		st.precheckCmd ? `precheck_l0: ${st.precheckCmd}` : "",
 		st.lastVerdict ? `last_verdict: ${st.lastVerdict} (exit ${st.lastCode})` : "last_verdict: (none yet)",
+		st.lastMetrics ? `last_metrics: ${JSON.stringify(st.lastMetrics)}` : "",
+		st.bestRound
+			? `best_checkpoint: round ${st.bestRound.round} (${st.bestRound.verdict}${st.bestRound.commitSha ? `@${st.bestRound.commitSha}` : ""}${st.bestRound.metrics ? ` ${JSON.stringify(st.bestRound.metrics)}` : ""})`
+			: "",
 		st.lastReview
 			? `last_review: ${st.lastReview.verdict} — ${tail((st.lastReview.reasons || []).join("; "), 600)}`
 			: "",
@@ -514,6 +629,10 @@ function nextRoundPrompt(st: LoopState, v: { code?: number | null; output?: stri
 	return [
 		`【mini-harness · 第 ${st.round} 轮】上一轮未通过。`,
 		v ? `validator 退出码：${v.code}` : "",
+		st.lastMetrics ? `本轮指标：${JSON.stringify(st.lastMetrics)}` : "",
+		st.bestRound
+			? `历史最优 Checkpoint：第 ${st.bestRound.round} 轮（${st.bestRound.verdict}${st.bestRound.commitSha ? ` · git ${st.bestRound.commitSha}` : ""}）——若本轮发生性能或正确性退化，请对照最优轮改动收敛。`
+			: "",
 		v ? "validator 证据（尾部）：\n```\n" + tail(v.output, 3000) + "\n```" : "",
 		feedback ? `额外反馈：\n${tail(feedback, 2000)}` : "",
 		`请修复后再次调用 loop_done(summary)。目标：${st.goal}`,
@@ -943,6 +1062,7 @@ export interface CreateLoopRunInput {
 	cwd: string;
 	goal: string;
 	criteria?: string;
+	precheckCmd?: string;
 	validateCmd?: string;
 	mode?: "code" | "llm";
 	maxRounds?: number;
@@ -1018,6 +1138,7 @@ export function createLoopRun(
 			.map((x) => String(x).trim())
 			.filter(Boolean)
 			.map((x) => real(x)),
+		precheckCmd: String(input.precheckCmd ?? "").trim() || null,
 		validateCmd: String(input.validateCmd ?? "").trim() || null,
 		maxRounds,
 		auto: input.auto !== false,
@@ -1043,6 +1164,7 @@ export function createLoopRun(
 		acceptance: null,
 		useReviewer: input.useReviewer !== false,
 		...(criteria ? { criteria } : {}),
+		preflightSummary: collectPreflightSummary(workspace),
 		setupPending: true,
 		...(plannerSpec ? { plannerSpec } : {}),
 		...(reviewerSpec ? { reviewerSpec } : {}),
@@ -1064,7 +1186,8 @@ function plannerPrompt(st: LoopState) {
 		`目标：${st.goal}`,
 		st.criteria ? `验收标准（用户给定）：${st.criteria}` : "",
 		`工作区：${st.workspace}`,
-		st.validateCmd ? `validator：${st.validateCmd}` : "",
+		st.precheckCmd ? `precheck (L0)：${st.precheckCmd}` : "",
+		st.validateCmd ? `validator (L1)：${st.validateCmd}` : "",
 		st.mode === "llm" ? "（LLM loop：无代码 validator，验收条件由 reviewer 判定）" : "",
 		"请输出：1) 拆解步骤；2) 验收条件（明确文件/命令/指标，能被 validator 或人工直接核验）；3) 风险与需要人工确认的点。",
 	]
@@ -1173,6 +1296,11 @@ export function createLoopExtension() {
 				"当前会话已有活跃运行时直接返回该运行，不重复创建。",
 			parameters: Type.Object({
 				goal: Type.String({ description: "要达成的目标（写清可验证的完成条件）" }),
+				precheckCmd: Type.Optional(
+					Type.String({
+						description: "L0 fast precheck shell command run before full validator",
+					}),
+				),
 				validateCmd: Type.Optional(
 					Type.String({
 						description: "validator 命令（shell）。缺省自动找 workspace/validate.py 或 HARNESS_ROOT/validate.py",
@@ -1251,6 +1379,7 @@ export function createLoopExtension() {
 					sessionId: sessionIdOf(c),
 					cwd: c?.cwd || process.cwd(),
 					goal: String(params.goal || ""),
+					precheckCmd: params.precheckCmd,
 					validateCmd: params.validateCmd,
 					harnessRoot: params.harnessRoot,
 					artifactRoots: Array.isArray(params.artifactRoots) ? params.artifactRoots : [],
@@ -1381,12 +1510,13 @@ export function createLoopExtension() {
 					};
 				}
 				const v = await runValidation(pi, st);
-				st.validatedRound = st.round;
-				st.lastVerdict = v.pass ? "pass" : "fail";
-				st.lastCode = v.code;
-				st.lastEvidence = v.output;
-				st.history.push({ round: st.round, verdict: st.lastVerdict, code: v.code, at: now(), evidence: v.evidence });
-				journal(st, "manual-validate", { pass: v.pass, code: v.code });
+				recordValidationOutcome(st, v);
+				journal(st, "manual-validate", {
+					pass: v.pass,
+					code: v.code,
+					precheckFailed: v.precheckFailed,
+					metrics: v.metrics,
+				});
 				if (v.pass) {
 					// 通过：同步跑 reviewer 并完结，避免 headless/print 模式下 agent_end 早退导致 reviewer 被跳过
 					await handleVerdict(pi, c, st, v);
@@ -1577,17 +1707,7 @@ export function createLoopExtension() {
 							journal(st, "late-callback-dropped", { at: "agent_end/runValidation", epoch });
 							return;
 						}
-						st.validatedRound = st.round;
-						st.lastVerdict = v.pass ? "pass" : "fail";
-						st.lastCode = v.code;
-						st.lastEvidence = v.output;
-						st.history.push({
-							round: st.round,
-							verdict: st.lastVerdict,
-							code: v.code,
-							at: now(),
-							evidence: v.evidence,
-						});
+						recordValidationOutcome(st, v);
 					}
 					await handleVerdict(pi, c, st, v);
 				}

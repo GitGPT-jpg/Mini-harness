@@ -397,6 +397,9 @@ function loopUiFromState(st: LoopState): LoopUiState {
 		setupPending: st.status === "active" && st.setupPending === true,
 		...(st.setupError ? { setupError: st.setupError } : {}),
 		...(st.criteria ? { criteria: st.criteria } : {}),
+		...(st.precheckCmd ? { precheckCmd: st.precheckCmd } : {}),
+		...(st.lastMetrics ? { lastMetrics: st.lastMetrics } : {}),
+		...(st.bestRound ? { bestRound: st.bestRound } : {}),
 		createdAt: st.createdAt,
 	};
 }
@@ -12474,6 +12477,7 @@ export class ClientSession {
 	/** 启动受控 Loop（D-12-2）：先 createLoopRun 建 run 落盘（界面立刻可见），再发干活提示词。 */
 	async startLoop(msg: {
 		goal: string;
+		precheckCmd?: string;
 		validateCmd?: string;
 		mode?: "code" | "llm";
 		maxRounds?: number;
@@ -12490,6 +12494,7 @@ export class ClientSession {
 		const goal = msg.goal?.trim() ?? "";
 		const taskId = msg.taskId ?? `loop-${Date.now().toString(36)}`;
 		const criteria = msg.criteria?.trim() ?? "";
+		const precheckCmd = msg.precheckCmd?.trim() ?? "";
 		const validateCmd = msg.validateCmd?.trim() ?? "";
 		const roots = (msg.artifactRoots ?? []).map((r) => String(r).trim()).filter(Boolean);
 		// cwd 取会话运行时的 cwd：与扩展 ctx.cwd 同源，run 的工作区就是模型干活的目录
@@ -12498,6 +12503,7 @@ export class ClientSession {
 			cwd: conv.runtime?.cwd || conv.cwd || this.cwd,
 			goal,
 			criteria,
+			precheckCmd,
 			validateCmd,
 			mode: msg.mode,
 			maxRounds: msg.maxRounds,
@@ -12526,6 +12532,7 @@ export class ClientSession {
 		if (criteria) lines.push(`验收标准：${criteria}`);
 		if (st.worktreeBranch)
 			lines.push(`工作目录：${st.workspace}（独立 git worktree，分支 ${st.worktreeBranch}），所有修改都在这里做。`);
+		if (precheckCmd) lines.push(`precheckCmd（L0 快速预检，先跑它）：${precheckCmd}`);
 		if (validateCmd) lines.push(`validateCmd（运行时用它验证）：${validateCmd}`);
 		else if (st.mode !== "llm")
 			lines.push(

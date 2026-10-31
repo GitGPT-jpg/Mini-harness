@@ -23,14 +23,15 @@ import { LuFlaskConical, LuMessageSquareDashed, LuWorkflow } from "react-icons/l
 import { REQUIRED_TOPBAR_ITEM_IDS, restoreUiItem, type UiSlotEntry, type UiSlotId } from "../ui-slots";
 import type { ChatState } from "../use-chat";
 import { useFormattedCost } from "../cost-format";
-import { isZhLocale, useT, useI18n, type Translate } from "../i18n";
+import { isZhLocale, useT, useI18n } from "../i18n";
 import { useAppGlobals, appSend } from "../app-globals";
 import { focusComposer } from "../composer-bridge";
 import { openContextMenu } from "../context-menu-state";
 import { cacheMetrics, estimateStreamTokens, streamRate, trimRateSamples, type RateSample } from "../cache-stats";
 import { Dropdown, DropdownItem } from "./Dropdown";
 import { appUrl } from "../base-url";
-import { openTaskDesk } from "../loop-cockpit";
+import { openRunDetail, openTaskDesk } from "../loop-cockpit";
+import { loopStatus } from "../loop-status";
 import { ClusterStatusItem } from "./ClusterControls";
 
 export type ViewName = "chat" | "terminal";
@@ -42,25 +43,6 @@ export function formatLoopElapsed(ms: number): string {
 	const m = Math.floor(s / 60);
 	if (m < 60) return `${m}m${String(s % 60).padStart(2, "0")}s`;
 	return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m`;
-}
-
-/** Loop 阶段名（intake/plan/run/validate/review/done → 本地化短词）。 */
-export function loopStageText(t: Translate, stage?: string): string {
-	switch (stage) {
-		case "intake":
-			return t("loopStageIntake");
-		case "plan":
-			return t("loopStagePlan");
-		case "run":
-			return t("loopStageRun");
-		case "validate":
-		case "review":
-			return t("loopStageValidate");
-		case "done":
-			return t("loopStageDone");
-		default:
-			return stage ?? "";
-	}
 }
 
 export interface BarItemTheme {
@@ -576,41 +558,39 @@ export function BarItem({
 		);
 	}
 
-	// 6b. 特殊条目：Loop 运行状态（阶段 · 轮次 · 耗时；无 loop 时整条不画）
+	// 6b. 特殊条目：Loop 运行状态（人话状态 · 轮次 · 耗时；可点开任务详情或任务台；无 loop 时整条不画）
 	if (id === "host:loop") {
 		const loop = state?.loop;
 		if (!loop) return null;
-		const loopElapsed = formatLoopElapsed(loopNow - new Date(loop.createdAt).getTime());
-		const loopRound =
-			loop.round !== undefined ? (loop.maxRounds ? `${loop.round}/${loop.maxRounds}` : `${loop.round}`) : "";
-		let loopClass = "ok";
-		let loopText: string;
-		if (loop.kind === "pending") {
-			loopText = t("loopStatusStarting");
-			loopClass = "busy";
-		} else if (loop.kind === "request-failed") {
-			loopText = t("loopStatusFailed");
-			loopClass = "error";
-		} else if (loop.status === "active") {
-			loopText = `${loopStageText(t, loop.stage)}${loopRound ? ` · ${loopRound}` : ""} · ${loopElapsed}`;
-		} else if (loop.status === "done") {
-			loopText = `${t("loopStatusDone")}${loopRound ? ` · ${loopRound}` : ""} · ${loopElapsed}`;
-		} else {
-			loopText = `${t("loopStatusStopped")}${loopRound ? ` · ${loopRound}` : ""} · ${loopElapsed}`;
-			loopClass = "mid";
-		}
-		const loopTitle = `${loopText}${loop.goal ? `\n${loop.goal}` : ""}${loop.reason ? `\n${loop.reason}` : ""}${loop.stopReason ? `\n${loop.stopReason}` : ""}`;
+		const st = loopStatus(loop, t);
+		const isActive = loop.kind === "pending" || (loop.kind === "run" && loop.status === "active");
+		const loopElapsed = isActive ? formatLoopElapsed(loopNow - new Date(loop.createdAt).getTime()) : "";
+		const loopText = [st.label, st.hint && isActive ? st.hint : "", loopElapsed].filter(Boolean).join(" · ");
+		const loopClass =
+			st.tone === "ok"
+				? "ok"
+				: st.tone === "busy"
+					? "busy"
+					: st.tone === "warn"
+						? "mid"
+						: st.tone === "bad"
+							? "error"
+							: "idle";
+		const runId = loop.kind === "run" ? loop.runId : undefined;
+		const loopTitle = `${st.text}${loop.goal ? `\n${loop.goal}` : ""}${loop.reason ? `\n${loop.reason}` : ""}`;
 		return (
-			<span
-				className={`bar-item status-item status-loop bar-item-loop ${loopClass}`}
+			<button
+				type="button"
+				className={`bar-item status-item status-action status-loop bar-item-loop ${loopClass} tone-${st.tone}`}
 				title={loopTitle}
 				data-tip={loopTitle}
+				onClick={() => (runId ? openRunDetail(runId) : openTaskDesk())}
 				onContextMenu={handleContextMenu}
 				data-bar-item={id}
 			>
 				<span className={`status-dot ${loopClass}`} />
 				<span className="bar-item-text">{withName(loopText)}</span>
-			</span>
+			</button>
 		);
 	}
 

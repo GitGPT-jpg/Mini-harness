@@ -1,6 +1,6 @@
 # 训推引擎组 Harness 交接文档
 
-> 更新于 2026-10-30。分支 `harness-cockpit`：GitHub 上是 `812bb9d`；本地多出 D-10、D-11 的提交（均未推送，见下文）。
+> 更新于 2026-10-30。主工作区已完备转正（关联工作树 `/Users/zhangteng14/ComateProjects/mini-harness-cockpit` 已清理），`harness-cockpit` 与 `main` 同步并已推送到 GitHub（`https://github.com/GitGPT-jpg/Mini-harness`）。
 > 读法：先看第 0 节「现状」和第 11 节「待办」；要改代码再看第 3–10 节。
 
 ## 0. 现状
@@ -15,9 +15,8 @@
 
 | 项 | 说明 |
 |---|---|
-| 本工作树 | `/Users/zhangteng14/ComateProjects/mini-harness-cockpit`，分支 `harness-cockpit` |
-| 主工作树 | `/Users/zhangteng14/ComateProjects/pi agent 的定制化`，分支 `1`：旧 harden 版驾驶舱，另一个窗口在维护，**不要改** |
-| GitHub | remote `github` = `https://github.com/GitGPT-jpg/Mini-harness`，分支 `harness-cockpit` 已推到 `812bb9d` |
+| 主工作区（唯一工作树） | `/Users/zhangteng14/ComateProjects/pi agent 的定制化`，分支 `harness-cockpit`（`main` 同构对齐；原关联工作树 `mini-harness-cockpit` 已在转正后清理） |
+| GitHub | remote `github` = `https://github.com/GitGPT-jpg/Mini-harness`，`harness-cockpit` 与 `main` 均已推送最新提交 |
 | icode | remote `origin` = `icode.baidu.com/baidu/ai/mini-harness`。禁止直推 master，要用 `icode push` 提 CR，commit 需绑 iCafe 卡（luno-5578）。最新 CR #123037970 是旧 harden 版，待他人 +2，不含本分支 |
 | 本机在跑的驾驶舱 | `127.0.0.1:8787`，来自主工作树的旧版。**测试别占这个端口，也别杀这个进程** |
 | 上游来源 | 见 `pi-web-ui/PROVENANCE.md`：xing-shuyin/pi-web-ui v0.111.0（tag commit `7c40b44`，MIT），vendor 基线提交 `30902c1` |
@@ -291,3 +290,34 @@ kill %1; rm -rf "$H"                                       # 首次配置弹窗�
 **成果查看（D-12-3）**：`GET /api/mini-harness/runs/:runId/detail`（runId 正则校验）返回公开状态字段、journal 时间线（尾部若干条）、每轮 `evidence/round-N-review.md` 与 validator 日志尾部、`lastDiff`（截断）。前端加 run 详情面板（任务台点行、状态条点结果都能打开）：目标与验收标准、代码验证/模型评审两行结论、否决或出错原因、各轮记录、validator 输出、diff；按钮：停止 / 重试评审 / 按代码验证收下 / 用同一目标重新开始。人话状态统一由一个函数产出：正在干活·第 N/M 轮；还没过关·查看失败证据；评审没通过·查看理由；裁判掉线了·等待重试；交卷了·查看成果（仅代码验证 / 模型自述时注明）；已停止；运行出错；没启动起来：原因。
 
 **统一任务入口（D-12-4）**：输入框上沿两枚胶囊合成一枚「新任务」，打开统一弹窗（由 CodeLoopModal 演进）：模板、做什么、怎么算完成、验收方式三选一（代码验证 + 模型评审〔默认〕/ 仅代码验证 / 仅模型评审），高级项（检查命令、产物目录、最多轮数、规划/评审模型）。前两种走 mini-harness 代码 loop（`useReviewer` 开/关）；「仅模型评审」走原 LLM loop（GoalService：`set_goal`，保留「帮我细化」、评审模型、最多尝试、暂停/继续）。运行中的状态显示不变（GoalBar 显示 LLM loop 进度，LoopBar 显示代码 loop）。
+
+## 14. 已完成：转正切换、去 `pi-web-ui` 自主化、推理效率增强与 UI 精修（D-12c）
+
+### 14.1 工作树转正与清理
+- 已在主仓库 `/Users/zhangteng14/ComateProjects/pi agent 的定制化` 切换到 `harness-cockpit` 并同步 `main` 分支。
+- 已通过 `git worktree remove` + 目录清理彻底移除临时关联工作树 `/Users/zhangteng14/ComateProjects/mini-harness-cockpit`，当前主仓库为唯一事实源，本机 `:8787` 直接运行主仓库构建产物。
+
+### 14.2 方向一：去 `pi-web-ui` 化与全自主能力
+- **`HARNESS_*` 自主环境变量桥（`pi-web-ui/server/harness-env.ts`）**：支持 `HARNESS_PORT`、`HARNESS_HOST`、`HARNESS_CWD`、`HARNESS_DATA_DIR`、`HARNESS_ENGINE`、`HARNESS_TOKEN`、`HARNESS_SDK`、`HARNESS_SDK_DIR`、`HARNESS_AGENT_DIR`、`HARNESS_ALLOW_HOSTS`、`HARNESS_ALLOW_ORIGINS`、`HARNESS_HISTORY_WINDOW`、`HARNESS_TOOL_TIMEOUT_MS`、`HARNESS_TOOL_LAZY_LOADING`、`HARNESS_SHELL` 等全套自主变量，优先级高于 `PI_WEB_*`，未设置时 100% 兼容旧变量。
+- **独立 CLI 入口（`pi-web-ui/bin/harness.mjs`）**：`package.json` 的 `bin` 新增 `harness` 与 `mini-harness`，支持直接以 `harness --port 8787` 启动或管理服务。
+- **Loop 子系统模块化（`pi-web-ui/server/loop/`）**：拆分为 `metrics.ts`（指标解析/最优 Checkpoint/前置探测）、`distill.ts`（经验卡片生成与落盘）、`extension.ts`（状态机与工具）、`routes.ts`（HTTP 路由）。
+
+### 14.3 方向二：最大化提升推理任务效率与质量
+- **分级 Validator（L0 快速预检 `precheckCmd` + L1 完整验收 `validateCmd`）**：
+  - 在 `TaskModal` 高级项、`loop_start_request` 协议、`loop_start` 工具与 `LoopState` 中新增可选 `precheckCmd`。
+  - 每轮验收先跑 L0 `precheckCmd`（超时 5 分钟，用于语法检查 `py_compile`、配置校验、轻量冒烟）；一旦失败立即短路并记录 `precheckFailed: true`，**不执行昂贵的 L1 压测命令，也不调用 reviewer 模型**。
+- **结构化指标追踪（`HARNESS_METRIC`）与最优轮次 Checkpoint（`bestRound`）**：
+  - 自动解析 validator 输出中的 `HARNESS_METRIC: {"tps": 92.5, "ttft_ms": 118}` 或 `HARNESS_METRIC: loss_pct=13.8 cache_hit=0.96`。
+  - 每轮记录 git HEAD `commitSha` 与数值指标，自动计算并维护 `bestRound`（通过态优先，同为通过态按吞吐/命中率正向或损耗/延迟反向比较），注入 `<mini_harness_loop>` 与下一轮修复提示词，并在 `RunDetailModal` 头部展示。
+- **前置环境探测与一键经验沉淀（Experience Distillation）**：
+  - 创建 run 时自动探测 git 分支/HEAD SHA、项目关键文件（`validate.py` / `pyproject.toml` 等）与 `KUBECONFIG` 状态，注入 `<mini_harness_loop>` 的 `preflight` 行，免去首轮盲探。
+  - 新增 `POST /api/mini-harness/runs/:runId/distill` 接口与 `RunDetailModal` 底栏「沉淀经验卡片」按钮，一键将任务目标、模型组合、L0/L1 命令、最优指标与轮次演进归档为 `<DATA_DIR>/knowledge/loop-<runId>.md`（同时备份于 `~/.mini-harness/runs/<runId>/distilled.md`）。
+
+### 14.4 驾驶舱 UI/UX 精修
+- **LoopBar 状态条重设计（`LoopBar.tsx` + `.goalbar.loopbar-card`）**：告别原本横跨整列、左对齐的生硬大框，改为**居中紧凑毛玻璃胶囊卡**（`width: fit-content; border-radius: 999px; backdrop-filter: blur(12px)`），按运行色调（`tone-busy` 紫 / `tone-ok` 绿 / `tone-warn` 琥珀 / `tone-bad` 红）精细描边，内部动作按钮全部圆角胶囊化。
+- **底栏左下角 Loop 状态项重设计（`BarItem.tsx` 的 `host:loop` + `.status-loop`）**：
+  - 统一复用 `loopStatus()` 人话状态，升级为可点击的圆角状态胶囊（点击直接打开当前 `RunDetailModal` 或 `TaskDesk`）；
+  - 修复非活跃/已停止任务在底栏持续跳秒（如 `56241s`）的问题，仅在 `active` 时实时计时；补齐 `.status-dot.mid` / `.status-dot.idle` 样式。
+- **顶栏与底栏细节修复**：
+  - 将任务台内部徽标选择器收紧为 `.task-desk-meta .task-desk-chip`，不再污染顶栏「任务台」按钮的 `.topbar .chip` 高度与内边距；
+  - 为底栏网络延迟 `.status-latency` 增加左边距，修复 `"API 已连接3ms"` 文字粘连。

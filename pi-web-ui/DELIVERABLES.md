@@ -102,3 +102,17 @@ node pi-web-cockpit/verify-cockpit.mjs  # 浏览器 E2E（可选 KEY_FILE / SHOT
 | D-12-3 | 成果与证据查看器 + 人话状态：新增 `GET /api/mini-harness/runs/:runId/detail`（各轮评审报告、validator 日志、diff、journal）；前端 `loop-status.ts` 统一人话文案与色调，`RunDetailModal.tsx` 展示两行验收结论、各轮折叠报告、终端输出、着色 diff 与恢复操作 | b4ca3dd + D-12b |
 | D-12-4 | 统一任务入口：输入框上沿合并为单枚「新任务」胶囊（`host:task-new`），`TaskModal.tsx`（取代 `CodeLoopModal.tsx`）通过三选一验收方式（代码验证 + 模型评审 / 仅代码验证 / 仅模型评审）自动分流代码 Loop 与 LLM Loop | D-12b |
 | D-12-5 | 清理与收尾验证：删除 `vendor/mini-harness-runtime` 与 `client-state.seed.json`；全量 vitest 313/313、核心冒烟 16/16、`loop-bar-test.mjs` 与 `run-detail-ui-test.mjs` 浏览器 E2E 全绿 | b4ca3dd + D-12b |
+
+## 九、D-12c：去 pi-web-ui 自主化、推理任务效率增强与驾驶舱 UI 精修
+
+围绕用户提出的两个核心方向与驾驶舱视觉细节完成闭环：
+
+| 模块 | 内容 | 关键文件 |
+|---|---|---|
+| 方向一：去 `pi-web-ui` 化与全自主能力 | 新增 `HARNESS_*` 自主环境变量体系（`HARNESS_PORT` / `HARNESS_HOST` / `HARNESS_CWD` / `HARNESS_DATA_DIR` / `HARNESS_TOKEN` / `HARNESS_SDK` / `HARNESS_AGENT_DIR` 等 17 项，优先级高于 `PI_WEB_*` 并向后兼容）；新增独立 CLI 入口 `bin/harness.mjs`（暴露 `harness` / `mini-harness` 命令）；将 `server/loop/` 拆分为职责清晰的独立模块（`metrics.ts` / `distill.ts` / `extension.ts` / `routes.ts`） | `server/harness-env.ts`、`bin/harness.mjs`、`server/index.ts`、`server/resolve-global-sdk.ts`、`package.json` |
+| 方向二（1）：分级验收（L0 快速预检 + L1 完整门禁） | 支持可选 `precheckCmd`（L0 秒级语法/导包/配置检查）：一旦 L0 失败立即短路返回证据，跳过耗时的集群压测 `validateCmd`（L1）与模型评审，大幅节约推理压测时间与 token | `server/loop/extension.ts`、`web/src/components/TaskModal.tsx`、`web/src/components/RunDetailModal.tsx` |
+| 方向二（2）：结构化指标追踪与最优轮次 Checkpoint | 自动从 validator 输出提取 `HARNESS_METRIC:`（支持 JSON 与 `key=value` 两种格式），记录每轮指标与 git HEAD `commitSha`，维护 `bestRound` 最优 Checkpoint 并注入下一轮提示词，防止多轮迭代性能退化 | `server/loop/metrics.ts`、`server/loop/extension.ts`、`web/src/components/RunDetailModal.tsx` |
+| 方向二（3）：前置环境探测与一键经验沉淀 | `createLoopRun` 自动采集工作区 git 分支/SHA、关键文件与 `KUBECONFIG` 就绪态注入 `<mini_harness_loop>`；新增 `POST /api/mini-harness/runs/:runId/distill` 与详情弹窗「沉淀经验卡片」按钮，一键归档 Markdown 知识卡片到 `<DATA_DIR>/knowledge/loop-<runId>.md` | `server/loop/distill.ts`、`server/loop/routes.ts`、`web/src/components/RunDetailModal.tsx` |
+| UI 精修与关联工作树清理 | 重设计 `LoopBar` 为居中紧凑毛玻璃胶囊卡（`.goalbar.loopbar-card`，按色调染色描边與圆角按钮），升级左下角底栏 `host:loop` 为可点击的圆角胶囊（直达任务详情，停止态不再无限跳秒），修复顶栏「任务台」chip 样式覆盖与「API 已连接 3ms」间距；清理已退役的关联工作树 `/Users/zhangteng14/ComateProjects/mini-harness-cockpit`，主工作区 `harness-cockpit` 与 `main` 统一转正 | `web/src/components/LoopBar.tsx`、`web/src/components/BarItem.tsx`、`web/src/styles.css` |
+
+- **验证（2026-10-30）**：`npm run typecheck` 0 错误；`npm run build` 通过；`npx vitest run` **314/314 文件全过（3372 过 / 0 失败 / 9 跳过）**；`node tests/loop-bar-test.mjs` **26/26**；`node tests/run-detail-ui-test.mjs` **31/31**。

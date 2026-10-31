@@ -79,8 +79,10 @@ export function pickGlobalSdk(
 	if (BUNDLED_MODES.has((mode ?? "global").trim().toLowerCase())) return null;
 
 	// 显式透传的宿主 SDK 路径（如 extensions/webui.ts 宿主传递，issue #482）：若不降级优先选用
-	if (process.env.PI_WEB_SDK_DIR) {
-		const hostCopy = copies.find((c) => dirname(c.path) === process.env.PI_WEB_SDK_DIR);
+	if (process.env.HARNESS_SDK_DIR || process.env.PI_WEB_SDK_DIR) {
+		const hostCopy = copies.find(
+			(c) => dirname(c.path) === (process.env.HARNESS_SDK_DIR || process.env.PI_WEB_SDK_DIR),
+		);
 		if (hostCopy && (!bundledCopy || compareVersions(hostCopy.version, bundledCopy.version) >= 0)) {
 			return hostCopy;
 		}
@@ -114,7 +116,10 @@ export function pickGlobalSdk(
 }
 
 /** 注册钩子；返回实际选中的副本（null = 用自带副本）。 */
-export function registerGlobalSdkPreference(mode = process.env.PI_WEB_SDK, fromFile = import.meta.url): SdkCopy | null {
+export function registerGlobalSdkPreference(
+	mode = process.env.HARNESS_SDK ?? process.env.PI_WEB_SDK,
+	fromFile = import.meta.url,
+): SdkCopy | null {
 	try {
 		const copies = sdkCopies(fromFile);
 		const bundled = findBundledCopy(copies, fromFile);

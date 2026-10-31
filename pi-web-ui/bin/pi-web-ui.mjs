@@ -40,6 +40,19 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { fileURLToPath } from "node:url";
 
+for (const [hKey, pKey] of [
+	["HARNESS_PORT", "PI_WEB_PORT"],
+	["HARNESS_HOST", "PI_WEB_HOST"],
+	["HARNESS_CWD", "PI_WEB_CWD"],
+	["HARNESS_DATA_DIR", "PI_WEB_DATA_DIR"],
+	["HARNESS_ENGINE", "PI_WEB_ENGINE"],
+	["HARNESS_TOKEN", "PI_WEB_TOKEN"],
+	["HARNESS_SDK", "PI_WEB_SDK"],
+	["HARNESS_SDK_DIR", "PI_WEB_SDK_DIR"],
+	["HARNESS_AGENT_DIR", "PI_CODING_AGENT_DIR"],
+]) {
+	if (process.env[hKey] !== undefined && process.env[hKey] !== "") process.env[pKey] = process.env[hKey];
+}
 const BIN_DIR = dirname(fileURLToPath(import.meta.url));
 /** <pkg>/dist/server/index.js — the actual server entry. */
 const SERVER_ENTRY = join(BIN_DIR, "..", "dist", "server", "index.js");

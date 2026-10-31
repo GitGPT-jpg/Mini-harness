@@ -3,7 +3,7 @@ import { FiFileText } from "react-icons/fi";
 import type { LoopUiState } from "../types";
 import { useT } from "../i18n";
 import { appSend } from "../app-globals";
-import { closeRunDetail, mhGet, openTaskModal, useCockpit } from "../loop-cockpit";
+import { closeRunDetail, mhGet, mhPost, openTaskModal, useCockpit } from "../loop-cockpit";
 import {
 	canAcceptValidatorOnly,
 	loopRoundText,
@@ -27,7 +27,13 @@ export interface RunDetail {
 	stopReason: string | null;
 	acceptance: string | null;
 	setupError: string | null;
-	validator: { cmd: string | null; verdict: string | null; code: number | null; evidenceTail: string };
+	validator: {
+		precheckCmd?: string | null;
+		cmd: string | null;
+		verdict: string | null;
+		code: number | null;
+		evidenceTail: string;
+	};
 	review: { enabled: boolean; verdict: string | null; reasons: string[] };
 	models: { main: string | null; planner: string | null; reviewer: string | null };
 	project: string;
@@ -37,7 +43,23 @@ export interface RunDetail {
 	plannerOutput: string;
 	plan: string;
 	summary: string;
-	history: Array<{ round: number; verdict: string; code: number | null; at: string }>;
+	history: Array<{
+		round: number;
+		verdict: string;
+		code: number | null;
+		at: string;
+		metrics?: Record<string, number>;
+		commitSha?: string | null;
+		precheckFailed?: boolean;
+	}>;
+	lastMetrics?: Record<string, number> | null;
+	bestRound?: {
+		round: number;
+		verdict: string;
+		commitSha: string | null;
+		metrics?: Record<string, number>;
+		at: string;
+	} | null;
 	rounds: Array<{ round: number; review: string | null; logs: Array<{ file: string; tail: string }> }>;
 	diff: string;
 	journal: Array<Record<string, unknown>>;
@@ -237,8 +259,17 @@ export const RunDetailModal = memo(function RunDetailModal({ currentLoop }: Prop
 	);
 });
 
+function formatMetricsInline(m?: Record<string, number> | null): string {
+	if (!m) return "";
+	return Object.entries(m)
+		.map(([k, v]) => `${k}=${v}`)
+		.join(" · ");
+}
+
 function DetailBody({ detail }: { detail: RunDetail }) {
 	const t = useT();
+	const [distilling, setDistilling] = useState(false);
+	const [distilledPath, setDistilledPath] = useState<string | null>(null);
 	const vl = validatorLine(detail, t);
 	const rl = reviewerLine(detail, t);
 	const reasons = detail.review?.reasons ?? [];
@@ -285,6 +316,23 @@ function DetailBody({ detail }: { detail: RunDetail }) {
 						</ul>
 					</>
 				)}
+				{detail.lastMetrics && Object.keys(detail.lastMetrics).length > 0 && (
+					<div className="run-detail-meta">{t("runDetailMetrics", { v: formatMetricsInline(detail.lastMetrics) })}</div>
+				)}
+				{detail.bestRound && (
+					<div className="run-detail-meta">
+						{t("runDetailBestRound", {
+							n: detail.bestRound.round,
+							extra: [
+								detail.bestRound.commitSha ? `git ${detail.bestRound.commitSha.slice(0, 8)}` : "",
+								formatMetricsInline(detail.bestRound.metrics),
+							]
+								.filter(Boolean)
+								.map((s) => ` · ${s}`)
+								.join(""),
+						})}
+					</div>
+				)}
 				{detail.setupError && (
 					<>
 						<div className="run-detail-sub">{t("runDetailSetupError")}</div>
@@ -321,16 +369,20 @@ function DetailBody({ detail }: { detail: RunDetail }) {
 				</Section>
 			)}
 
-			{detail.mode !== "llm" && (detail.validator?.evidenceTail || detail.validator?.cmd) && (
-				<Section title={t("runDetailLatestOutput")}>
-					{detail.validator.cmd && (
-						<div className="run-detail-meta">{t("runDetailCmd", { cmd: detail.validator.cmd })}</div>
-					)}
-					{detail.validator.evidenceTail && (
-						<pre className="run-detail-pre run-detail-validator">{detail.validator.evidenceTail}</pre>
-					)}
-				</Section>
-			)}
+			{detail.mode !== "llm" &&
+				(detail.validator?.evidenceTail || detail.validator?.cmd || detail.validator?.precheckCmd) && (
+					<Section title={t("runDetailLatestOutput")}>
+						{detail.validator.precheckCmd && (
+							<div className="run-detail-meta">{t("runDetailPrecheck", { cmd: detail.validator.precheckCmd })}</div>
+						)}
+						{detail.validator.cmd && (
+							<div className="run-detail-meta">{t("runDetailCmd", { cmd: detail.validator.cmd })}</div>
+						)}
+						{detail.validator.evidenceTail && (
+							<pre className="run-detail-pre run-detail-validator">{detail.validator.evidenceTail}</pre>
+						)}
+					</Section>
+				)}
 
 			{detail.diff && (
 				<Section title={t("runDetailDiff")}>
@@ -366,6 +418,23 @@ function DetailBody({ detail }: { detail: RunDetail }) {
 						{t("runDetailBranch", { name: detail.worktreeBranch })}
 						{detail.worktreeCommitted ? ` · ${t("runDetailCommitted")}` : ""}
 					</span>
+				)}
+				{distilledPath ? (
+					<span className="run-detail-distilled">{t("runDetailDistilled", { path: distilledPath })}</span>
+				) : (
+					<button
+						type="button"
+						className="run-detail-distill-btn"
+						disabled={distilling}
+						onClick={async () => {
+							setDistilling(true);
+							const r = await mhPost<{ filePath?: string }>(`runs/${encodeURIComponent(detail.runId)}/distill`, {});
+							setDistilling(false);
+							if (r?.ok && r.data?.filePath) setDistilledPath(r.data.filePath);
+						}}
+					>
+						{distilling ? t("runDetailDistilling") : t("runDetailDistill")}
+					</button>
 				)}
 			</div>
 		</>

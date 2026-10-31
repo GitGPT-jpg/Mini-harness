@@ -486,6 +486,7 @@ export function handlePlanAndGoalMessage(msg: ClientMessage, cs: DispatchSession
 		case "loop_start_request":
 			void cs.startLoop?.({
 				goal: msg.goal,
+				precheckCmd: msg.precheckCmd,
 				validateCmd: msg.validateCmd,
 				mode: msg.mode,
 				maxRounds: msg.maxRounds,
