@@ -66,9 +66,6 @@ const ALL = [
 	// 审查者模式（自动委派）：开关快照 + prompt 自动转给常驻执行对话 + 关闭后恢复（零 token）。
 	"delegate-mode-test",
 	"left-panel-delete-test",
-	"list-files-missing-dir-test",
-	// #262 regression: directory symlinks classify as dir on all platforms + "~/" expansion in the panel path bar (Android/Termux).
-	"list-files-symlink-home-test",
 	// 后台任务「自动清理」的协议面（阈值落库/归一化、钉住、立即清理反馈）。
 	"bg-cleanup-test",
 	"preview-test",
@@ -80,7 +77,6 @@ const ALL = [
 	// 自定义审批规则协议面（规则增删改查 / 批量重排 / 内置规则重置 / 持久化播种）。
 	"approval-rules-test",
 	"question-bridge-test",
-	"recursive-watch-test",
 	"refresh-models-test",
 	"restart-handoff-test",
 	"restart-service-test",

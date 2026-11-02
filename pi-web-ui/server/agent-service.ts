@@ -26,7 +26,6 @@ import {
 	readdirSync,
 	rmSync,
 	mkdirSync,
-	watch,
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -813,10 +812,9 @@ export class ClientSession {
 	private bashKills = new Set<AbortController>();
 	/** Background-server tracking (port snapshots + 后台任务 panel state) —
 	 *  自包含模块，见 bg-servers.ts。列表按 CLIENT 存活，不随对话切换/结束消失。 */
-	/** 文件树 / 预览读写 / 目录 watcher —— 自包含模块，见 files-service.ts。 */
+	/** 预览读写 / 路径补全 / 全局检索 —— 自包含模块，见 files-service.ts。 */
 	private readonly files = new FilesService({
 		emit: (msg) => this.emit(msg),
-		isDisposed: () => this.disposed,
 		getCwd: () => this.cwd,
 		getActiveCwd: () => this.convs.get(this.activeId)?.cwd ?? this.cwd,
 		// issue #91：文件服务错误文案按客户端 UI 语言出中英（英文默认）。
@@ -2296,15 +2294,6 @@ export class ClientSession {
 	/** pi-config readiness check, cached briefly so 60ms snapshots don't hit disk. */
 	private piCheckCache: { at: number; configured: boolean } | null = null;
 
-	/** fs.watch on the currently-listed directory — file changes push an instant
-	 *  refresh (`file_changed`) so the tree updates without waiting for the 10s
-	 *  poll. Only the listed directory is watched (one level); navigating
-	 *  re-watches the new target. fs.watch isn't available on every platform /
-	 *  filesystem — failures silently fall back to the poll. */
-	private fsWatcher: ReturnType<typeof watch> | null = null;
-	private watchPath: string | null = null;
-	private watchTimer: ReturnType<typeof setTimeout> | null = null;
-
 	/** 子代理模板库（全局共享，<dataDir>/subagent-templates.json）。 */
 	private readonly subagentTemplates: SubagentTemplatesStore;
 	/** 审批规则库（全局共享，<dataDir>/approval-rules.json）。 */
@@ -3698,12 +3687,6 @@ export class ClientSession {
 
 	detachSink(send: (msg: ServerMessage) => void): void {
 		this.sinks.delete(send);
-		// PTYs intentionally survive a socket drop: they are owned by the
-		// conversation and can be inspected after reconnecting. Only conversation
-		// disposal or server shutdown kills them.
-		if (this.sinks.size === 0) {
-			this.files.unwatchDir();
-		}
 	}
 
 	/** Broadcast to every connected socket of this client. */
@@ -9493,7 +9476,6 @@ export class ClientSession {
 		this.stateStore.remember(this.clientId, abs);
 		void this.pushProjects();
 		this.refreshSessionsOnSwitch();
-		void this.listFiles(undefined);
 		// Commands are per-project (.pi/commands.json in the current cwd).
 		void this.listCommands();
 	}
@@ -11667,11 +11649,6 @@ export class ClientSession {
 		ClientSession.projectsCache = null;
 	}
 
-	/** List a workspace directory (relative to the configured cwd). */
-	async listFiles(relPath?: string): Promise<void> {
-		return this.files.listFiles(relPath);
-	}
-
 	/** 全局搜索：递归文件名匹配（结果经 search_files_result 回推，reqId 匹配）。 */
 	async searchFiles(query: string, reqId: number): Promise<void> {
 		return this.files.searchFiles(query, reqId);
@@ -12048,7 +12025,6 @@ export class ClientSession {
 		const target = path?.trim() || this.cwd;
 		try {
 			const { sandbox, copiedFiles } = await this.sandboxes.reset(target);
-			await this.listFiles();
 			this.flushSnapshot();
 			this.emit({
 				type: "notice",
@@ -12803,7 +12779,6 @@ export class ClientSession {
 			clearInterval(this.stallTimer);
 			this.stallTimer = null;
 		}
-		this.files.unwatchDir();
 		this.webUi.dispose();
 		// 关闭所有挂起的用户提问（dispose 时以「取消」解析，避免模型挂死）。
 		this.cancelPendingQuestions();

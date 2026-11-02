@@ -1,10 +1,9 @@
 /**
- * Files service — 从 agent-service.ts 抽出（文件树列目录 / 预览读写 / 路径补全）。
+ * Files service — 预览读写 / 路径补全 / 全局检索。
  *
- * 全部为无状态 fs 操作 + 一个自持的目录 watcher（当前列出目录），
- * 经 FilesHost 回调与 ClientSession 解耦。
+ * 全部为无状态 fs 操作，经 FilesHost 回调与 ClientSession 解耦。
  */
-import { Dirent, readFileSync, statSync, writeFileSync, watch } from "node:fs";
+import { Dirent, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve, relative, sep, isAbsolute, posix } from "node:path";
 import type { ServerMessage, FileEntry, FileSearchResult } from "./protocol.js";
@@ -81,15 +80,6 @@ export function wireToAbs(wire: string): string {
 	return resolve(w);
 }
 
-/** 机器浏览模式下某目录的父级 wire 路径：盘符根（"C:"）→ 机器根；posix "/" 无父级。 */
-export function absoluteParent(wire: string): string | null {
-	const s = normWirePath(wire);
-	if (s === "" || s === MACHINE_ROOT || s === "/") return null;
-	const i = s.lastIndexOf("/");
-	if (i < 0) return /^[A-Za-z]:$/.test(s) ? MACHINE_ROOT : null;
-	if (i === 0) return "/"; // posix "/a" → "/"
-	return s.slice(0, i);
-}
 /** 预览只读文件前 512KB。 */
 export const MAX_PREVIEW_BYTES = 512 * 1024;
 
@@ -149,81 +139,6 @@ export function workspacePath(root: string, raw: string): { abs: string; rel: st
 	return { abs, rel: rawRel.split(sep).join("/") };
 }
 
-/**
- * Read a directory for the file panel. The two platforms intentionally use
- * different strategies — do NOT unify them:
- *
- * darwin/linux (posix): hide build/dependency noise, small cap; a listing
- * failure (deleted/renamed dir → ENOENT/ENOTDIR, permission → EACCES/EPERM)
- * degrades to an empty listing plus a notice chosen by errorCode — the server
- * must NEVER crash on a vanished directory (issue #74).
- *
- * win32: stability and completeness first, preview second. ACL-protected
- * system dirs (C:\$Recycle.Bin, Program Files internals, OneDrive placeholders)
- * throw EPERM/EACCES on open — that must not kill the panel, so it degrades
- * to an empty listing plus a warning. Directory symlinks/junctions are
- * followed (all platforms — Android/Termux's ~/storage/* entries are symlinks
- * too) so folder links stay navigable; broken links still show as files
- * instead of vanishing. The cap is 4x posix and truncation is reported
- * via `truncated` instead of happening silently.
- */
-async function readDirForUI(
-	abs: string,
-	rel: string,
-): Promise<{ entries: FileEntry[]; truncated: boolean; error?: string; errorCode?: string }> {
-	const { join } = await import("node:path");
-	const fs = await import("node:fs/promises");
-	const ignored = ignoredEntries();
-	const MAX = IS_WIN32 ? 2000 : 500;
-
-	let dirents: import("node:fs").Dirent[];
-	try {
-		dirents = await fs.readdir(abs, { withFileTypes: true });
-	} catch (err) {
-		// 任何 readdir 失败都降级为“空列表 + notice”，绝不向上抛：listFiles 以
-		// fire-and-forget（void …）调用，未处理的 rejection 会成为 unhandled
-		// rejection 直接杀掉整个服务进程（issue #74：目录被删除/改名后刷新即崩）。
-		// 缺失（ENOENT/ENOTDIR）、权限拒绝（EACCES/EPERM）、系统 ACL 目录全部归此，
-		// 文案由 listFiles 按 errorCode 分类：缺失 = 软提示“目录不存在”，
-		// 权限/其余 = posix 硬错误 notice / win32 软提示（ACL 系统目录是常态）。
-		const e = err as NodeJS.ErrnoException;
-		return { entries: [], truncated: false, error: e.message, errorCode: e.code };
-	}
-
-	const out: FileEntry[] = [];
-	for (const d of dirents) {
-		if (ignored.has(d.name)) continue;
-		let type: "dir" | "file";
-		if (d.isSymbolicLink()) {
-			// Symlinks (mklink /D reparse points on win32, but also the directory
-			// links under Termux's ~/storage) are followed on ALL platforms so
-			// folder links stay navigable; broken links still show as files.
-			try {
-				const st = await fs.stat(join(abs, d.name));
-				type = st.isDirectory() ? "dir" : "file";
-			} catch {
-				type = "file";
-			}
-		} else {
-			type = d.isDirectory() ? "dir" : "file";
-		}
-		// 机器浏览（绝对路径）下 rel 是绝对 wire 路径；posix 根 "/" 特殊处理避免 "//name"。
-		const entryPath = rel === "" ? d.name : rel.endsWith("/") ? `${rel.slice(0, -1)}/${d.name}` : `${rel}/${d.name}`;
-		const entry: FileEntry = {
-			name: d.name,
-			path: entryPath,
-			type,
-		};
-		if (type === "file") entry.kind = previewKind(d.name);
-		out.push(entry);
-	}
-
-	out.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1));
-	const truncated = out.length > MAX;
-	if (truncated) out.length = MAX;
-	return { entries: out, truncated };
-}
-
 /** dirent → FileEntry classification: directory symlinks are resolved via
  *  stat() on ALL platforms (#262 — Termux's ~/storage/* entries are symlinks;
  *  the directory-only cwd picker renders an empty list if they type as files). */
@@ -246,8 +161,7 @@ async function classifyDirent(d: Dirent, absDir: string): Promise<{ name: string
 /** ClientSession 提供给本服务的宿主能力。 */
 export interface FilesHost {
 	emit: (msg: ServerMessage) => void;
-	isDisposed: () => boolean;
-	/** 文件面板 / 预览读写 / 补全的工作区根（服务启动 cwd 或会话 cwd）。 */
+	/** 预览读写 / 路径补全 / 创建文件夹的工作区根（服务启动 cwd 或会话 cwd）。 */
 	getCwd: () => string;
 	/** 全局检索等所用工作区（当前活动对话所属项目，可能与 getCwd 不同）。 */
 	getActiveCwd: () => string;
@@ -260,18 +174,6 @@ export interface FilesHost {
 }
 
 export class FilesService {
-	// ---- 当前列出目录的 watcher ----
-	private fsWatcher: ReturnType<typeof watch> | null = null;
-	private watchPath: string | null = null;
-	private watchTimer: ReturnType<typeof setTimeout> | null = null;
-	/** Recursive-watch state (win32/darwin): one native recursive watcher on the
-	 *  workspace root covers the WHOLE tree; watchPath just tracks which listed
-	 *  directory file_changed should refresh. */
-	private recursiveWatcher = false;
-	private watchRoot: string | null = null;
-	/** 已对哪个工作区根提示过「实时监听不可用，已回落轮询」——只提示一次。 */
-	private degradedNoticedFor: string | null = null;
-
 	constructor(private readonly host: FilesHost) {}
 
 	/** 机器根列目录（此电脑/盘符列表）；posix 上就是根 "/"。 */
@@ -312,128 +214,6 @@ export class FilesService {
 	/** 单字段错误文本的语言（host 未接线时英文默认）。 */
 	private lang(): ServerLang {
 		return this.host.getLang?.() ?? "en";
-	}
-
-	/** 目录列表失败的 notice：缺失路径（ENOENT/ENOTDIR）是删除/改名等正常场景，
-	 *  软提示“目录不存在”；其余（权限拒绝等）保留原平台语义——win32 软提示
-	 *  （ACL 系统目录常见），posix 硬错误（error 级 notice，取代曾经的 throw）。 */
-	private emitListError(path: string, error: string, code?: string): void {
-		if (code === "ENOENT") {
-			this.host.emit({
-				type: "notice",
-				level: "warning",
-				text: `目录不存在：${path}`,
-				textEn: `Directory not found: ${path}`,
-			});
-			return;
-		}
-		if (code === "ENOTDIR") {
-			this.host.emit({
-				type: "notice",
-				level: "warning",
-				text: `不是目录：${path}`,
-				textEn: `Not a directory: ${path}`,
-			});
-			return;
-		}
-		this.host.emit({
-			type: "notice",
-			level: IS_WIN32 ? "warning" : "error",
-			text: `目录不可读：${error}`,
-			textEn: `Directory is not readable: ${error}`,
-		});
-	}
-
-	async listFiles(relPath?: string): Promise<void> {
-		const rawCwd = this.host.getCwd();
-		if (isRemoteWorkspaceUri(rawCwd)) {
-			this.unwatchDir();
-			await this.listRemoteFiles(rawCwd, relPath);
-			return;
-		}
-		const { resolve, sep, relative } = await import("node:path");
-		const root = resolve(rawCwd);
-		let raw = relPath ?? "";
-		// Expand a leading "~/" (path-bar input) to the home directory — same
-		// rules as completePath/makeDir. The result is absolute, so it lands in
-		// the machine-browse branch below; wire paths always use "/".
-		if (raw === "~" || raw.startsWith("~/") || raw.startsWith("~\\")) {
-			raw = (raw === "~" ? homedir() : homedir() + raw.slice(1)).split(sep).join("/");
-		}
-
-		// ---- 机器根（此电脑：盘符列表）—— 工作区之上的虚拟层 ----
-		if (raw === MACHINE_ROOT || raw === MACHINE_ROOT + "/") {
-			const entries = await this.machineRootEntries();
-			this.host.emit({
-				type: "files",
-				path: MACHINE_ROOT,
-				parent: null,
-				entries,
-				truncated: false,
-				absolute: true,
-			});
-			return;
-		}
-
-		// ---- 绝对路径浏览（Windows 盘符 / posix "/"）：允许越过工作区根 ----
-		// 机器模式不设 watcher（工作区递归 watch 不覆盖别的盘），文件变动靠 10s 轮询。
-		if (isAbsoluteWirePath(raw)) {
-			const wire = normWirePath(raw);
-			const abs = wireToAbs(wire);
-			const { entries, truncated, error, errorCode } = await readDirForUI(abs, wire);
-			this.host.emit({
-				type: "files",
-				path: wire,
-				parent: absoluteParent(wire),
-				entries,
-				truncated,
-				absolute: true,
-			});
-			if (error) this.emitListError(wire, error, errorCode);
-			return;
-		}
-
-		// ---- 工作区相对视图（原有行为） ----
-		const target = raw ? resolve(root, raw) : root;
-		// 若工作区根目录自身尚不存在，自动自愈创建，避免首帧报错
-		if (raw === "") {
-			try {
-				const fsp = await import("node:fs/promises");
-				await fsp.mkdir(target, { recursive: true });
-			} catch {
-				/* ignore if exists */
-			}
-		}
-		const rawRel = relative(root, target);
-		if (rawRel.startsWith("..") || rawRel.includes(`${sep}..`)) {
-			this.host.emit({
-				type: "notice",
-				level: "warning",
-				text: `路径超出工作区：${relPath ?? ""}`,
-				textEn: `Path is outside the workspace: ${relPath ?? ""}`,
-			});
-			return;
-		}
-		// Normalize to forward slashes: the wire protocol and the frontend
-		// always use "/", but relative() returns "\\" on Windows.
-		const rel = rawRel.split(sep).join("/");
-		const { entries, truncated, error, errorCode } = await readDirForUI(target, rel);
-		// Watch the listed directory only after a successful read — a missing
-		// dir must not create a watcher on a phantom path (issue #74).
-		if (error) {
-			this.emitListError(rel === "" ? root : rel, error, errorCode);
-		} else {
-			this.watchDir(target, rel);
-		}
-		const rootWire = normWirePath(root.split(sep).join("/"));
-		this.host.emit({
-			type: "files",
-			path: rel === "" ? "" : rel,
-			// 工作区根也允许「上一级」→ 项目文件夹的上一级（盘符根则到机器根，posix 根无父级）。
-			parent: rel === "" ? absoluteParent(rootWire) : rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "",
-			entries,
-			truncated,
-		});
 	}
 
 	/**
@@ -521,122 +301,6 @@ export class FilesService {
 		} catch {
 			this.host.emit({ type: "search_files_result", reqId, ok: false, results: [] });
 		}
-	}
-
-	private watchDir(absPath: string, rel: string): void {
-		if (this.host.isDisposed()) return;
-		// ---- Recursive mode (native on win32 / darwin): watch the workspace
-		// root once, so deep changes in NOT-listed subdirectories still refresh
-		// the panel (the old per-directory watch only saw the current level).
-		if (process.platform === "win32" || process.platform === "darwin") {
-			const root = resolve(this.host.getCwd());
-			if (this.recursiveWatcher) {
-				if (this.watchRoot === root) {
-					// Same workspace — only retarget the refresh path.
-					this.watchPath = rel;
-					return;
-				}
-				this.unwatchDir(); // cwd switched to another project
-			}
-			try {
-				const w = watch(root, { persistent: false, recursive: true }, (_event, filename) => {
-					// Skip high-churn subtrees (npm install storms, .git internals).
-					// filename may be null on some platforms — let those through
-					// (debounce absorbs bursts).
-					if (filename) {
-						const f = String(filename).split("\\").join("/");
-						// Single-segment names (e.g. the dir itself) have no "/" —
-						// slice(0, -1) would corrupt them, so special-case that.
-						const slash = f.indexOf("/");
-						const top = slash === -1 ? f : f.slice(0, slash);
-						if (top === "node_modules" || top === ".git") return;
-					}
-					// Burst events are debounced into a single refresh.
-					if (this.watchTimer) return;
-					this.watchTimer = setTimeout(() => {
-						this.watchTimer = null;
-						this.host.emit({
-							type: "file_changed",
-							path: this.watchPath ?? "",
-						});
-					}, 400);
-				});
-				w.on("error", () => {
-					// Directory deleted / unsupported — fall back to poll semantics.
-					this.noticeDegraded(root);
-					this.unwatchDir();
-				});
-				this.fsWatcher = w;
-				this.watchRoot = root;
-				this.recursiveWatcher = true;
-				this.watchPath = rel;
-				return;
-			} catch {
-				// recursive unsupported here — fall through to per-directory watch.
-				this.fsWatcher = null;
-				this.recursiveWatcher = false;
-				this.watchRoot = null;
-				this.noticeDegraded(root);
-			}
-		}
-		// ---- Fallback: single non-recursive watch on the LISTED directory.
-		if (!this.recursiveWatcher && this.watchPath === rel && this.fsWatcher) return;
-		this.unwatchDir();
-		this.watchPath = rel;
-		try {
-			// persistent: false — the watcher must not keep the process alive.
-			this.fsWatcher = watch(absPath, { persistent: false }, () => {
-				// Burst events (npm install, git ops, editor save→rename) are
-				// debounced into a single refresh.
-				if (this.watchTimer) return;
-				this.watchTimer = setTimeout(() => {
-					this.watchTimer = null;
-					this.host.emit({ type: "file_changed", path: this.watchPath ?? "" });
-				}, 400);
-			});
-			this.fsWatcher.on("error", () => {
-				// Directory deleted / unsupported fs — stop watching; the poll (or
-				// the next navigation) restores things.
-				this.unwatchDir();
-			});
-		} catch {
-			// fs.watch unsupported (some network mounts, containers) — poll covers it.
-			this.fsWatcher = null;
-			this.watchPath = null;
-			this.noticeDegraded(absPath);
-		}
-	}
-
-	/** 实时监听不可用（网络盘/WSL/受限目录）：一次性告知用户已回落 10s 轮询，
-	 *  免得疑惑「面板为什么不实时」。每个工作区根只提示一次。 */
-	private noticeDegraded(root: string): void {
-		if (this.degradedNoticedFor === root) return;
-		this.degradedNoticedFor = root;
-		this.host.emit({
-			type: "notice",
-			level: "info",
-			text: "此目录不支持实时文件监听（网络盘/受限目录），文件面板已改为每 10 秒自动刷新。",
-			textEn:
-				"Live file watching is not supported for this directory (network/restricted); the file panel now refreshes every 10s",
-		});
-	}
-
-	unwatchDir(): void {
-		if (this.watchTimer) {
-			clearTimeout(this.watchTimer);
-			this.watchTimer = null;
-		}
-		if (this.fsWatcher) {
-			try {
-				this.fsWatcher.close();
-			} catch {
-				// already closed
-			}
-			this.fsWatcher = null;
-		}
-		this.recursiveWatcher = false;
-		this.watchRoot = null;
-		this.watchPath = null;
 	}
 
 	/** Read a workspace file for the preview panel (size-capped, binary-safe). */
@@ -1199,105 +863,6 @@ export class FilesService {
 		if (!w || (!allowRoot && w.rel === "")) return null;
 		const parentRel = w.rel.includes("/") ? w.rel.slice(0, w.rel.lastIndexOf("/")) : "";
 		return { abs: w.abs, rel: w.rel, parentRel, absolute: false };
-	}
-
-	private async listRemoteFiles(rawCwd: string, relPath?: string): Promise<void> {
-		const sshSvc = getGlobalRemoteSshService();
-		const parsed = parseRemoteWorkspaceUri(rawCwd);
-		if (!sshSvc || !parsed) {
-			this.emitListError(rawCwd, "Remote SSH service is not available");
-			return;
-		}
-		const raw = (relPath ?? "").trim();
-		if (raw === MACHINE_ROOT || raw === MACHINE_ROOT + "/") {
-			this.host.emit({
-				type: "files",
-				path: MACHINE_ROOT,
-				parent: null,
-				entries: [{ name: "/", path: "/", type: "dir" }],
-				truncated: false,
-				absolute: true,
-			});
-			return;
-		}
-
-		const isAbs = raw.startsWith("/");
-		let targetAbs: string;
-		let wirePath: string;
-		let parentWire: string | null;
-
-		if (isAbs) {
-			targetAbs = posix.normalize(raw);
-			wirePath = targetAbs;
-			parentWire = targetAbs === "/" ? MACHINE_ROOT : posix.dirname(targetAbs) || "/";
-		} else {
-			const w = resolveRemoteWorkspacePath(parsed.remotePath, raw);
-			if (!w) {
-				this.host.emit({
-					type: "notice",
-					level: "warning",
-					text: `路径超出工作区：${relPath ?? ""}`,
-					textEn: `Path is outside the workspace: ${relPath ?? ""}`,
-				});
-				return;
-			}
-			targetAbs = w.abs;
-			wirePath = w.rel;
-			parentWire =
-				w.rel === ""
-					? parsed.remotePath === "/"
-						? MACHINE_ROOT
-						: posix.dirname(parsed.remotePath)
-					: w.rel.includes("/")
-						? w.rel.slice(0, w.rel.lastIndexOf("/"))
-						: "";
-		}
-
-		try {
-			const rawEntries = await sshSvc.sftpReaddir(rawCwd, targetAbs);
-			const ignored = IGNORED_ENTRIES_WIN;
-			const out: FileEntry[] = [];
-			for (const d of rawEntries) {
-				if (ignored.has(d.name)) continue;
-				const entryPath =
-					wirePath === ""
-						? d.name
-						: wirePath.endsWith("/")
-							? `${wirePath.slice(0, -1)}/${d.name}`
-							: `${wirePath}/${d.name}`;
-				const entry: FileEntry = {
-					name: d.name,
-					path: entryPath,
-					type: d.type,
-				};
-				if (d.type === "file") entry.kind = previewKind(d.name);
-				out.push(entry);
-			}
-			out.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1));
-			const MAX = 2000;
-			const truncated = out.length > MAX;
-			if (truncated) out.length = MAX;
-
-			this.host.emit({
-				type: "files",
-				path: wirePath,
-				parent: parentWire,
-				entries: out,
-				truncated,
-				...(isAbs ? { absolute: true } : {}),
-			});
-		} catch (err) {
-			const e = err as NodeJS.ErrnoException;
-			this.host.emit({
-				type: "files",
-				path: wirePath,
-				parent: parentWire,
-				entries: [],
-				truncated: false,
-				...(isAbs ? { absolute: true } : {}),
-			});
-			this.emitListError(targetAbs, e.message || String(err), e.code);
-		}
 	}
 
 	private async searchRemoteFiles(rawCwd: string, query: string, reqId: number): Promise<void> {

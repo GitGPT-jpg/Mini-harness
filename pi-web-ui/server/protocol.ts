@@ -624,10 +624,6 @@ export type ClientMessage =
 	 *  回答仍经 question_answer（带 owner）回去，不搬迁对话. */
 	| { type: "peek_elsewhere_question"; owner: string; id: string }
 	| { type: "list_projects" }
-	| { type: "list_files"; path?: string }
-	/** 列目录：path 省略 = 工作区根；也接受工作区外绝对路径（Windows "C:/…"、
-	 *  posix "/…"）与机器根 "@root"（盘符列表，见 files-service.ts MACHINE_ROOT）。
-	 *  机器浏览时返回的 entry.path 为绝对 wire 路径，可直接再用于列目录/预览/附件。 */
 	/** Read a workspace file for the preview panel (size-capped, binary-safe). */
 	| { type: "read_file"; path: string }
 	/** Save text edited in the file preview panel. */
@@ -2543,29 +2539,7 @@ export type ServerMessage =
 			results: SessionSearchResult[];
 	  }
 	| { type: "projects"; projects: ProjectSummary[] }
-	| {
-			type: "files";
-			path: string;
-			parent: string | null;
-			entries: FileEntry[];
-			/**
-			 * The directory had more entries than the platform cap (win32: 2000,
-			 * posix: 500) — the list was cut short. UI shows a hint when true.
-			 */
-			truncated: boolean;
-			/**
-			 * true = 机器浏览模式：path/entries 为绝对路径（盘符根 "C:"、"@root"
-			 *  机器根，或 "/" 开头的 posix 路径），允许越过工作区根导航到别的盘。
-			 *  false/缺省 = 工作区相对视图（原语义）。
-			 */
-			absolute?: boolean;
-	  }
 	/** Content of a workspace file for the preview panel. */
-	/** The server fs.watches the currently-listed directory and pushes this on
-	 *  any file change so the client can refresh the listing instantly
-	 *  (path = the listed directory; unknown/unsupported fs falls back to the
-	 *  10s polling). */
-	| { type: "file_changed"; path: string }
 	| {
 			type: "file_content";
 			path: string;

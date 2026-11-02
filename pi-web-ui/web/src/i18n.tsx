@@ -28,10 +28,8 @@ export const zh = {
 	loading: "加载中…",
 	connected: "已连接",
 	connecting: "连接中…",
-	reconnecting: "重连中…",
 	networkLatency: "网络延迟",
 	language: "语言",
-	githubRepo: "GitHub 仓库（xing-shuyin/pi-web-ui）",
 	copy: "复制",
 
 	/* topbar */
@@ -69,7 +67,6 @@ export const zh = {
 	newSandboxTip: "启动沙盒项目（安全隔离实验工作区）",
 	ephemeralBadge: "临时",
 	ephemeralBannerText: "当前为临时对话：消息仅保存在内存中，关闭后自动销毁，不进入历史记录。",
-	more: "更多",
 	brand: "品牌",
 	newChatTip: "新建对话（每个浏览器独立保存会话）",
 	"thinking.off": "关闭",
@@ -89,7 +86,6 @@ export const zh = {
 	messages: "消息",
 	pluginStatus: "插件状态",
 	working: "工作中",
-	queued: "排队",
 	enterPath: "输入路径，Enter 切换",
 	cwdTip: "工作目录：{path}（点击切换）",
 	manageProjects: "管理项目和工作目录",
@@ -134,7 +130,6 @@ export const zh = {
 	placeholderIdleMod: "给 pi 发送消息 — Ctrl+Enter 发送，/ 查看命令",
 	placeholderConnecting: "正在连接服务器…",
 	stopAgent: "停止智能体",
-	stop: "停止",
 	zenMode: "极简模式",
 	zenModeTip: "极简模式 (Alt+Z)",
 	zenModeExit: "退出极简模式",
@@ -163,7 +158,6 @@ export const zh = {
 	bgTaskDays: "{n} 天前",
 	stopBash: "停止",
 	stopBashTip: "停止正在运行的 bash 命令（对话继续）",
-	supplement: "排队",
 	supplementTip: "加入队列：AI 回答完全结束后才发送（不打断）",
 	steerTip: "插队：立即发送，本回合马上响应（Enter）",
 	steerTipMod: "插队：立即发送，本回合马上响应（Ctrl+Enter）",
@@ -236,7 +230,6 @@ export const zh = {
 	subagentsErrorTip: "{n} 个子代理（存在错误）",
 	subagentsCountTip: "{n} 个子代理",
 	convErrorBadge: "子代理运行报错：{error}",
-	subagentTitle: "子代理 · {title}",
 	historySessions: "历史对话",
 	openHistory: "历史对话",
 	openFiles: "文件列表",
@@ -343,30 +336,10 @@ export const zh = {
 	approvalRuleMoveUp: "上移",
 	approvalRuleMoveDown: "下移",
 	skillEmptyDesc: "暂未安装任何技能，前往技能市场发现并一键安装开箱即用的专业工作流技能。",
-	planBoardTitle: "任务",
-	planBoardCompleted: "已完成",
-	planBoardInProgress: "进行中",
-	planBoardPending: "待执行",
-	planBoardFailed: "失败",
 	/* 计划看板里的「实施」：计划模式下计划已出，这里是**唯一**的出口 ——
 	   关掉服务端闸门（set_plan_mode false）+ 拿当前计划发起实施轮。 */
-	planImplementBtn: "实施",
-	planImplementTip: "关掉只规划闸门，按上面的计划开始写代码",
-	planImplementRequest: "按计划看板上的计划开始实施。",
-	planBoardExportMarkdown: "复制为 Markdown",
-	planBoardExportSuccess: "计划已复制为 Markdown",
-	planCleanHandoffBtn: "✨ 净室",
-	planCleanHandoffTip: "在新会话中开始实施（带走目标与计划，避免历史探索上下文干扰）",
-	planCleanHandoffPrompt:
-		"我们已在规划期制定了如下任务计划。这是一个全新的净室执行会话，请专注于按照计划步骤推进实施：",
-	planBoardAddStep: "添加步骤",
-	planBoardEditStep: "编辑步骤",
-	planBoardDeleteStep: "删除步骤",
-	planBoardStepTitlePlaceholder: "步骤标题…",
-	planBoardStepDescPlaceholder: "步骤描述/验收要求（可选）…",
 	placeholderPlanMode: "📋 计划模式：只调研与制定计划，代码写入操作将被拦截…",
 	planModeBadge: "只读规划中",
-	clear: "清空",
 	confirm: "确定",
 	forkBadge: "分支",
 	forkBadgeTip: "派生自",
@@ -423,30 +396,11 @@ export const zh = {
 
 	/* right panel */
 	computer: "此电脑",
-	sshAgent: "SSH 代理 (Agent)",
-	sshConnectAndProbe: "连接并探测环境",
-	sshInstallTool: "一键自动安装",
-	sshInstalling: "正在安装…",
-	sshSkipAndBrowse: "跳过并继续浏览",
-	sshOpenRemoteWorkspace: "打开此远程工作区",
-	sshDeleteProfileConfirm: "确认删除此连接配置吗？",
-	rootDir: "根目录",
 	homeDir: "用户目录",
 	desktopDir: "桌面",
-	filesShowHidden: "显示以 . 开头的隐藏文件",
-	filesHideHidden: "隐藏以 . 开头的文件",
-	filesHelp:
-		"浏览：点文件夹进入、点文件预览，「..」返回上级；「根目录」回当前项目根，「此电脑」浏览全盘换盘符，「🏠」直达用户目录，「🖥️」直达桌面。\n" +
-		"文件操作：右键可新建文件/文件夹、重命名、复制/剪切/粘贴、创建副本、删除、上传文件；文件可下载，行尾按钮可复制名称/路径。\n" +
-		"切换项目：文件夹右键「以项目打开」，或点右下角 📁 路径按钮输入/选择目录。\n" +
-		"发给 AI：行尾按钮附加内容或仅引用路径，也可把文件拖进输入框。",
 	workspaceRoots: "工作区根",
-	workspaceRootsHint: "文件树可切换到这些根；插件读写这些目录不必再单独授权。",
 	addWorkspaceRoot: "添加为工作区根",
 	addWorkspaceRootHint: "把当前目录加成工作区根（右栏文件树可切换浏览；插件读写该目录不再单独授权）",
-	removeWorkspaceRoot: "移除工作区根",
-	noFiles: "暂无文件",
-	filesTruncated: "目录过大，列表已截断，仅显示前 2000 项",
 	referenceTip: "仅引用路径（AI 按需读取）",
 	previewFile: "预览",
 	downloadFile: "下载文件",
@@ -531,7 +485,6 @@ export const zh = {
 
 	/* sound settings */
 	preview: "试听",
-	volume: "音量",
 	/* desktop / OS (PWA) notifications */
 	notifyHeader: "桌面通知",
 	notifyEnable: "启用桌面通知（PWA）",
@@ -754,8 +707,6 @@ export const zh = {
 	   目标条上的「计划」是一次性动作（开闸门 + 直接发送输入），不是开关；
 	   开关语义已删除，退出走计划看板里的「开始实施」。 */
 	planMode: "计划模式",
-	planActionBtn: "计划",
-	planActionTip: "按当前目标出一份实施计划（只规划不写代码，写操作会被服务端拒绝）",
 	planModeTip: "计划模式：只调研与出计划，不实施（写操作会被服务端拒绝）",
 	"tpl.pickerTitle": "提示词模板",
 	"tpl.pickerHint": "点击卡片直接填入输入框，✏️ 可编辑或删除 · 也能新增自己的模板",
@@ -820,8 +771,6 @@ export const zh = {
 
 	/* thinking block */
 	thinkingNow: "思考中",
-	thinkingPreview: "思考：{preview}",
-
 	/* terminal panel */
 	commands: "命令",
 	newCommand: "新建命令",
@@ -859,9 +808,7 @@ export const zh = {
 	clearKeyTitle: "清除该服务商保存在 auth.json 的密钥，回到未配置状态（环境变量来源的无法在此清除）",
 	clearKeyConfirm: "清空 {id} 已保存的密钥？其模型将从列表消失，直到重新配置。",
 	cloneProvider: "添加密钥",
-	cloning: "添加中",
 	savingKey: "保存中",
-	saveKey: "保存密钥",
 	addKey: "添加密钥",
 	addKeyPlaceholder: "粘贴密钥值…",
 	keyNamePh: "名称（可留空，如 备用）",
@@ -871,7 +818,6 @@ export const zh = {
 	activateKey: "设为当前",
 	removeKey: "移除",
 	removeKeyConfirm: "确定移除该密钥？移除后需重新配置才能使用。",
-	reloadModelsConfig: "重新加载配置",
 	reloadModelsHint: "直接改过 models.json（手工或脚本）？点下面的「重新加载配置」从磁盘重读，无需重启服务。",
 	refreshBuiltinHint:
 		"内置供应商（opencode 等）的模型来自 pi 官方目录，本地缓存 4 小时。官方已上新但下拉里没有时，点这里绕过缓存直拉最新（约半分钟）。",
@@ -891,9 +837,7 @@ export const zh = {
 	apiKeySavedHint: "已保存，留空不修改",
 	authHeader: "自动添加 Authorization 请求头",
 	text: "文本",
-	contextWindow: "上下文",
 	deleteProviderConfirm: "删除服务商 {id} 及其 {n} 个模型？",
-	fetchModels: "自动获取模型列表",
 	fetchModelsHint: "从 baseUrl 的 /models 接口自动拉取模型 ID（服务端请求，不受 CORS 限制）",
 	fetchingModels: "获取中…",
 	fetchModelsOk: "已获取 {n} 个模型",
@@ -1149,13 +1093,6 @@ export const zh = {
 	promptTok_cwd_desc: "Current working directory 行",
 	settingsSkills: "技能",
 	/* 审查者模式（自动委派）：会话级，默认关。开启后本对话只审阅不施工。 */
-	delegateMode: "审查者模式（自动委派）",
-	delegateModeDesc:
-		"开启后本对话**只审阅不施工**：你发的每条请求由服务端自动转给一个常驻的落盘执行对话去干活，本对话负责看结果、提要求。写文件/跑命令/再派子代理会被服务端硬闸门拒绝。",
-	delegateModeOffHint: "审查者模式已关闭：恢复普通对话，本对话可以直接改代码。",
-	delegateModeBadge: "审查者",
-	delegateModeBadgeTip: "审查者模式已开：活由常驻执行对话执行（还没派过活）",
-	delegateModeOpenTip: "打开常驻执行对话，看它干了什么",
 	settingsVisionBridge: "视觉桥",
 	settingsVisionBridgeDesc: "当前模型不支持识图时，把图片交给已配置的视觉模型转写为文字证据，再让模型回答",
 	visionBridgeEnabled: "启用视觉桥",
@@ -1178,14 +1115,11 @@ export const zh = {
 	actionSuggestions: "建议操作",
 	actionSuggestionsTip: "点击直接发送：{prompt}",
 	markerRenameTip: "[[conv:rename:新标题]] 重命名当前对话（标题 ≤80 字；在回复第一条消息末尾根据情况重命名）",
-	terminalToolsEnabled: "启用持久终端工具",
 	settingsTerminalToolsDesc:
 		"让 AI 在交互式程序（REPL/vim）、长驻服务、需要持续观察输出或你要求在可见终端操作时，使用内置终端；普通命令仍走一次性 bash 工具",
-	editSoftEnabled: "启用编辑工具 edit_soft",
 	editSoftEnabledDesc:
 		"让 AI 用一个独立、不严格要求缩进的编辑工具：当你的 oldText 与文件缩进/空白不一致（如 JS/JSON）时可避免因缩进差异导致编辑失败。命中后按你给出的 newText 原样写入（缩进即最终缩进）。",
 	editSoftOffHint: "已关闭：AI 无法使用 edit_soft 工具，也不会收到相关使用引导",
-	questionnaireEnabled: "允许模型向我提问（问卷）",
 	questionnaireEnabledDesc:
 		"开启默认值：模型可用 ask_user_question 弹出可回复的问卷/提问对话框（含选项、多选、自定义输入）。关闭后模型将不再弹出问卷，调用也会直接返回已禁用。",
 	questionnaireOffHint: "已关闭：模型不能再向你弹出问卷/提问对话框",
@@ -1729,10 +1663,8 @@ export const en: Record<keyof typeof zh, string> = {
 	loading: "Loading…",
 	connected: "Connected",
 	connecting: "Connecting…",
-	reconnecting: "Reconnecting…",
 	networkLatency: "Network latency",
 	language: "Language",
-	githubRepo: "GitHub repository (xing-shuyin/pi-web-ui)",
 	copy: "Copy",
 
 	/* topbar */
@@ -1771,7 +1703,6 @@ export const en: Record<keyof typeof zh, string> = {
 	newSandboxTip: "Launch sandbox project (isolated workspace)",
 	ephemeralBadge: "Ephemeral",
 	ephemeralBannerText: "Ephemeral session: messages are in-memory only, discarded on close, not saved to history.",
-	more: "More",
 	brand: "Brand",
 	newChatTip: "New chat (sessions are saved per browser)",
 	"thinking.off": "Off",
@@ -1791,7 +1722,6 @@ export const en: Record<keyof typeof zh, string> = {
 	messages: "messages",
 	pluginStatus: "Plugin status",
 	working: "Working",
-	queued: "queued",
 	enterPath: "Type a path, Enter to switch",
 	cwdTip: "Working directory: {path} (click to switch)",
 	manageProjects: "Manage projects and working directories",
@@ -1838,7 +1768,6 @@ export const en: Record<keyof typeof zh, string> = {
 	placeholderIdleMod: "Message pi — Ctrl+Enter to send, / for commands",
 	placeholderConnecting: "Connecting to server…",
 	stopAgent: "Stop agent",
-	stop: "Stop",
 	zenMode: "Focus Mode",
 	zenModeTip: "Focus mode (Alt+Z)",
 	zenModeExit: "Exit focus mode",
@@ -1869,7 +1798,6 @@ export const en: Record<keyof typeof zh, string> = {
 	bgTaskDays: "{n} days ago",
 	stopBash: "Stop",
 	stopBashTip: "Stop the running bash command (conversation continues)",
-	supplement: "Queue",
 	supplementTip: "Add to queue: sent only after the whole run finishes (no interruption)",
 	steerTip: "Steer: send right away — the current turn responds immediately (Enter)",
 	steerTipMod: "Steer: send right away — the current turn responds immediately (Ctrl+Enter)",
@@ -1946,7 +1874,6 @@ export const en: Record<keyof typeof zh, string> = {
 	subagentsErrorTip: "{n} subagent(s) (has errors)",
 	subagentsCountTip: "{n} subagent(s)",
 	convErrorBadge: "Subagent failed: {error}",
-	subagentTitle: "Subagent · {title}",
 	historySessions: "History",
 	openHistory: "History",
 	openFiles: "Files",
@@ -2057,30 +1984,10 @@ export const en: Record<keyof typeof zh, string> = {
 	approvalRuleMoveUp: "Move Up",
 	approvalRuleMoveDown: "Move Down",
 	skillEmptyDesc: "No skills installed yet. Explore the Skill Market to discover ready-to-use workflows.",
-	planBoardTitle: "Tasks",
-	planBoardCompleted: "Completed",
-	planBoardInProgress: "In Progress",
-	planBoardPending: "Pending",
-	planBoardFailed: "Failed",
 	/* The one and only way out of plan mode now that the composer switch is gone:
 	   turn the server gate off (set_plan_mode false) and start implementing. */
-	planImplementBtn: "Implement",
-	planImplementTip: "Turn off the planning-only gate and start writing code per the plan",
-	planImplementRequest: "Start implementing the plan on the task board.",
-	planBoardExportMarkdown: "Copy as Markdown",
-	planBoardExportSuccess: "Plan copied as Markdown",
-	planCleanHandoffBtn: "✨ Clean",
-	planCleanHandoffTip: "Execute in a fresh session (carries over plan steps, free of exploration noise)",
-	planCleanHandoffPrompt:
-		"We developed the following task plan during the planning phase. This is a clean execution session — focus on implementing and advancing these steps:",
-	planBoardAddStep: "Add step",
-	planBoardEditStep: "Edit step",
-	planBoardDeleteStep: "Delete step",
-	planBoardStepTitlePlaceholder: "Step title…",
-	planBoardStepDescPlaceholder: "Step description / acceptance checks (optional)…",
 	placeholderPlanMode: "📋 Plan mode: research and planning only — code writes will be blocked…",
 	planModeBadge: "Planning Only",
-	clear: "Clear",
 	confirm: "Confirm",
 	forkBadge: "Branch",
 	forkBadgeTip: "Forked from",
@@ -2138,31 +2045,12 @@ export const en: Record<keyof typeof zh, string> = {
 
 	/* right panel */
 	computer: "This PC",
-	sshAgent: "SSH Agent",
-	sshConnectAndProbe: "Connect & Probe",
-	sshInstallTool: "Auto install",
-	sshInstalling: "Installing…",
-	sshSkipAndBrowse: "Skip & Continue",
-	sshOpenRemoteWorkspace: "Open Remote Workspace",
-	sshDeleteProfileConfirm: "Delete this connection profile?",
-	rootDir: "Root",
 	homeDir: "Home directory",
 	desktopDir: "Desktop",
-	filesShowHidden: "Show hidden files (names starting with a dot)",
-	filesHideHidden: "Hide files whose name starts with a dot",
-	filesHelp:
-		"Navigate: click a folder to enter, a file to preview, '..' to go up; Root returns to the current project, This PC browses all drives, 🏠 jumps to your home directory, 🖥️ to the desktop.\n" +
-		"Manage: right-click for new file/folder, rename, copy/cut/paste, duplicate, delete, upload; files can be downloaded, row buttons copy name/path.\n" +
-		"Switch projects: right-click a folder \u2192 Open as project, or click the bottom-right 📁 path button to type/pick a directory.\n" +
-		"Send to AI: row buttons attach content or reference a path, or drag files into the input.",
 	workspaceRoots: "Workspace roots",
-	workspaceRootsHint: "Roots the file tree can switch to; plugins may read and write them without a separate prompt.",
 	addWorkspaceRoot: "Add as workspace root",
 	addWorkspaceRootHint:
 		"Add the current directory as a workspace root (switchable in the file tree; plugins may read/write it without a separate prompt)",
-	removeWorkspaceRoot: "Remove workspace root",
-	noFiles: "No files",
-	filesTruncated: "Directory too large — list truncated (first 2000 shown)",
 	referenceTip: "Reference path only (AI reads on demand)",
 	previewFile: "Preview",
 	downloadFile: "Download file",
@@ -2247,7 +2135,6 @@ export const en: Record<keyof typeof zh, string> = {
 	modelNoVision: "Current model {name} doesn't support images — switch to DeepSeek V4 Flash Vision (exp)",
 	/* sound settings */
 	preview: "Preview",
-	volume: "Volume",
 	/* desktop / OS (PWA) notifications */
 	notifyHeader: "Desktop notifications",
 	notifyEnable: "Enable desktop notifications",
@@ -2470,8 +2357,6 @@ export const en: Record<keyof typeof zh, string> = {
 	"tpl.confirmFillOverwrite": "Overwrite",
 	/* plan mode: research + plan only, no implementation */
 	planMode: "Plan mode",
-	planActionBtn: "Plan",
-	planActionTip: "Draft an implementation plan for this goal (planning only — the server blocks writes)",
 	planModeTip: "Plan mode: research and plan only — writes are blocked by the server",
 	"tpl.pickerTitle": "Prompt templates",
 	"tpl.pickerHint": "Click a card to fill the input; ✏️ to edit or delete; add your own too",
@@ -2536,8 +2421,6 @@ export const en: Record<keyof typeof zh, string> = {
 
 	/* thinking block */
 	thinkingNow: "Thinking",
-	thinkingPreview: "Thinking: {preview}",
-
 	/* terminal panel */
 	commands: "Commands",
 	newCommand: "New command",
@@ -2576,9 +2459,7 @@ export const en: Record<keyof typeof zh, string> = {
 		"Remove this provider's key stored in auth.json; it returns to unconfigured (env-var sourced keys can't be cleared here)",
 	clearKeyConfirm: "Clear the stored key for {id}? Its models will leave the list until you configure it again.",
 	cloneProvider: "Add key",
-	cloning: "Adding",
 	savingKey: "Saving",
-	saveKey: "Save key",
 	addKey: "Add key",
 	addKeyPlaceholder: "Paste the key value…",
 	keyNamePh: "Name (optional, e.g. backup)",
@@ -2588,7 +2469,6 @@ export const en: Record<keyof typeof zh, string> = {
 	activateKey: "Set active",
 	removeKey: "Remove",
 	removeKeyConfirm: "Remove this key? It must be re-configured to be used again.",
-	reloadModelsConfig: "Reload config",
 	reloadModelsHint:
 		"Edited models.json by hand or with a script? Hit \u201cReload config\u201d below to re-read it from disk \u2014 no restart needed.",
 	refreshBuiltinHint:
@@ -2609,9 +2489,7 @@ export const en: Record<keyof typeof zh, string> = {
 	apiKeySavedHint: "Saved — leave blank to keep unchanged",
 	authHeader: "Auto-add Authorization header",
 	text: "Text",
-	contextWindow: "Context",
 	deleteProviderConfirm: "Delete provider {id} and its {n} models?",
-	fetchModels: "Fetch model list",
 	fetchModelsHint: "Pull model IDs from the baseUrl /models endpoint (server-side, no CORS)",
 	fetchingModels: "Fetching…",
 	fetchModelsOk: "Fetched {n} models",
@@ -2875,14 +2753,6 @@ export const en: Record<keyof typeof zh, string> = {
 	promptTok_cwd_desc: "the Current working directory line",
 	settingsSkills: "Skills",
 	/* Reviewer mode (auto-delegation): per conversation, off by default. */
-	delegateMode: "Reviewer mode (auto-delegate)",
-	delegateModeDesc:
-		"When on, this conversation reviews instead of building: the server forwards every request you send to one persistent executor conversation that does the work, and this conversation inspects the result and states follow-ups. Writing files, running commands and dispatching more subagents are blocked by a server-side gate.",
-	delegateModeOffHint: "Reviewer mode is off: back to a normal conversation — this one can change code again.",
-	delegateModeBadge: "Reviewer",
-	delegateModeBadgeTip:
-		"Reviewer mode is on: work runs in the persistent executor conversation (nothing dispatched yet)",
-	delegateModeOpenTip: "Open the persistent executor conversation to see what it did",
 	settingsVisionBridge: "Vision bridge",
 	settingsVisionBridgeDesc:
 		"When the current model can't see images, send them to a configured vision model and transcribe into text evidence first",
@@ -2907,14 +2777,11 @@ export const en: Record<keyof typeof zh, string> = {
 	actionSuggestionsTip: "Click to send: {prompt}",
 	markerRenameTip:
 		"[[conv:rename:Title]] renames the current conversation (≤80 chars; rename at the end of the first reply)",
-	terminalToolsEnabled: "Enable persistent terminal tools",
 	settingsTerminalToolsDesc:
 		"Let the AI use the built-in terminal for interactive programs (REPLs/vim), long-running servers, continuous output watching, or when you ask it to work in the visible terminal; ordinary commands still go through the one-shot bash tool",
-	editSoftEnabled: "Enable edit_soft tool",
 	editSoftEnabledDesc:
 		"Let the AI use a separate indentation-insensitive edit tool: avoids edit failures when your oldText spacing differs from the file (e.g. JS/JSON). On a match, newText is written verbatim as you provide it (its indentation is final).",
 	editSoftOffHint: "Disabled: the AI has no edit_soft tool and receives no usage guidance",
-	questionnaireEnabled: "Allow the model to ask me questions",
 	questionnaireEnabledDesc:
 		"On by default: the model may use ask_user_question to pop up an answerable question dialog (options, multi-select, custom input). Off: the model no longer pops up questionnaires; a call also returns disabled immediately.",
 	questionnaireOffHint: "Disabled: the model can no longer pop up question dialogs",

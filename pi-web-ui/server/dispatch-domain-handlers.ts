@@ -14,9 +14,6 @@ import { SchedulerValidationError, type SchedulerStore } from "./scheduler-tasks
 /** 文件与工作区相关操作 */
 export function handleFileMessage(msg: ClientMessage, cs: DispatchSession): boolean {
 	switch (msg.type) {
-		case "list_files":
-			void cs.listFiles(msg.path);
-			return true;
 		case "search_files":
 			void cs.searchFiles(msg.query, msg.reqId);
 			return true;

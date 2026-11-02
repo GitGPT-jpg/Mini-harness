@@ -15,7 +15,6 @@ function makeService(cwd: string) {
 	const spawnCalls: Array<{ cmd: string; args: string[]; okText: string; okTextEn: string }> = [];
 	const svc = new FilesService({
 		emit: (m) => void seen.push(m),
-		isDisposed: () => false,
 		getCwd: () => cwd,
 		getActiveCwd: () => cwd,
 	});

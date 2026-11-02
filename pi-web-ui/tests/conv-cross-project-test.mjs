@@ -153,7 +153,6 @@ class Client {
 		this.state = null;
 		this.messages = [];
 		this.conversations = [];
-		this.files = [];
 		ws.on("message", (data) => {
 			const message = JSON.parse(data.toString());
 			this.received.push(message);
@@ -170,8 +169,6 @@ class Client {
 				this.messages = [...this.messages, ...message.appended];
 			} else if (message.type === "conversations") {
 				this.conversations = message.conversations;
-			} else if (message.type === "files") {
-				this.files.push(message);
 			}
 		});
 	}
@@ -273,10 +270,6 @@ try {
 	check("A's conversation stays listed after the run finishes", true);
 
 	// Switching to it must switch BOTH the conversation AND the workspace.
-	// Baseline the file-listing count AFTER set_cwd(B)'s own listing has
-	// arrived, so the post-switch assertion only counts the new A listing.
-	await client.waitForType("files", () => true);
-	const filesBeforeSwitch = client.files.length;
 	client.send({ type: "switch_conversation", id: aConvId });
 	let switched = false;
 	try {
@@ -294,16 +287,6 @@ try {
 		(message) => message.role === "assistant" && JSON.stringify(message.content).includes("cross-project"),
 	);
 	check("the background response is still there after switching back", true);
-
-	// The project-switch side-effects fired: a fresh file listing was pushed.
-	const filesAfter = await client
-		.waitForType("files", () => client.files.length > filesBeforeSwitch)
-		.then(() => client.files.length);
-	check(
-		"server re-pushed a file listing after the cross-project switch",
-		filesAfter > filesBeforeSwitch,
-		`${filesBeforeSwitch} → ${filesAfter} pushes`,
-	);
 } catch (error) {
 	console.error(`✗ ${error.message}`);
 	failures++;

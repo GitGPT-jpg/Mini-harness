@@ -11,7 +11,6 @@ import type {
 	ConversationSummary,
 	ElsewhereRunning,
 	FileContent,
-	FileListing,
 	FileSearchResult,
 	GoalStatus,
 	ModelInfo,
@@ -166,13 +165,9 @@ export interface ChatState {
 	activeConversationId: string;
 	/** Recent workspaces this client opened (left panel project picker). */
 	projects: ProjectSummary[];
-	/** Workspace file listing for the right panel. */
-	files: FileListing | null;
 	/** Latest file content fetched for the preview panel (path-matched in the modal). */
 	fileContent: FileContent | null;
 
-	/** Last dir-changed push from the server fs.watch (path = listed directory). */
-	fileChanged: { path: string } | null;
 	/** Models with valid auth, for the model dropdown. */
 	models: ModelInfo[];
 	/** True while a model list request is in flight. */
@@ -396,8 +391,6 @@ type Action =
 			elsewhere?: ElsewhereRunning[];
 	  }
 	| { type: "projects"; projects: ProjectSummary[] }
-	| { type: "files"; files: FileListing }
-	| { type: "file_changed"; path: string }
 	| { type: "file_content"; content: FileContent }
 	| { type: "models"; models: ModelInfo[]; loading: boolean }
 	| { type: "models_config"; providers: UiProviderConfig[] }
@@ -933,10 +926,6 @@ function reducer(state: ChatState, action: Action): ChatState {
 			return { ...state, projects: action.projects };
 		case "sandbox_diff":
 			return { ...state, sandboxDiff: action.diff };
-		case "files":
-			return { ...state, files: action.files };
-		case "file_changed":
-			return { ...state, fileChanged: { path: action.path } };
 		case "file_content":
 			return { ...state, fileContent: action.content };
 		case "models":
@@ -1399,9 +1388,6 @@ export function useChat() {
 		elsewhere: [],
 		activeConversationId: "",
 		projects: readCachedProjects(),
-		files: null,
-
-		fileChanged: null,
 		fileContent: null,
 		models: [],
 		modelsLoading: false,
@@ -1770,7 +1756,6 @@ export function useChat() {
 					// when it is actually shown — listing scans every session file
 					// on disk (listAll scans ALL projects), too heavy for the
 					// connect critical path.
-					ws.send(JSON.stringify({ type: "list_files" } satisfies ClientMessage));
 					ws.send(JSON.stringify({ type: "list_models" } satisfies ClientMessage));
 					ws.send(JSON.stringify({ type: "list_commands" } satisfies ClientMessage));
 					ws.send(JSON.stringify({ type: "get_commands" } satisfies ClientMessage));
@@ -1864,12 +1849,6 @@ export function useChat() {
 					break;
 				case "sandbox_diff":
 					dispatch({ type: "sandbox_diff", diff: msg.diff });
-					break;
-				case "files":
-					dispatch({ type: "files", files: msg });
-					break;
-				case "file_changed":
-					dispatch({ type: "file_changed", path: msg.path });
 					break;
 				case "file_content":
 					dispatch({ type: "file_content", content: msg });

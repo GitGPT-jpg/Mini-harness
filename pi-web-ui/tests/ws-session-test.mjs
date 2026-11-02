@@ -2,7 +2,7 @@
  * ws-session-test.mjs — 纯 WebSocket 层冒烟测试（不走浏览器）。
  *
  * 验证 ws 协议的关键握手和行为：
- *   hello → ready → list_files(根)→ files → 媒体 /api/file → 结束
+ *   hello → ready → 媒体 /api/file → 结束
  *
  * 用法（需先有 server 在跑，或用环境变量指定）:
  *   node ws-session-test.mjs                        # 连 ws://localhost:${PORT:-8787}
@@ -40,10 +40,6 @@ ws.on("message", async (d) => {
 
 	if (m.type === "ready") {
 		log("ready, serverVersion:", m.serverVersion);
-		// 用根列表暴露当前会话 cwd（path undefined → 根）
-		ws.send(JSON.stringify({ type: "list_files", path: undefined }));
-	} else if (m.type === "files") {
-		log("files root:", m.path, "entries:", m.entries.length);
 		if (MEDIA_PATH) {
 			const r = await fetch(
 				`${BASE}/api/file?clientId=${encodeURIComponent(clientId)}&path=${encodeURIComponent(MEDIA_PATH)}`,
