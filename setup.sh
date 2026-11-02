@@ -193,15 +193,51 @@ PLIST
 }
 if [ "$OS" = "Darwin" ]; then build_mac_app || warn "生成 .app 失败，可手动运行 pi-web-cockpit/start-hardened.sh"; fi
 
-# ---- 7) 完成提示 ----
+# ---- 7) 启动服务并自动打开浏览器（装完即用；PI_WEB_NO_OPEN=1 可跳过自动打开）----
+port_listening(){
+  _PI_PORT="$1" node -e 'const n=require("net").connect({host:"127.0.0.1",port:+process.env._PI_PORT});n.setTimeout(1000,()=>process.exit(1));n.once("connect",()=>process.exit(0));n.once("error",()=>process.exit(1));' >/dev/null 2>&1
+}
+launch_and_open(){
+  local PORT="${PI_WEB_PORT:-8787}"
+  local TOKENF="$HOME/.pi-web/pi-web-token"
+  if port_listening "$PORT"; then
+    say "服务已在运行（:$PORT），复用。"
+  else
+    say "启动服务…"
+    nohup "$COCKPIT/start-hardened.sh" >/tmp/pi-web-harness.log 2>&1 &
+  fi
+  for _ in {1..60}; do port_listening "$PORT" && break; sleep 0.5; done
+  if ! port_listening "$PORT"; then
+    warn "服务未在 :$PORT 就绪，可稍后手动运行 $COCKPIT/start-hardened.sh"
+    return 1
+  fi
+  local TOKEN="$(cat "$TOKENF" 2>/dev/null || true)"
+  local URL="http://localhost:$PORT/"
+  [ -n "$TOKEN" ] && URL="http://localhost:$PORT/?token=${TOKEN}"
+  if [ "${PI_WEB_NO_OPEN:-0}" = "1" ]; then
+    say "服务已就绪（PI_WEB_NO_OPEN=1，跳过自动打开浏览器）：$URL"
+    return 0
+  fi
+  if [ "$OS" = "Darwin" ]; then
+    open "$URL" && say "已自动打开浏览器：$URL" || warn "自动打开失败，请手动访问：$URL"
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$URL" >/dev/null 2>&1 && say "已自动打开浏览器：$URL" || warn "自动打开失败，请手动访问：$URL"
+  else
+    warn "未找到浏览器打开命令，请手动访问：$URL"
+  fi
+}
+launch_and_open || warn "自动启动/打开失败，可手动运行 $COCKPIT/start-hardened.sh"
+
+# ---- 8) 完成提示 ----
 cat <<DONE
 
 ============================================================
  安装完成 ✅  —— ${APP_NAME}
 ------------------------------------------------------------
- 启动方式：
+ 本次已自动启动服务并打开浏览器（若未弹出，手动访问 http://localhost:8787）
+ 下次启动：
    • Mac：双击桌面「${APP_NAME}」图标
-   • 或命令行： "$COCKPIT/start-hardened.sh"  然后浏览器开 http://localhost:8787
+   • 或命令行： "$COCKPIT/start-hardened.sh"
  首次使用：
    页面会弹出「首次配置」对话框，已预选 Baidu One API，
    Base URL 已预填 https://oneapi-comate.baidu-int.com/v1，

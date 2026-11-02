@@ -22,7 +22,8 @@ cd mini-harness
 5. 构建驾驶舱：在 `pi-web-ui/` 里按 lockfile 安装依赖并 `npm run build`（全部定制都在源码里，没有补丁脚本）；
 6. 停用推理场景用不到的 7 个风险 skill（移到 `~/.pi/agent/skills.disabled`，移回即恢复）；
 7. 配好知识库扩展 `pi-llm-wiki`（禁脚本装依赖、删高危可选依赖、登记到 pi、静默配置）；
-8. 在 **桌面** 生成启动器 `训推引擎组 Harness.app`（macOS）。
+8. 在 **桌面** 生成启动器 `训推引擎组 Harness.app`（macOS）；
+9. 启动服务并自动打开浏览器（`http://localhost:8787`，自动带 token 登录；设 `PI_WEB_NO_OPEN=1` 可跳过自动打开）。
 
 > 前置条件：macOS / Linux、Node ≥22.19、可访问 npm 与 One API 网关。
 > macOS 若终端组件 node-pty 需要编译，建议先安装 Xcode Command Line Tools（`xcode-select --install`）。
@@ -30,8 +31,9 @@ cd mini-harness
 
 ## 启动与首次配置
 
-- **macOS**：双击桌面「训推引擎组 Harness」图标（无终端黑窗，自动拉起服务并打开浏览器）。
-- **命令行**：`pi-web-cockpit/start-hardened.sh`，然后浏览器打开 `http://localhost:8787`。
+- **首次安装**：`setup.sh` 结束时已自动启动服务并打开浏览器（带 token 登录），无需手动操作。
+- **macOS（后续）**：双击桌面「训推引擎组 Harness」图标（无终端黑窗，自动拉起服务并打开浏览器）。
+- **命令行（后续）**：`pi-web-cockpit/start-hardened.sh`，然后浏览器打开 `http://localhost:8787`。
 
 首次打开会弹出「首次配置」对话框（已预选 Baidu One API）：Base URL 已预填
 `https://oneapi-comate.baidu-int.com/v1`，在 API Key 处填入**你自己的 One API Key** 并保存。
