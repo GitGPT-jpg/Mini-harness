@@ -789,8 +789,7 @@ function shellEnv(): Record<string, string> {
 // tsx`), Node's watch mode pushes `watch:require` / `watch:import` messages over
 // the worker's message channel to track module dependencies; node-pty doesn't
 // recognize them and logs one `Unexpected ConoutWorkerMessage { … }` per message
-// — hundreds of lines per terminal (the SCM panel's hidden query PTY triggers it
-// on every git-view open). The messages are harmless: the worker only ever sends
+// — hundreds of lines per terminal. The messages are harmless: the worker only ever sends
 // its READY sentinel, which the handler does process. Filter that exact warning
 // at the console boundary so dev output stays readable. Production runs without
 // --watch and never produces these.

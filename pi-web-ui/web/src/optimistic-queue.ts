@@ -283,7 +283,6 @@ export function recordOptimisticQueueAdd(
 		text: string;
 		attachments?: readonly PromptAttachment[];
 		queue?: boolean;
-		engine?: string;
 		goalReviewing?: boolean;
 		now?: number;
 	},
@@ -302,7 +301,7 @@ export function recordOptimisticQueueAdd(
 		return { tracker, state };
 	}
 
-	const steerSupported = state?.engineCapabilities?.steer !== false && opts.engine !== "dsh";
+	const steerSupported = state?.engineCapabilities?.steer !== false;
 	const kind: "steer" | "followUp" = opts.queue || !steerSupported ? "followUp" : "steer";
 	const formattedText = formatOptimisticQueuedPrompt(opts.text, opts.attachments);
 	const rawText = splitQuotedPrompt(formattedText).text.trim();

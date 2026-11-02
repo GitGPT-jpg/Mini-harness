@@ -73,7 +73,7 @@ import { buildPiWebTokenCookie, decodeCookieToken, isTlsRequest } from "./auth-c
 import { getAppVersion, getPkgRoot } from "./pkg-info.js";
 import {
 	handleFileMessage,
-	handleScmMessage,
+	handleWorktreeMessage,
 	handleBgServerMessage,
 	handlePresetAndDshMessage,
 	handleModelAndProviderMessage,
@@ -399,9 +399,6 @@ const sharedStateStore = new ClientStateStore(join(DATA_DIR, "client-state.json"
 
 /** 精简发行版只保留 pi 引擎。 */
 let currentDefaultEngine: EngineId = "pi";
-/** 默认引擎标识（兼容 /api/health 等读取）。 */
-/** 精简发行版只保留 pi 引擎，所有客户端恒走 pi。 */
-const clientEngines = new Map<string, EngineId>();
 
 function resolveClientEngine(_clientId: string): EngineId {
 	return "pi";
@@ -1045,7 +1042,7 @@ const heartbeatTimer = setInterval(() => {
 // Unref'd so it never blocks exit: heartbeat alone must not hold the event loop open.
 heartbeatTimer.unref?.();
 
-// 引擎分发：PI_WEB_ENGINE=dsh 时使用 DeepSeek Harness 引擎（server/dsh/），
+// 引擎分发：统一走 pi 引擎（精简发行版已移除 dsh 引擎）。
 import type { EngineId } from "./protocol.js";
 
 /** dispatch 表所需的方法契约（pi 的 ClientSession 与 dsh 的 DshClientSession
@@ -1135,22 +1132,8 @@ export interface DispatchSession {
 	listFiles(path?: string): Promise<void>;
 	searchFiles(query: string, reqId: number): Promise<void>;
 	searchSessions(query: string, reqId: number): Promise<void>;
-	scmQuery(
-		kind: "status" | "history" | "filediff" | "commit",
-		reqId: number,
-		opts?: { path?: string; hash?: string },
-	): Promise<void>;
-	/** SCM「AI 生成提交信息」（scm_commitmsg）：当前模型一次性补全，应答 kind
-	 *  "commitmsg" 的 scm_data；pi 引擎之外的会话实现缺失时分发处兜底报错。 */
-	scmGenCommitMessage?(reqId: number): Promise<void>;
 	readFile(path: string): Promise<void>;
 	writeFile(path: string, text: string): Promise<void>;
-	uploadFile(dirPath: string, name: string, data: string): Promise<void>;
-	/** 文件树右键菜单的文件操作（contextmenu.file：新建/重命名/删除/复制移动）。 */
-	createEntry(dir: string, name: string, kind: "file" | "dir"): Promise<void>;
-	renameEntry(path: string, newName: string): Promise<void>;
-	deleteEntry(path: string): Promise<void>;
-	copyEntry(src: string, destDir: string, move?: boolean): Promise<void>;
 	revealEntry(path: string): Promise<void>;
 	openDefaultEntry(path: string): Promise<void>;
 	listModels(): Promise<void>;
@@ -1274,18 +1257,10 @@ export interface DispatchSession {
 		visionBridgeModel?: string | null;
 		visionBridgePromptMode?: "append" | "replace";
 		visionBridgePrompt?: string;
-		scmCommitMsgPromptMode?: "append" | "replace";
-		scmCommitMsgPrompt?: string;
 		reviewPrompt?: string;
 		reviewDisabledSkills?: string[];
 	}): Promise<void>;
 	reloadExtensions(): Promise<void>;
-	/** DSH engine only: list/rescan <dataDir>/dsh-patches user patch files. */
-	listDshPatches?(): Promise<void>;
-	rescanDshPatches?(): Promise<void>;
-	installDshPatch?(spec: string, id?: string): Promise<void>;
-	toggleDshPatch?(name: string, enabled: boolean): Promise<void>;
-	deleteDshPatch?(name: string): Promise<void>;
 	/** DSH engine only: Agent 预设名录刷新/空白切换/默认设置。 */
 	refreshAgentPresets?(): Promise<void>;
 	selectAgentPreset?(preset: string): Promise<void>;
@@ -1414,17 +1389,10 @@ const service: EngineService = {
 		return ensureEngine(resolveClientEngine(clientId)).attach(clientId, send);
 	},
 	detach(clientId, send) {
-		const eng = clientEngines.get(clientId);
-		if (eng) {
-			ensureEngine(eng).detach(clientId, send);
-		} else {
-			for (const s of activeEngines()) s.detach(clientId, send);
-		}
+		for (const s of activeEngines()) s.detach(clientId, send);
 	},
 	get(clientId) {
 		if (!clientId) return undefined;
-		const eng = clientEngines.get(clientId);
-		if (eng) return ensureEngine(eng).get(clientId);
 		for (const s of activeEngines()) {
 			const cs = s.get(clientId);
 			if (cs) return cs;
@@ -1906,7 +1874,7 @@ wss.on("connection", (ws) => {
 		}
 		try {
 			if (handleFileMessage(msg, cs)) return;
-			if (handleScmMessage(msg, cs, send)) return;
+			if (handleWorktreeMessage(msg, cs)) return;
 			if (handleBgServerMessage(msg, cs)) return;
 			if (handlePresetAndDshMessage(msg, cs)) return;
 			if (handleModelAndProviderMessage(msg, cs)) return;

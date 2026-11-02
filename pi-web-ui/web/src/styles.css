@@ -6,10 +6,12 @@
    theme  = 主题样式（服务端把主题文件包进这层，你不改）
    普通声明：后面的层优先 → 主题恒压过基线；未分层普通声明胜过任何层内普通声明。
    需要盖过主题或未分层三方库的结构性复位，写在文件末尾「无层覆盖区」，不用叹号 important。 */
+/* stylelint-disable-next-line at-rule-no-unknown -- Standard cascade layers keep theme and guard priorities intact. */
 @layer guard, base, theme;
 
 /* model-management.css 必须落在 base 层里：层外的普通声明会盖掉所有层
    （含主题），模型设置里的快捷供应商芯片就会被它反压回去。 */
+/* stylelint-disable-next-line at-rule-no-unknown -- Base styles must remain below the theme layer. */
 @layer base {
     /* pi-web-ui — dark theme, pi-flavored */
 
@@ -268,6 +270,9 @@
 
     * {
         box-sizing: border-box;
+        /* 全站滚动条：Firefox thin + WebKit 6px 无边框。 */
+        scrollbar-width: thin;
+        scrollbar-color: var(--scroll-thumb) transparent;
     }
 
     html,
@@ -315,7 +320,6 @@
         display: flex;
         min-height: 0;
         position: relative;
-
         --side-dock-w: 37px;
     }
 
@@ -344,7 +348,6 @@
 	   放在容器上以后整面板同色，各元素无需再自带上色（--msgs-bg 默认半透，
 	   与卡片/面板共用 --wallpaper-panel-alpha；无壁纸时叠在纯色上色差极小）。 */
         background: var(--msgs-bg, transparent);
-
         --chat-pad: 20px;
         --chat-max: 860px;
         --chat-rail: 0px;
@@ -872,14 +875,6 @@
         text-align: center;
         font-size: 12px;
         color: var(--text-faint);
-    }
-
-    /* Huge directories get their list cut at the platform cap — surface it. */
-    .files-truncated {
-        color: var(--amber);
-        border-top: 1px dashed var(--border);
-        margin-top: 8px;
-        padding-top: 12px;
     }
 
     /* ------------------------------------------------------------------ sessions */
@@ -1837,11 +1832,6 @@
         -webkit-user-select: none;
         user-select: none;
         -webkit-touch-callout: none;
-    }
-
-    .file-item:hover {
-        background: var(--bg-elev2);
-        color: var(--text);
     }
 
     /* 拖拽上传落点高亮：文件夹行/文件行命中行，空白命中整个目录区。 */
@@ -3425,580 +3415,6 @@
         border-left: 1px solid var(--border, rgba(255, 255, 255, 0.08));
     }
 
-    /* ------------------------------------------------------- source control (Git) */
-
-    .scm-view {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        min-width: 0;
-        min-height: 0;
-        background: var(--bg-elev);
-    }
-
-    .scm-header {
-        flex-shrink: 0;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        padding: 10px 14px;
-        border-bottom: 1px solid var(--border-soft);
-    }
-
-    .scm-title-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 8px;
-    }
-
-    .scm-title {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        font-size: 12px;
-        font-weight: 700;
-        letter-spacing: 0.6px;
-        text-transform: uppercase;
-        color: var(--text-faint);
-    }
-
-    .scm-title svg {
-        color: var(--accent);
-    }
-
-    .scm-view-tabs {
-        display: inline-flex;
-        align-items: stretch;
-        gap: 2px;
-        margin-left: auto;
-        padding: 2px;
-        border: 1px solid var(--border);
-        border-radius: 7px;
-        background: var(--bg-elev2);
-    }
-
-    .scm-view-tabs button {
-        border: none;
-        border-radius: 5px;
-        background: transparent;
-        color: var(--text-faint);
-        font-size: 12px;
-        padding: 4px 9px;
-        cursor: pointer;
-    }
-
-    .scm-view-tabs button:hover {
-        color: var(--text);
-    }
-
-    .scm-view-tabs button.active {
-        background: var(--accent-soft);
-        color: var(--accent);
-        font-weight: 600;
-    }
-
-    .scm-row {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        flex-wrap: wrap;
-    }
-
-    /* 一行里的控件（分支 chip / 下拉 / 按钮 / 提交输入框）统一高度，对齐整齐。 */
-    .scm-row .btn,
-    .scm-row .scm-select,
-    .scm-row .scm-commit-input,
-    .scm-row .scm-branch-current {
-        height: 34px;
-    }
-
-    .scm-branch-current {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        font-family: var(--mono);
-        font-size: 13px;
-        color: var(--text);
-        background: var(--bg-elev2);
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        padding: 4px 10px;
-        max-width: 260px;
-        overflow: hidden;
-    }
-
-    .scm-branch-current svg {
-        color: var(--accent);
-        flex-shrink: 0;
-    }
-
-    .scm-upstream {
-        color: var(--text-faint);
-        font-size: 12px;
-        white-space: nowrap;
-    }
-
-    .scm-select {
-        flex: 0 1 auto;
-        min-width: 120px;
-        max-width: 200px;
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        background: var(--bg-elev2);
-        color: var(--text);
-        font-size: 13px;
-        padding: 0 8px;
-    }
-
-    .scm-select:focus {
-        outline: none;
-        border-color: var(--accent);
-    }
-
-    .scm-commit-input {
-        flex: 1;
-        min-width: 140px;
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        background: var(--bg-elev2);
-        color: var(--text);
-        font-size: 13px;
-        padding: 0 10px;
-    }
-
-    .scm-commit-input:focus {
-        outline: none;
-        border-color: var(--accent);
-    }
-
-    .scm-commit-input::placeholder {
-        color: var(--text-faint);
-    }
-
-    .scm-body {
-        flex: 1;
-        display: flex;
-        min-width: 0;
-        min-height: 0;
-    }
-
-    /* 左栏宽度由分隔条拖拽决定（issue #139）：--scm-sidebar-w 由 SCMPanel 内联设置，
-   缺省 300px（与改造前的固定值一致）；max-width 是兜底 —— 窗口变窄时不让它把
-   diff 区挤没（正常拖拽已在 clampScmSidebarWidth 里按容器收敛）。 */
-    .scm-files,
-    .scm-history {
-        width: var(--scm-sidebar-w, 300px);
-        max-width: calc(100% - 220px);
-        flex-shrink: 0;
-        display: flex;
-        flex-direction: column;
-        min-height: 0;
-        border-right: 1px solid var(--border-soft);
-    }
-
-    /* 左栏 ↔ diff 的拖拽分隔条：6px 命中区、压在两侧边框上，视觉上仍是一条线。 */
-    .scm-divider {
-        flex: 0 0 6px;
-        margin: 0 -3px;
-        position: relative;
-        z-index: 3;
-        cursor: col-resize;
-        touch-action: none;
-    }
-
-    .scm-divider::after {
-        content: "";
-        position: absolute;
-        top: 0;
-        bottom: 0;
-        left: 2px;
-        width: 2px;
-        background: transparent;
-        transition: background 0.15s ease;
-    }
-
-    .scm-divider:hover::after,
-    body.panel-resizing .scm-divider::after {
-        background: var(--accent);
-        opacity: 0.55;
-    }
-
-    .scm-files-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 8px 12px;
-        font-size: 12px;
-        font-weight: 600;
-        letter-spacing: 0.4px;
-        color: var(--text-faint);
-        border-bottom: 1px solid var(--border-soft);
-    }
-
-    /* 提交树过滤框（主题/作者/hash，纯前端过滤），贴在列表头上方。 */
-    .scm-history-filter {
-        margin: 8px 10px 4px;
-        width: calc(100% - 20px);
-        height: 26px;
-        padding: 0 8px;
-        font-size: 12px;
-        color: var(--text);
-        background: var(--bg-elev2);
-        border: 1px solid var(--border);
-        border-radius: 6px;
-    }
-
-    .scm-history-filter:focus {
-        outline: none;
-        border-color: var(--accent);
-    }
-
-    .scm-history-filter::placeholder {
-        color: var(--text-faint);
-    }
-
-    .scm-files-count {
-        font-family: var(--mono);
-        font-size: 11px;
-        color: var(--text-dim);
-        background: var(--bg-elev2);
-        border: 1px solid var(--border);
-        border-radius: 999px;
-        padding: 0 7px;
-    }
-
-    .scm-files-list,
-    .scm-history-list {
-        flex: 1;
-        overflow-y: auto;
-        min-height: 0;
-    }
-
-    .scm-commit {
-        width: 100%;
-        display: flex;
-        align-items: flex-start;
-        gap: 6px;
-        padding: 7px 10px 7px 8px;
-        border: none;
-        border-left: 2px solid transparent;
-        background: transparent;
-        color: var(--text);
-        text-align: left;
-        cursor: pointer;
-    }
-
-    .scm-commit:hover,
-    .scm-commit.active {
-        background: var(--accent-soft);
-        border-left-color: var(--accent);
-    }
-
-    .scm-commit-graph {
-        min-width: 34px;
-        max-width: 48px;
-        overflow: hidden;
-        white-space: pre;
-        font-family: var(--mono);
-        font-size: 12px;
-        line-height: 1.35;
-        color: var(--accent);
-    }
-
-    .scm-commit-info {
-        min-width: 0;
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-    }
-
-    .scm-commit-subject {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        font-size: 12.5px;
-        color: var(--text);
-    }
-
-    .scm-commit-meta,
-    .scm-commit-refs {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        font-family: var(--mono);
-        font-size: 10.5px;
-        color: var(--text-faint);
-    }
-
-    .scm-commit-refs {
-        color: var(--green);
-    }
-
-    .scm-file {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 5px 10px;
-        font-size: 13px;
-        cursor: pointer;
-        border-left: 2px solid transparent;
-    }
-
-    .scm-file:hover {
-        background: var(--accent-soft);
-    }
-
-    .scm-file.active {
-        background: var(--accent-soft);
-        border-left-color: var(--accent);
-    }
-
-    /* per-file stage / unstage actions (visible on hover) */
-    .scm-file-actions {
-        display: none;
-        margin-left: auto;
-        gap: 2px;
-    }
-
-    .scm-file:hover .scm-file-actions {
-        display: inline-flex;
-    }
-
-    .scm-act {
-        width: 18px;
-        height: 18px;
-        padding: 0;
-        border: 1px solid var(--border);
-        border-radius: 4px;
-        background: var(--bg-elev2);
-        color: var(--text-dim);
-        font-size: 13px;
-        line-height: 1;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        cursor: pointer;
-    }
-
-    .scm-act:hover {
-        background: var(--accent-soft);
-        color: var(--text);
-        border-color: var(--accent);
-    }
-
-    .scm-file-xy {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 13px;
-        height: 18px;
-        font-family: var(--mono);
-        font-size: 11px;
-        font-weight: 700;
-        flex-shrink: 0;
-    }
-
-    .scm-file-xy.x {
-        color: var(--green);
-    }
-
-    .scm-file-xy.y {
-        color: var(--red);
-    }
-
-    .scm-file-xy.q {
-        color: var(--amber);
-    }
-
-    .scm-file-path {
-        flex: 1;
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        font-family: var(--mono);
-        font-size: 12.5px;
-        color: var(--text);
-    }
-
-    .scm-file-stat {
-        font-family: var(--mono);
-        font-size: 11px;
-        flex-shrink: 0;
-    }
-
-    .scm-file-stat .add {
-        color: var(--green);
-    }
-
-    .scm-file-stat .del {
-        color: var(--red);
-    }
-
-    .scm-empty {
-        padding: 26px 16px;
-        text-align: center;
-        color: var(--text-faint);
-        font-size: 13px;
-    }
-
-    .scm-diff {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        min-width: 0;
-        min-height: 0;
-        background: var(--bg);
-    }
-
-    .scm-diff-header {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 8px 14px;
-        border-bottom: 1px solid var(--border-soft);
-        font-family: var(--mono);
-        font-size: 12.5px;
-        color: var(--text-dim);
-        background: var(--bg-elev);
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-
-    .scm-diff-loading {
-        color: var(--text-faint);
-        font-size: 11px;
-        flex-shrink: 0;
-    }
-
-    .scm-diff-body {
-        flex: 1;
-        overflow: auto;
-        min-height: 0;
-        padding: 6px 0 12px;
-    }
-
-    .scm-diff-section {
-        padding: 8px 14px 4px;
-        font-size: 11px;
-        font-weight: 600;
-        letter-spacing: 0.4px;
-        text-transform: uppercase;
-        color: var(--text-faint);
-    }
-
-    .scm-diff-pre {
-        margin: 0;
-        font-family: var(--mono);
-        font-size: 12.5px;
-        line-height: 1.55;
-    }
-
-    .scm-diff-line {
-        padding: 0 14px;
-        white-space: pre-wrap;
-        word-break: break-word;
-        color: var(--text-dim);
-    }
-
-    .scm-diff-line.hdr {
-        color: var(--text-faint);
-    }
-
-    .scm-diff-line.hunk {
-        color: var(--accent);
-        background: var(--accent-soft);
-    }
-
-    .scm-diff-line.add {
-        color: var(--green);
-        background: var(--green-soft);
-    }
-
-    .scm-diff-line.del {
-        color: var(--red);
-        background: var(--red-soft);
-    }
-
-    .scm-error {
-        margin: 10px 14px;
-        padding: 8px 12px;
-        border: 1px solid var(--red-soft);
-        border-radius: 8px;
-        background: var(--red-soft);
-        color: var(--red);
-        font-size: 12.5px;
-    }
-
-    /* 「AI 生成提交信息」的失败行：头栏分支行的下一行，紧贴触发按钮；点击整行关闭。 */
-    .scm-gen-error {
-        margin: 6px 0 0;
-        padding: 4px 10px;
-        border: 1px solid var(--red-soft);
-        border-radius: 6px;
-        background: var(--red-soft);
-        color: var(--red);
-        font-size: 12px;
-        cursor: pointer;
-        overflow-wrap: anywhere;
-    }
-
-    .scm-hint {
-        flex-shrink: 0;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 6px 14px;
-        font-size: 12px;
-        color: var(--text-faint);
-        border-top: 1px solid var(--border-soft);
-    }
-
-    .scm-hint svg {
-        flex-shrink: 0;
-    }
-
-    .scm-goto-term {
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
-        margin-left: auto;
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        background: var(--bg-elev2);
-        color: var(--text-dim);
-        font-size: 12px;
-        padding: 3px 10px;
-        cursor: pointer;
-    }
-
-    .scm-goto-term:hover {
-        color: var(--accent);
-        border-color: var(--accent);
-    }
-
-    .scm-spin {
-        animation: spin 0.8s linear infinite;
-    }
-
-    /* Narrow screens: shrink the files column so the diff keeps usable width. */
-    @media (max-width: 768px) {
-        .scm-files,
-        .scm-history {
-            width: 200px;
-        }
-
-        .scm-branch-current {
-            max-width: 150px;
-        }
-
-        .scm-select {
-            min-width: 90px;
-        }
-    }
-
     /* ------------------------------------------------------------------ statusbar */
 
     .statusbar {
@@ -4320,8 +3736,12 @@
         height: 18px;
         min-height: 18px;
         line-height: 18px;
-        padding: 0 6px;
-        border-radius: 4px;
+        padding: 0 4px;
+        border-radius: 2px;
+        /* 方案 C：常态纯平，悬停时再显示背景。 */
+        background: transparent;
+        border: 1px solid transparent;
+        color: var(--text-dim);
         box-shadow: none;
         cursor: pointer;
         user-select: none;
@@ -4351,16 +3771,6 @@
         align-items: center;
         justify-content: center;
         flex-shrink: 0;
-    }
-
-    /* 方案 C 纯平精益流：引擎选择按钮常态完全纯平无边框，与普通条目融为一体，Hover 出利落小矩形 */
-    .statusbar .engine-picker-btn,
-    .footer .engine-picker-btn {
-        background: transparent;
-        border: 1px solid transparent;
-        border-radius: 2px;
-        padding: 0 4px;
-        color: var(--text-dim);
     }
 
     .statusbar .engine-picker-btn:hover,
@@ -5291,13 +4701,10 @@
         border-bottom: 1px solid var(--border);
         background: var(--topbar-bg, var(--bg-elev));
         flex-shrink: 0;
-    }
-
-    .brand {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        min-width: 0;
+        position: relative;
+        z-index: 50;
+        /* 顶栏控件统一高度；窄屏（≤768px）覆盖成 30px。 */
+        --topbar-ctl-h: 28px;
     }
 
     /* 品牌块（单个 host:brand 条目）：π 图标 + 名称横排，纯展示无动作。 */
@@ -5305,6 +4712,7 @@
         display: inline-flex;
         align-items: center;
         gap: 6px;
+        min-width: 0;
     }
 
     .brand-logo {
@@ -5365,9 +4773,7 @@
     .topbar.no-labels .tb-tab,
     .topbar.no-labels .plugin-topbar-item,
     .topbar.no-labels .panel-toggle,
-    .topbar.no-labels .bar-item:not(.brand):not(.bar-item-brand):not(:has(.bg-task-badge)):not(:has(.update-badge)):not(
-        :has(.update-dot)
-    ),
+    .topbar.no-labels .bar-item:not(.brand):not(.bar-item-brand):not(:has(.bg-task-badge)):not(:has(.update-badge)):not(:has(.update-dot)),
     .topbar.no-labels .chip:not(:has(svg ~ svg)):not(:has(.bg-task-badge)):not(:has(.update-badge)):not(:has(.update-dot)) {
         width: var(--topbar-ctl-h);
         height: var(--topbar-ctl-h);
@@ -5379,14 +4785,10 @@
     .topbar.no-labels .tb-tab:hover,
     .topbar.no-labels .plugin-topbar-item:hover,
     .topbar.no-labels .panel-toggle:hover,
-    .topbar.no-labels .bar-item:not(.brand):not(.bar-item-brand):not(:has(.bg-task-badge)):not(:has(.update-badge)):not(
-        :has(.update-dot)
-    ):hover,
+    .topbar.no-labels .bar-item:not(.brand):not(.bar-item-brand):not(:has(.bg-task-badge)):not(:has(.update-badge)):not(:has(.update-dot)):hover,
     .topbar.no-labels .chip:not(:has(svg ~ svg)):not(:has(.bg-task-badge)):not(:has(.update-badge)):not(:has(.update-dot)):hover,
     .topbar.no-labels .tb-tab.active,
-    .topbar.no-labels .bar-item:not(.brand):not(.bar-item-brand):not(:has(.bg-task-badge)):not(:has(.update-badge)):not(
-        :has(.update-dot)
-    ).active {
+    .topbar.no-labels .bar-item:not(.brand):not(.bar-item-brand):not(:has(.bg-task-badge)):not(:has(.update-badge)):not(:has(.update-dot)).active {
         border-radius: 50%;
     }
 
@@ -5399,14 +4801,6 @@
     .topbar.no-labels .chip:has(.update-dot),
     .topbar.no-labels .chip:has(svg ~ svg) {
         border-radius: 7px;
-    }
-
-    .topbar {
-        position: relative;
-        z-index: 50;
-        /* 顶栏控件统一高度（只有图标没文字时也就是正方形边长）：桌面 28px，
-	   窄屏（≤768px）在媒体查询里覆盖成 30px，与 .chip / .tb-tab 的 height 同口径。 */
-        --topbar-ctl-h: 28px;
     }
 
     /* 顶栏的**单一扁直流**（方案 A）：所有条目都是本容器的直接子节点 —— 没有按种类包裹的
@@ -6409,12 +5803,7 @@
     .topbar [role="tab"],
     .topbar .chip,
     .topbar .tb-tab,
-
-    .topbar button,
-    .topbar a.chip,
-    .topbar [role="button"],
     .topbar [role="tab"]:not(.active):not([aria-selected="true"]),
-    .topbar .chip,
     .topbar .tb-tab:not(.active):not([aria-selected="true"]),
     .topbar .bar-item:not(.active):not([aria-selected="true"]),
     .topbar .plugin-topbar-item:not(.active):not([aria-selected="true"]),
@@ -8231,7 +7620,9 @@
         /* container-type 保留：历史上窄列靠 @container msgs 查 rail 让位，现在让位
 	   由 .main 的 --chat-rail 统一处理（两列一起缩）；这里保留 layout
 	   containment 语义（fixed 后代的包含块），不要顺手删。 */
+        /* stylelint-disable-next-line property-no-unknown -- Standard size containment is required for the message container. */
         container-type: inline-size;
+        /* stylelint-disable-next-line property-no-unknown -- Standard named container retained for message layout. */
         container-name: msgs;
         /* 玻璃底已上移到 .main（整块聊天面板统一）；这里保持 overflow:hidden
 	   防止消息内容横向溢出，不要再加回背景（叠加两层会与 goalbar/输入区差一档）。 */
@@ -8620,15 +8011,17 @@
     /* CSS Custom Highlight API —— 搜索命中内联高亮（不支持时自动无样式降级）
  * 每一对声明第一行是 rgba 硬编码兑底：老浏览器不支持 color-mix() 时仍然着色，
  * 支持时被后面的 var() 版本覆盖（跟随主题色）。 */
+    /* stylelint-disable-next-line selector-pseudo-element-no-unknown, selector-type-no-unknown -- Custom Highlight API; msg-search is a highlight name, not an element type. */
     ::highlight(msg-search) {
         background-color: rgba(251, 191, 36, 0.28);
         background-color: color-mix(in srgb, var(--amber) 28%, transparent);
     }
 
+    /* stylelint-disable-next-line selector-pseudo-element-no-unknown, selector-type-no-unknown -- Custom Highlight API; msg-search-active is a highlight name, not an element type. */
     ::highlight(msg-search-active) {
         background-color: rgba(245, 158, 11, 0.85);
-        color: #1a1a1a;
         background-color: color-mix(in srgb, var(--amber) 80%, transparent);
+        color: #1a1a1a;
         color: var(--search-active-fg);
     }
 
@@ -8808,7 +8201,7 @@
     }
 
     /* ------------------------------------------------------- plugin slot entries */
-    /* 插件槽位按钮（terminal/scm/goalbar 工具条、通知区、会话行）：复用 .btn 基调，只补尺寸。 */
+    /* 插件槽位按钮（terminal/goalbar 工具条、通知区、会话行）：复用 .btn 基调，只补尺寸。 */
     .slot-toolbar,
     .lp-slot-sessions,
     .lp-slot-project,
@@ -9228,6 +8621,8 @@
         gap: 3px;
         font-size: 11px;
         color: var(--text-faint);
+        /* 旧消息摘要行：展开指示放左边。 */
+        order: -1;
     }
     /* 展开指示那个小 chevron：纯 CSS 画（右边 + 下边两条边旋转 45°），
  * 不再用 react-icons —— 每一行一个 <svg><polyline> 就是 3,990 行 × 2 个节点，
@@ -11822,7 +11217,8 @@
         align-items: center;
         justify-content: center;
         color: var(--text-dim);
-        background: transparent;
+        background: var(--bg-elev);
+        border-color: var(--border);
     }
 
     .template-field {
@@ -11950,13 +11346,6 @@
 
     .template-btn.send:hover {
         filter: brightness(1.08);
-    }
-
-    /* 模板弹窗右上角关闭钮：同样显式主题背景 */
-    .template-modal-close {
-        background: var(--bg-elev);
-        border-color: var(--border);
-        color: var(--text-dim);
     }
 
     .template-modal-close:hover {
@@ -12840,6 +12229,9 @@
 
     .goalbar-active.wizard {
         border-color: var(--amber);
+        /* 为调研进行中的底缘扫光提供定位和裁剪。 */
+        position: relative;
+        overflow: hidden;
     }
 
     .msg-goal-wizard.msg-custom {
@@ -13200,11 +12592,6 @@
     }
 
     /* 调研进行中：目标条底缘一道扫光，提示「AI 在动」。 */
-    .goalbar-active.wizard {
-        position: relative;
-        overflow: hidden;
-    }
-
     .goalbar-active.wizard::after {
         content: "";
         position: absolute;
@@ -13405,6 +12792,7 @@
     .task-accept-opt input {
         flex: none;
         margin: 2px 0 0;
+        /* stylelint-disable-next-line property-no-unknown -- Standard accent-color preserves themed native controls. */
         accent-color: var(--accent);
     }
 
@@ -14345,6 +13733,10 @@
     .composer-tools .chip {
         flex-shrink: 1;
         min-width: 0;
+        padding: 4px 10px;
+        font-size: 13px;
+        gap: 6px;
+        border-radius: 8px;
     }
     /* chip 外面还套了一层 .dropdown（菜单锚点），它同样要能让位：否则它是
  * min-width:auto 的 flex 项，会按 chip 的 min-content 撑住宽度，里面再缩也没用。 */
@@ -14356,13 +13748,6 @@
 
     .composer-tools .chip > svg {
         flex-shrink: 0;
-    }
-    /* 工具条里的模型/思考 chip 跟着收紧（只作用于输入框内，别处 chip 不动）。 */
-    .composer-tools .chip {
-        padding: 4px 10px;
-        font-size: 13px;
-        gap: 6px;
-        border-radius: 8px;
     }
 
     .composer-tools .chip-sub {
@@ -14801,12 +14186,6 @@
     }
 
     /* ------------------------------------------------------------------ scroll */
-    /* 全站滚动条统一为左侧列表细条样式：Firefox thin + WebKit 6px 无边框 */
-    * {
-        scrollbar-width: thin;
-        scrollbar-color: var(--scroll-thumb) transparent;
-    }
-
     ::-webkit-scrollbar {
         width: 6px;
         height: 6px;
@@ -16062,7 +15441,8 @@
         overflow-y: auto;
         display: flex;
         flex-direction: column;
-        gap: 14px;
+        gap: 12px;
+        padding-bottom: 4px;
     }
 
     /* ---- 设置弹窗：左侧分组导航 + 右侧内容 ---- */
@@ -16313,11 +15693,6 @@
     .settings-modal .modal-head {
         padding-bottom: 12px;
         border-bottom: 1px solid var(--border-soft);
-    }
-
-    .settings-modal .modal-body {
-        gap: 12px;
-        padding-bottom: 4px;
     }
 
     .settings-modal .set-section {
@@ -18462,6 +17837,7 @@
     }
 
     .tpl-chip input {
+        /* stylelint-disable-next-line property-no-unknown -- Standard accent-color preserves themed native controls. */
         accent-color: var(--accent);
         margin: 0;
     }
@@ -18579,6 +17955,7 @@
     }
 
     .settings-modal input[type="checkbox"] {
+        /* stylelint-disable-next-line property-no-unknown -- Standard accent-color preserves themed native controls. */
         accent-color: var(--accent);
         width: 15px;
         height: 15px;
@@ -19257,6 +18634,7 @@
     .sound-row input[type="checkbox"] {
         width: 15px;
         height: 15px;
+        /* stylelint-disable-next-line property-no-unknown -- Standard accent-color preserves themed native controls. */
         accent-color: var(--accent);
         cursor: pointer;
         flex-shrink: 0;
@@ -19380,6 +18758,7 @@
 
     .sound-volume input[type="range"] {
         flex: 1;
+        /* stylelint-disable-next-line property-no-unknown -- Standard accent-color preserves themed native controls. */
         accent-color: var(--accent);
         cursor: pointer;
     }
@@ -20715,6 +20094,7 @@
 
     .fp-markdown input[type="checkbox"] {
         margin-right: 0.45em;
+        /* stylelint-disable-next-line property-no-unknown -- Standard accent-color preserves themed native controls. */
         accent-color: var(--accent);
     }
 
@@ -20996,34 +20376,12 @@
             padding: 0;
         }
 
-        .fp {
-            width: 100vw;
-            height: 100%;
-            height: 100dvh;
-            max-width: none;
-            max-height: none;
-            border: none;
-            border-radius: 0;
-            box-shadow: none;
-        }
-
-        .fp-head {
-            padding: 8px 10px;
-            gap: 6px;
-        }
-
         .fp-path {
             display: none;
         }
 
         .fp-meta {
             display: none;
-        }
-
-        .fp-close {
-            width: 30px;
-            height: 30px;
-            font-size: 16px;
         }
 
         .fp-attach {
@@ -21117,24 +20475,18 @@
 	   但藏不得 —— 藏了手机端就只剩两个朝下的箭头，审查/执行各选了哪个模型完全看不见；
 	   它的宽度由 `.goalbar-opts` 的换行口径管（值单行省略号 + title 给全名），
 	   不靠藏字省宽度。 */
-        .plugin-topbar-menu.portal .chip > span:not(.update-dot):not(.bg-task-badge):not(.update-badge):not(.plugin-icon-svg):not(.plugin-icon-glyph):not(
-        .chip-emoji
-    ):not(.goalbar-opt) {
+        .plugin-topbar-menu.portal .chip > span:not(.update-dot):not(.bg-task-badge):not(.update-badge):not(.plugin-icon-svg):not(.plugin-icon-glyph):not(.chip-emoji):not(.goalbar-opt) {
             display: inline;
         }
         /* 品牌不再是手机端特例：显隐走布局页 hidden 偏好，名称文字走顶栏文字总开关
 	   （.topbar.no-labels 藏 .brand-name 只剩 π）；放不下由实测溢出接管 —— 手机端与桌面端同一套配置。 */
-        .chip > span:not(.update-dot):not(.bg-task-badge):not(.update-badge):not(.plugin-icon-svg):not(.plugin-icon-glyph):not(
-        .chip-emoji
-    ):not(.goalbar-opt) {
+        .chip > span:not(.update-dot):not(.bg-task-badge):not(.update-badge):not(.plugin-icon-svg):not(.plugin-icon-glyph):not(.chip-emoji):not(.goalbar-opt) {
             display: none;
         }
         /* 顶栏按钮（新对话 / 各工具 chip）保留文字标签：宽度不够时不再靠隐藏文字省宽度，
 	   而是把尾部条目实测后送进「⋯」（见 TopBar / topbar-fit），所以这里不藏标签。
 	   豁免名单同上：角标与图标 span 有自己的 display/盒模型，不能当“标签”处理。 */
-        .topbar .chip > span:not(.update-dot):not(.bg-task-badge):not(.update-badge):not(.plugin-icon-svg):not(.plugin-icon-glyph):not(
-        .chip-emoji
-    ):not(.goalbar-opt) {
+        .topbar .chip > span:not(.update-dot):not(.bg-task-badge):not(.update-badge):not(.plugin-icon-svg):not(.plugin-icon-glyph):not(.chip-emoji):not(.goalbar-opt) {
             display: inline;
         }
 
@@ -21148,9 +20500,7 @@
 	   发送/停止/排队 始终固定在右侧。收缩与截断的规则在基础样式里，这里只放宽
 	   标签宽度、把工具条锁成单行，并在下面一个阈值里直接切成纯图标。 ---- */
         @media (min-width: 561px) {
-            .composer-tools .chip > span:not(.update-dot):not(.bg-task-badge):not(.update-badge):not(.plugin-icon-svg):not(
-            .plugin-icon-glyph
-        ):not(.chip-emoji):not(.goalbar-opt) {
+            .composer-tools .chip > span:not(.update-dot):not(.bg-task-badge):not(.update-badge):not(.plugin-icon-svg):not(.plugin-icon-glyph):not(.chip-emoji):not(.goalbar-opt) {
                 display: inline;
             }
         }
@@ -21511,6 +20861,8 @@
 
         .fp {
             height: 92vh;
+            border: none;
+            box-shadow: none;
         }
 
         .fp-markdown {
@@ -21643,7 +20995,6 @@
 	 * 5. 工作目录弹性省略截断，底栏支持横向触摸滚动（绝不截断超出屏幕）。 */
         .statusbar {
             flex-wrap: nowrap;
-
             --statusbar-gap: 2px;
             gap: var(--statusbar-gap);
             padding: 0 4px;
@@ -21705,15 +21056,9 @@
 	 * 注意：分隔符不能在这里隐藏，否则上下文的「已用 / 窗口」会粘成 22.5K200K。 */
         .statusbar .bar-item-msg-count,
         .statusbar .status-msg-count,
-        .statusbar .bar-item:not(.status-conn):not(.status-ctx):not(.status-cost):not(.status-cache):not(.status-rate):not(
-            .status-host-metrics
-        ):not(.status-cwd):not(.working):not(.bar-item-working),
-        .statusbar .status-item:not(.status-conn):not(.status-ctx):not(.status-cost):not(.status-cache):not(.status-rate):not(
-            .status-host-metrics
-        ):not(.status-cwd):not(.working):not(.bar-item-working),
-        .statusbar .bar-item-wrap:not(:has(.status-conn)):not(:has(.status-ctx)):not(:has(.status-cost)):not(
-            :has(.status-cache)
-        ):not(:has(.status-cwd)):not(:has(.working)):not(:has(.bar-item-working)) {
+        .statusbar .bar-item:not(.status-conn):not(.status-ctx):not(.status-cost):not(.status-cache):not(.status-rate):not(.status-host-metrics):not(.status-cwd):not(.working):not(.bar-item-working),
+        .statusbar .status-item:not(.status-conn):not(.status-ctx):not(.status-cost):not(.status-cache):not(.status-rate):not(.status-host-metrics):not(.status-cwd):not(.working):not(.bar-item-working),
+        .statusbar .bar-item-wrap:not(:has(.status-conn)):not(:has(.status-ctx)):not(:has(.status-cost)):not(:has(.status-cache)):not(:has(.status-cwd)):not(:has(.working)):not(:has(.bar-item-working)) {
             display: none;
         }
         /* 连接状态：仅保留状态指示圆点与延迟数值，隐藏文字标签 */
@@ -21950,11 +21295,6 @@
     .dd-update-btn:hover {
         background: color-mix(in srgb, var(--amber) 22%, transparent);
         border-color: rgba(245, 158, 11, 0.65);
-    }
-
-    /* 旧消息摘要行：展开指示放左边。 */
-    .msg-collapsed-action {
-        order: -1;
     }
 
     /* 手机版：收紧横条，隐藏次要信息（模型 tag / 路径 / 时间），
@@ -22276,6 +21616,7 @@
         left: 6px;
         top: 10px;
         margin: 0;
+        /* stylelint-disable-next-line property-no-unknown -- Standard accent-color preserves themed native controls. */
         accent-color: var(--accent);
         cursor: pointer;
         z-index: 1;
@@ -22432,6 +21773,7 @@
     }
 
     .saveimg-opt input[type="checkbox"] {
+        /* stylelint-disable-next-line property-no-unknown -- Standard accent-color preserves themed native controls. */
         accent-color: var(--accent);
     }
 
@@ -23007,9 +22349,7 @@
 
     /* 顶栏只显示图标模式（.topbar.no-labels）：隐藏包括笔记在内所有条目的文字标签，纯图标按钮统一为正方形 */
     .topbar.no-labels .bar-item > .bar-item-text,
-    .topbar.no-labels .bar-item > span:not(.bar-item-icon):not(.brand-logo):not(.bar-item-brand-logo):not(.plugin-icon-svg):not(
-        .plugin-icon-glyph
-    ):not(.bg-task-badge):not(.update-badge):not(.update-dot) {
+    .topbar.no-labels .bar-item > span:not(.bar-item-icon):not(.brand-logo):not(.bar-item-brand-logo):not(.plugin-icon-svg):not(.plugin-icon-glyph):not(.bg-task-badge):not(.update-badge):not(.update-dot) {
         display: none;
     }
 
@@ -25243,6 +24583,8 @@
         display: flex;
         flex-direction: column;
         gap: 4px;
+        /* 字段级端子以本字段为定位参照。 */
+        position: relative;
     }
 
     /* 卡片内模型胶囊：占满一行不换行，超长模型名省略，思考强度段永不被挤掉 */
@@ -26296,10 +25638,6 @@
     }
 
     /* ---- 字段级端子：端口绑定卡片内具体数值 ---- */
-    .canvas-node-field-col {
-        position: relative;
-    }
-
     .canvas-row-port {
         position: absolute;
         top: 50%;
@@ -26453,11 +25791,14 @@
 /* 唯一的 guard 例外：mermaid 用 d3 .style() 把字号写成 SVG 内联 style，
    任何层内/无层普通声明都压不住它，只能留这一处叹号 important。
    guard 先声明，层序反转后它的 important 恒胜。 */
+/* stylelint-disable-next-line at-rule-no-unknown -- Guard layer preserves the priority of Mermaid inline-style overrides. */
 @layer guard {
+    /* stylelint-disable selector-type-case -- SVG foreignObject is case-sensitive; lowercasing changes the selector. */
     .mermaid-svg svg .titleText,
     .mermaid-svg svg foreignObject .edgeLabel {
         font-size: var(--mermaid-font-size) !important;
     }
+    /* stylelint-enable selector-type-case */
 }
 
 /* ==== 无层结构性覆盖（unlayered，零叹号 important）====

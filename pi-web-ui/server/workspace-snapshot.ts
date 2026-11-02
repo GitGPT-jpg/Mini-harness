@@ -18,7 +18,7 @@ import { copyFile, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
-import { gitDirOf } from "./scm.js";
+import { gitDirOf } from "./git-dir.js";
 
 const exec = promisify(execFile);
 

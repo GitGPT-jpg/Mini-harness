@@ -24,9 +24,6 @@ describe("switchConversation 性能与快速切换优化 (#switch-conv-perf)", (
 		expect(flushIdx).toBeGreaterThan(0);
 		expect(doneIdx).toBeGreaterThan(flushIdx);
 		expect(pushSettingsIdx).toBeGreaterThan(doneIdx);
-
-		// 检查 3: 跨项目切换时调用 unwatchGit 释放旧工作区 Git watcher
-		expect(switchConvBody).toContain("this.files.unwatchGit()");
 	});
 
 	it("refreshSessionsOnSwitch 使用 SESSION_INFO_CACHE_TTL (30s) 而不是粗暴的 2 秒", () => {
@@ -38,16 +35,5 @@ describe("switchConversation 性能与快速切换优化 (#switch-conv-perf)", (
 
 		expect(refreshBody).toContain("ClientSession.SESSION_INFO_CACHE_TTL");
 		expect(refreshBody).not.toContain("2_000");
-	});
-
-	it("switchSession 在跨项目打开历史会话时也会调用 unwatchGit", () => {
-		const src = readFileSync(join(__dirname, "../../server/agent-service.ts"), "utf-8");
-		const switchSessionStart = src.indexOf("async switchSession(path: string, sessionId?: string): Promise<void> {");
-		expect(switchSessionStart).toBeGreaterThan(0);
-		const targetCwdIdx = src.indexOf("this.cwd = targetCwd;", switchSessionStart);
-		expect(targetCwdIdx).toBeGreaterThan(switchSessionStart);
-
-		const sliceAroundTargetCwd = src.slice(targetCwdIdx, targetCwdIdx + 200);
-		expect(sliceAroundTargetCwd).toContain("this.files.unwatchGit();");
 	});
 });

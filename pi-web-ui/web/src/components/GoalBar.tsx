@@ -2,7 +2,7 @@ import { memo, type ReactNode } from "react";
 import { FiX, FiArrowUpRight, FiSquare } from "react-icons/fi";
 import type { GoalStatus } from "../types";
 import { isZhLocale, useT, useI18n } from "../i18n";
-import { appSend, useIsDsh } from "../app-globals";
+import { appSend } from "../app-globals";
 import type { UiSlotEntry } from "../ui-slots";
 import { renderMergedToolbar } from "../slot-toolbar";
 import { useCockpitPopupOpen } from "../loop-cockpit";
@@ -30,9 +30,6 @@ export const GoalBar = memo(function GoalBar({ goal, activeConversationId, uiGoa
 	const { locale } = useI18n();
 	const goalDetail = !isZhLocale(locale) && goal.statusEn ? goal.statusEn : goal.status || "";
 	const wizardDetail = !isZhLocale(locale) && goal.wizard?.statusEn ? goal.wizard.statusEn : goal.wizard?.status || "";
-	// DSH：不接目标模式 2.0 的执行对话（没有执行模型可言，旧后端告警也不适用）。
-	// engine 走全局（web/src/app-globals.ts），不再从 App 一路传下来。
-	const isDsh = useIsDsh();
 	// Goals belong to the conversation that created them. The server keeps the
 	// status around while switching chats so returning to the owner restores the
 	// goal, but never show another conversation's goal as active.
@@ -65,7 +62,7 @@ export const GoalBar = memo(function GoalBar({ goal, activeConversationId, uiGoa
 	// 目标模式 2.0 加固：pi 引擎的新后端在**任何** goal_status 里都带 execModel
 	// （makeGoalStatus 一定赋值）；旧后端（进程没重启）把未知字段丢掉，于是这里是
 	// undefined。不静默：「新界面 + 旧后端」这种混合态必须当场说出来。
-	const staleBackend = !isDsh && goal.execModel === undefined;
+	const staleBackend = goal.execModel === undefined;
 
 	// ---- 槽位合并：宿主 chrome 按 id 分区（折叠胶囊 / 活跃行），插件条目跟随同行；
 	// 未接线时用默认顺序，hidden 由上层过滤（App 传全量）。 ----

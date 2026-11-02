@@ -41,7 +41,6 @@ import type {
 	UiState,
 	UiMessage,
 	UiToolApproval,
-	DshPatchFileInfo,
 	UpdateItemKind,
 } from "./types";
 
@@ -324,9 +323,6 @@ export interface ChatState {
 		configs?: UiProviderConfig[];
 		error?: string;
 	} | null;
-	/** Last source-control query result (scm_status / scm_filediff /
-	 *  scm_commit), matched by reqId in the SCM panel. */
-	scmData: ServerMessage | null;
 	/** Last global-search file query result, matched by reqId in the
 	 *  global search panel (stale results with older reqIds are ignored). */
 	fileSearch: {
@@ -342,15 +338,10 @@ export interface ChatState {
 		ok: boolean;
 		results: SessionSearchResult[];
 	} | null;
-	/** DSH engine: <dataDir>/dsh-patches user patch files (list + dir). */
-	dshPatches: { patchDir: string; files: DshPatchFileInfo[] } | null;
 	/** DSH engine: Agent 预设名录（null = 未加载/legacy，UI 隐藏预设条）。 */
 	dshPresets: { presets: UiAgentPreset[]; defaultPreset: string } | null;
 	/** DSH engine: 权限预设选项表 + 新会话默认（null = 未就绪/legacy，UI 隐藏权限条）。 */
 	dshPermission: { options: DshPermissionOption[]; defaultPreset: string } | null;
-	/** Increments when the server reports the watched git dir changed
-	 *  outside the panel — SCMPanel refreshes on change while visible. */
-	scmDirty: number;
 	/** Server wire-protocol version differs from ours — the page was loaded
 	 *  before/after an app update; show a persistent refresh banner. */
 	protocolMismatch: boolean;
@@ -452,7 +443,6 @@ type Action =
 			type: "clone_provider_result";
 			result: { reqId: number; ok: boolean; config?: UiProviderConfig; configs?: UiProviderConfig[]; error?: string };
 	  }
-	| { type: "scm_data"; data: ServerMessage }
 	| {
 			type: "file_search_result";
 			result: {
@@ -470,7 +460,6 @@ type Action =
 				results: SessionSearchResult[];
 			};
 	  }
-	| { type: "scm_changed" }
 	| { type: "install_result"; result: { ok: boolean; detail: string } }
 	| {
 			type: "path_completions";
@@ -559,11 +548,6 @@ type Action =
 	| { type: "settings"; settings: UiSettingsState }
 	| { type: "bg_servers"; servers: BgServer[] }
 	| { type: "scheduler_tasks"; tasks: SchedulerTaskView[] }
-	| {
-			type: "dsh_patches";
-			patchDir: string;
-			files: DshPatchFileInfo[];
-	  }
 	| { type: "dsh_presets"; presets: UiAgentPreset[]; defaultPreset: string }
 	| { type: "dsh_permission"; options: DshPermissionOption[]; defaultPreset: string }
 	| { type: "sync_cached_sessions"; sessions: SessionSummary[] }
@@ -612,7 +596,7 @@ interface TerminalWriter {
 
 function makeTerminalBridge() {
 	/** Multiple writers may subscribe to the same (conversation, terminal) pair —
-	 *  e.g. the SCM panel's hidden query terminal parses output through its own
+	 *  e.g. a hidden query terminal parses output through its own
 	 *  writer while a (hidden) xterm instance may also be registered for it.
 	 *  A Set keeps them all: later registrations no longer shadow earlier ones. */
 	const writers = new Map<string, Set<TerminalWriter>>();
@@ -733,7 +717,6 @@ function reducer(state: ChatState, action: Action): ChatState {
 				...(action.latencyMs !== undefined ? { latencyMs: action.latencyMs } : {}),
 			};
 		case "ready": {
-			const engineChanged = Boolean(state.engine && action.engine && state.engine !== action.engine);
 			return {
 				...state,
 				serverVersion: action.serverVersion,
@@ -742,18 +725,6 @@ function reducer(state: ChatState, action: Action): ChatState {
 				managed: action.managed === true,
 				tabs: action.tabs,
 				ready: true,
-				...(engineChanged
-					? {
-							state: null,
-							models: [],
-							sessions: readCachedSessions(state.state?.cwd, action.engine),
-							conversations: [],
-							terminals: [],
-							dshPatches: null,
-							dshAgentPresets: null,
-							dshPermissionPresets: null,
-						}
-					: {}),
 				...(typeof action.latencyMs === "number" && state.latencyMs == null ? { latencyMs: action.latencyMs } : {}),
 				// Old page + new server (or the reverse) after an in-place update:
 				// WS handling on either side may be stale — banner asks for refresh.
@@ -858,7 +829,6 @@ function reducer(state: ChatState, action: Action): ChatState {
 				text: action.text,
 				attachments: action.attachments,
 				queue: action.queue,
-				engine: state.engine,
 				goalReviewing,
 			});
 			if (res.tracker === state.optimisticQueue && res.state === state.state) return state;
@@ -1004,14 +974,10 @@ function reducer(state: ChatState, action: Action): ChatState {
 			return { ...state, cloneProviderResult: action.result };
 		case "install_result":
 			return { ...state, installResult: action.result };
-		case "scm_data":
-			return { ...state, scmData: action.data };
 		case "file_search_result":
 			return { ...state, fileSearch: action.result };
 		case "session_search_result":
 			return { ...state, sessionSearch: action.result };
-		case "scm_changed":
-			return { ...state, scmDirty: state.scmDirty + 1 };
 		case "path_completions":
 			return { ...state, pathCompletions: action.completions };
 		case "update_status":
@@ -1063,8 +1029,6 @@ function reducer(state: ChatState, action: Action): ChatState {
 			return { ...state, bgServers: action.servers };
 		case "scheduler_tasks":
 			return { ...state, schedulerTasks: action.tasks };
-		case "dsh_patches":
-			return { ...state, dshPatches: { patchDir: action.patchDir, files: action.files } };
 		case "dsh_presets":
 			return { ...state, dshPresets: { presets: action.presets, defaultPreset: action.defaultPreset } };
 		case "dsh_permission":
@@ -1476,11 +1440,8 @@ export function useChat() {
 		refreshBuiltinResult: null,
 		appendBuiltinResult: null,
 		cloneProviderResult: null,
-		scmData: null,
 		fileSearch: null,
 		sessionSearch: null,
-		scmDirty: 0,
-		dshPatches: null,
 		dshPresets: null,
 		dshPermission: null,
 		protocolMismatch: false,
@@ -2025,9 +1986,6 @@ export function useChat() {
 						},
 					});
 					break;
-				case "scm_data":
-					dispatch({ type: "scm_data", data: msg });
-					break;
 				case "search_files_result":
 					dispatch({
 						type: "file_search_result",
@@ -2048,9 +2006,6 @@ export function useChat() {
 							results: msg.results,
 						},
 					});
-					break;
-				case "scm_changed":
-					dispatch({ type: "scm_changed" });
 					break;
 				case "tool_info":
 					receiveToolInfo(msg);
@@ -2231,9 +2186,6 @@ export function useChat() {
 					break;
 				case "scheduler_tasks":
 					dispatch({ type: "scheduler_tasks", tasks: msg.tasks });
-					break;
-				case "dsh_patches":
-					dispatch({ type: "dsh_patches", patchDir: msg.patchDir, files: msg.files });
 					break;
 				case "dsh_presets":
 					dispatch({ type: "dsh_presets", presets: msg.presets, defaultPreset: msg.defaultPreset });

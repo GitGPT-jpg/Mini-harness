@@ -2,7 +2,7 @@ import { Fragment, memo, useEffect, useMemo, useRef, useState, type ReactNode } 
 import { FiList, FiSquare, FiPaperclip, FiArrowUp, FiBookOpen } from "react-icons/fi";
 import type { FileSearchResult, ModelInfo, ProviderKeyInfo, SlashCommandInfo, UiMessage, UiState } from "../types";
 import { isZhLocale, useT, useI18n } from "../i18n";
-import { appSend, useAppField, useIsDsh, useEngineCapabilities } from "../app-globals";
+import { appSend, useAppField, useEngineCapabilities } from "../app-globals";
 import {
 	applyTemplateFill,
 	mergeRecalledDraft,
@@ -197,7 +197,6 @@ export const ChatInput = memo(function ChatInput({
 	const ready = useAppField("ready");
 	/** DSH 无 mid-run steering（isStreaming 时 prompt 全部走 followUp，
 	 *  见 server/dsh/dsh-agent-service.ts）—— 只渲染「排队」半段，不摆一个说了不算的「插队」。 */
-	const isDsh = useIsDsh();
 	const capabilities = useEngineCapabilities();
 	const effectivePlanMode = Boolean(planMode && capabilities.planMode);
 	const { locale } = useI18n();
@@ -1371,7 +1370,7 @@ export const ChatInput = memo(function ChatInput({
 	// 本回合立刻响应）；两半同宽、中间一条细分隔线。DSH 引擎没有 mid-run
 	// 是否支持 mid-run steering（插话打断）：由引擎底座 capabilities 声明驱动。
 	// 不支持时只留下左半边单一排队按钮（.single 收成 38px）。
-	const canSteer = Boolean(capabilities.steer !== false && !isDsh);
+	const canSteer = capabilities.steer !== false;
 	const renderActions = () => (
 		<div className="inputbox-actions">
 			{/* 连接集群：发送键左侧的小图标，角标点 = 连通状态（点击填 kubeconfig）。 */}
@@ -1755,9 +1754,7 @@ export const ChatInput = memo(function ChatInput({
 					placeholder={
 						connected
 							? streaming
-								? isDsh
-									? t("placeholderStreamingQueued")
-									: t("placeholderStreaming")
+								? t("placeholderStreaming")
 								: effectivePlanMode
 									? t("placeholderPlanMode")
 									: isModEnter

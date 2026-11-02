@@ -201,11 +201,6 @@ export function useAppField<K extends keyof AppGlobals>(key: K): AppGlobals[K] {
 	);
 }
 
-/** 当前是否 DSH 引擎（最常用的那个判断：DSH 缺一堆 pi 才有的能力）。 */
-export function useIsDsh(): boolean {
-	return useAppField("engine") === "dsh";
-}
-
 /** 实例是否受管（PI_WEB_MANAGED=1）。 */
 export function useIsManaged(): boolean {
 	return useAppField("managed");

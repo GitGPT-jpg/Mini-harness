@@ -37,7 +37,7 @@ const ids = (entries: { id: string }[]) => entries.map((e) => e.id);
 
 describe("UI slot cardinality（P1-4）", () => {
 	it("所有现有挂载点都有显式 list 规格，新增 single 不会改变现有入口语义", () => {
-		expect(UI_SLOT_SPECS).toHaveLength(32);
+		expect(UI_SLOT_SPECS).toHaveLength(30);
 		expect(UI_SLOT_SPECS.every((spec) => spec.cardinality === "list")).toBe(true);
 		expect(new Set(UI_SLOT_SPECS.map((spec) => spec.slot)).size).toBe(UI_SLOT_SPECS.length);
 	});
@@ -119,7 +119,6 @@ describe("BUILTIN_UI_ITEMS（宿主默认）", () => {
 			]),
 		);
 		expect(bySlot("contextmenu.session").length).toBeGreaterThan(0);
-		expect(bySlot("contextmenu.file").length).toBeGreaterThan(0);
 		// 消息区右键菜单登记宿主操作项（复制/编辑/分支/回滚/朗读）
 		expect(bySlot("contextmenu.message").length).toBeGreaterThan(0);
 		expect(bySlot("settings.pages")).toEqual([]);
@@ -168,7 +167,7 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 		expect(settings?.hidden).toBe(false);
 		expect(settings?.order).toBe(60);
 		// 没用到的槽位是空数组（渲染层不必判空），且全部槽位都在
-		expect(Object.keys(slots)).toHaveLength(32);
+		expect(Object.keys(slots)).toHaveLength(30);
 		expect(slots["composer.leading"]).toEqual([]);
 		// 输入框动作区有 7 个宿主内置（上传/模板/模型/思考/DSH×2/发送），发送簇 align=end
 		// （计划模式已搬到目标条 host:goal-plan）
@@ -233,7 +232,6 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			"goalbar.actions",
 			"composer.leading",
 			"composer.actions",
-			"rightpanel.tabs",
 			"terminal.toolbar",
 			"bottombar",
 			"file.preview.toolbar",
@@ -241,7 +239,6 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			"contextmenu.message",
 			"contextmenu.session",
 			"contextmenu.project",
-			"contextmenu.file",
 			"contextmenu.toolcall",
 			"settings.pages",
 			"tasks.panel",
@@ -253,22 +250,6 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 
 	it("kind=view 的条目带 view 目标（宿主据此切视图）", () => {
 		const slots = build();
-	});
-
-	it("同 order 时保持声明顺序（稳定排序）", () => {
-		const seq = new Map(BUILTIN_UI_ITEMS.map((item, i) => [item.id, i]));
-		let ties = 0;
-		for (const entries of Object.values(build())) {
-			for (let i = 1; i < entries.length; i++) {
-				const a = entries[i - 1]!;
-				const b = entries[i]!;
-				if (a.order !== b.order) continue;
-				ties++;
-				expect(seq.get(a.id)!, `${a.id} / ${b.id}`).toBeLessThan(seq.get(b.id)!);
-			}
-		}
-		// 宿主表里确有同权重条目（如 contextmenu.file 的 16 / 17），否则上面的断言是空转
-		expect(ties).toBeGreaterThan(0);
 	});
 });
 

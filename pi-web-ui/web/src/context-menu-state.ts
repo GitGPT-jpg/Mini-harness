@@ -171,7 +171,6 @@ export function clampMenuPosition(
 
 /** `when` 条件求值的上下文：条件名 → 当前是否为真（由打开菜单的宿主现场构造）。
  *  已知条件名（协议 UiContribution.when 注释里的词表）：
- *  - `file.isDir` / `file.isFile`（contextmenu.file，取自 target.kind）
  *  - `session.isRunning`（contextmenu.session：running 对话为真，历史会话为假）
  *  - `message.hasSelection`（contextmenu.message：右键时有文本选中；宿主原生菜单让路时为假）
  *  宿主不认识的条件名一律忽略（不置灰），插件可放心写未来的条件。 */
@@ -181,10 +180,6 @@ type WhenContext = Record<string, boolean>;
  *  （RightPanel: file/dir；LeftPanel: running/history；Message: message）。 */
 export function buildWhenContext(slot: ContextMenuSlot, target: ContextMenuRequest["target"] | undefined): WhenContext {
 	const kind = String(target?.kind ?? "");
-	if (slot === "contextmenu.file") {
-		const isDir = kind === "dir" || (kind === "list" && target?.id !== "@root");
-		return { "file.isDir": isDir, "file.isFile": kind === "file" };
-	}
 	if (slot === "contextmenu.session") return { "session.isRunning": kind === "running" };
 	if (slot === "contextmenu.message") {
 		let hasSelection = false;

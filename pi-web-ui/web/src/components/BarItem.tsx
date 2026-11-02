@@ -22,7 +22,7 @@ import { REQUIRED_TOPBAR_ITEM_IDS, restoreUiItem, type UiSlotEntry, type UiSlotI
 import type { ChatState } from "../use-chat";
 import { useFormattedCost } from "../cost-format";
 import { isZhLocale, useT, useI18n } from "../i18n";
-import { useAppGlobals, appSend } from "../app-globals";
+import { appSend } from "../app-globals";
 import { focusComposer } from "../composer-bridge";
 import { openContextMenu } from "../context-menu-state";
 import { cacheMetrics, estimateStreamTokens, streamRate, trimRateSamples, type RateSample } from "../cache-stats";
@@ -126,8 +126,6 @@ export function BarItem({
 }: BarItemProps) {
 	const t = useT();
 	const { locale, packs, setLocale } = useI18n();
-	const { engine } = useAppGlobals();
-	const isDsh = engine === "dsh";
 
 	const [langOpen, setLangOpen] = useState(false);
 	const [themeOpen, setThemeOpen] = useState(false);
@@ -833,7 +831,6 @@ export function BarItem({
 			};
 			break;
 		case "host:new-ephemeral-chat":
-			if (isDsh) return null;
 			iconNode = <LuMessageSquareDashed className="bar-item-icon" />;
 			labelText = named(t("newChatEphemeral"));
 			extraClasses = "chip newchat ephemeral-chat-btn";

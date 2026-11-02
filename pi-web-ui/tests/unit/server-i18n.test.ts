@@ -192,17 +192,6 @@ describe("issue #640: server pick() preserves computed values in translated pack
 			expect(convAll).toContain("project");
 			expect(convAll).not.toMatch(/\{[a-zA-Z0-9_.]+\}/);
 
-			// SCM commitmsg
-			const scmTerm = pick("pt", "异常终止", "terminated", "scm.commitmsg.model.terminated", {
-				stopReason: "tool_use",
-			});
-			expect(scmTerm).toContain("tool_use");
-			expect(scmTerm).not.toMatch(/\{[a-zA-Z0-9_.]+\}/);
-
-			const scmTimeout = pick("pt", "超时", "timeout", "scm.commitmsg.timeout", { secs: 30 });
-			expect(scmTimeout).toContain("30");
-			expect(scmTimeout).not.toMatch(/\{[a-zA-Z0-9_.]+\}/);
-
 			// Skill
 			const skillBad = pick("pt", "不可读", "unreadable", "skill.file.unreadable", { name: "my-skill", kb: 256 });
 			expect(skillBad).toContain("my-skill");

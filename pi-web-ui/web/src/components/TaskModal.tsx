@@ -2,7 +2,7 @@ import { memo, useEffect, useMemo, useState } from "react";
 import { FiPlus } from "react-icons/fi";
 import type { GoalStatus } from "../types";
 import { useT } from "../i18n";
-import { appSend, useIsDsh } from "../app-globals";
+import { appSend } from "../app-globals";
 import { closeTaskModal, mhGet, openTaskModal, useCockpit, type TaskAcceptance } from "../loop-cockpit";
 import { Modal } from "./Modal";
 
@@ -72,7 +72,6 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 	const open = useCockpit("taskOpen");
 	const prefill = useCockpit("taskPrefill");
 	const t = useT();
-	const isDsh = useIsDsh();
 	const [goal, setGoal] = useState("");
 	const [criteria, setCriteria] = useState("");
 	const [acceptance, setAcceptance] = useState<TaskAcceptance>("code-review");
@@ -136,7 +135,6 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 	const canStart = !!g && !conflict;
 	// 执行模型跟随主对话（空）或就选了主对话那个 = 自己审自己。
 	const sameModel =
-		!isDsh &&
 		(!execModel ||
 			(!!mainModel && (execModel === mainModel.id || execModel === `${mainModel.provider}/${mainModel.id}`)));
 
@@ -160,7 +158,7 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 
 	/** LLM loop：先把本次选的偏好记下（同旧编辑器的 set_goal_prefs），再发目标 / 启动细化向导。 */
 	const sendLlmPrefs = (maxRounds: number) =>
-		appSend({ type: "set_goal_prefs", maxRounds, ...(isDsh ? {} : { reviewModel: llmPlanner, execModel }) });
+		appSend({ type: "set_goal_prefs", maxRounds, reviewModel: llmPlanner, execModel });
 
 	const start = () => {
 		if (!canStart) return;
@@ -170,10 +168,10 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 			appSend({
 				type: "set_goal",
 				goal: withCriteria(g, c),
-				...(!isDsh && llmPlanner ? { reviewModel: llmPlanner } : {}),
+				...(llmPlanner ? { reviewModel: llmPlanner } : {}),
 				maxRounds,
 				locked: true,
-				...(!isDsh && execModel ? { execModel } : {}),
+				...(execModel ? { execModel } : {}),
 			});
 		} else {
 			const artifactRoots = roots
@@ -205,7 +203,7 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 		appSend({
 			type: "start_goal_wizard",
 			text: withCriteria(g, c),
-			...(!isDsh && llmPlanner ? { wizardModel: llmPlanner } : {}),
+			...(llmPlanner ? { wizardModel: llmPlanner } : {}),
 			maxRounds,
 			locked: true,
 		});
@@ -327,8 +325,6 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 						</div>
 						<div className={`cockpit-model-note${conflict ? " bad" : ""}`}>{note}</div>
 					</>
-				) : isDsh ? (
-					<div className="cockpit-model-note">{t("dshNoReviewModel")}</div>
 				) : (
 					<>
 						<div className="cockpit-models">

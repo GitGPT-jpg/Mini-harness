@@ -47,8 +47,6 @@ function makeMockHost(savedSettings: Record<string, unknown> = {}) {
 				visionBridgeModel: null,
 				visionBridgePromptMode: "append",
 				visionBridgePrompt: "",
-				scmCommitMsgPromptMode: "append",
-				scmCommitMsgPrompt: "",
 				planModePromptMode: "append",
 				planModePrompt: "",
 				subagentDefaultModel: null,

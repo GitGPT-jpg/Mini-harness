@@ -276,7 +276,6 @@ import { sameSessionFile, type SchedulerStore } from "./scheduler-tasks.js";
 import { buildAttachmentMessages, findTurnBaseEntryId } from "./attachments.js";
 import { scanAtMentions } from "./universal-attachments.js";
 import { formatQuotedPrompt, formatStreamingPrompt, readTextQuote, splitQuotedPrompt } from "./text-quote.js";
-import { generateScmCommitMessage } from "./scm-commitmsg.js";
 import {
 	BUILTIN_SOUL,
 	DEFAULT_PROMPT_TEMPLATE,
@@ -814,7 +813,7 @@ export class ClientSession {
 	private bashKills = new Set<AbortController>();
 	/** Background-server tracking (port snapshots + 后台任务 panel state) —
 	 *  自包含模块，见 bg-servers.ts。列表按 CLIENT 存活，不随对话切换/结束消失。 */
-	/** 文件树 / 预览读写 / SCM 查询 / watcher —— 自包含模块，见 files-service.ts。 */
+	/** 文件树 / 预览读写 / 目录 watcher —— 自包含模块，见 files-service.ts。 */
 	private readonly files = new FilesService({
 		emit: (msg) => this.emit(msg),
 		isDisposed: () => this.disposed,
@@ -2304,13 +2303,6 @@ export class ClientSession {
 	 *  filesystem — failures silently fall back to the poll. */
 	private fsWatcher: ReturnType<typeof watch> | null = null;
 	private watchPath: string | null = null;
-	/** fs.watch on the active repo's git dir — external changes (CLI commit,
-	 *  IDE branch switch) push `scm_changed` so the panel refreshes itself.
-	 *  One watcher per client session, re-targeted when the queried cwd
-	 *  changes; failures (bare repo, unsupported fs) silently disable it. */
-	private gitWatcher: ReturnType<typeof watch> | null = null;
-	private gitWatchCwd: string | null = null;
-	private gitDirtyTimer: ReturnType<typeof setTimeout> | null = null;
 	private watchTimer: ReturnType<typeof setTimeout> | null = null;
 
 	/** 子代理模板库（全局共享，<dataDir>/subagent-templates.json）。 */
@@ -6348,8 +6340,6 @@ export class ClientSession {
 		visionBridgeModel?: string | null;
 		visionBridgePromptMode?: PromptMode;
 		visionBridgePrompt?: string;
-		scmCommitMsgPromptMode?: PromptMode;
-		scmCommitMsgPrompt?: string;
 		subagentDefaultModel?: string | null;
 		retryMaxAttempts?: number;
 		softCapTokens?: number;
@@ -9542,7 +9532,6 @@ export class ClientSession {
 
 		if (cwdChanged) {
 			this.cwd = newCwd;
-			this.files.unwatchGit();
 			this.roots = this.stateStore.getWorkspaceRoots(this.clientId, newCwd);
 		}
 
@@ -11043,7 +11032,6 @@ export class ClientSession {
 			// 计划模式的写类/旁路工具剥离对重开的会话同样生效。下同（forkSession/setCwd）。
 			this.applyToolGating(conv.session, conv.agentPreset);
 			this.cwd = targetCwd;
-			this.files.unwatchGit();
 			// 打开的历史会话可能属于另一个项目 —— 工作区跟随面（roots/文件树/
 			// 历史列表/命令目录/最近项目）必须跟着切，否则 UI 停在旧项目。
 			this.applyCwdSideEffects(targetCwd);
@@ -11730,62 +11718,6 @@ export class ClientSession {
 		}
 	}
 
-	/** SCM 只读查询（结构化 JSON，reqId 匹配）。 */
-	async scmQuery(
-		kind: "status" | "history" | "filediff" | "commit",
-		reqId: number,
-		arg?: { path?: string; hash?: string },
-	): Promise<void> {
-		return this.files.scmQuery(kind, reqId, arg);
-	}
-
-	/**
-	 * SCM「AI 生成提交信息」：用当前对话模型做一次 completeSimple 一次性补全
-	 * （与视觉桥同一条通路）——不进对话上下文、不打断正在流式的回复。
-	 * 恰好应答一次：任何失败都以 ok:false 的 scm_data（kind "commitmsg"）收尾，
-	 * 前端按钮不会卡在转圈。
-	 */
-	async scmGenCommitMessage(reqId: number): Promise<void> {
-		const lang = this.getLang();
-		const cwd = this.convs.get(this.activeId)?.cwd ?? this.cwd;
-		const reply = (ok: boolean, extra: { text?: string; error?: string }) => {
-			this.emit({ type: "scm_data", reqId, kind: "commitmsg", ok, ...extra });
-		};
-		const fail = (err: unknown) => {
-			reply(false, { error: err instanceof Error ? err.message : String(err) });
-		};
-		try {
-			const runtime = this.runtime.services.modelRuntime;
-			const model = this.session?.model;
-			if (!model) {
-				throw new Error(
-					pick(
-						lang,
-						"当前没有可用模型——先在顶栏选择一个模型再生成",
-						"No model available — pick one in the top bar first",
-						"scm.commitmsg.no.model",
-					),
-				);
-			}
-			const commitSettings = this.settingsSvc.current;
-			const res = await generateScmCommitMessage({
-				cwd,
-				model,
-				runtime,
-				lang,
-				promptMode: commitSettings.scmCommitMsgPromptMode === "replace" ? "replace" : "append",
-				customPrompt: commitSettings.scmCommitMsgPrompt ?? "",
-			});
-			if (res.ok) {
-				reply(true, { text: res.text });
-			} else {
-				reply(false, { error: res.error });
-			}
-		} catch (err) {
-			fail(err);
-		}
-	}
-
 	/** Read a workspace file for the preview panel (size-capped, binary-safe). */
 	async readFile(relPath: string): Promise<void> {
 		return this.files.readFile(relPath);
@@ -11794,30 +11726,6 @@ export class ClientSession {
 	/** Save text from the file preview panel within the active workspace. */
 	async writeFile(relPath: string, text: string): Promise<void> {
 		return this.files.writeFile(relPath, text);
-	}
-
-	async uploadFile(relDir: string, name: string, data: string): Promise<void> {
-		return this.files.uploadFile(relDir, name, data);
-	}
-
-	/** 文件树右键菜单：新建（空文件/空文件夹）。 */
-	async createEntry(dir: string, name: string, kind: "file" | "dir"): Promise<void> {
-		return this.files.createEntry(dir, name, kind);
-	}
-
-	/** 文件树右键菜单：同目录内重命名。 */
-	async renameEntry(path: string, newName: string): Promise<void> {
-		return this.files.renameEntry(path, newName);
-	}
-
-	/** 文件树右键菜单：删除文件/目录。 */
-	async deleteEntry(path: string): Promise<void> {
-		return this.files.deleteEntry(path);
-	}
-
-	/** 文件树右键菜单：复制/移动（move=true 即剪切粘贴）。 */
-	async copyEntry(src: string, destDir: string, move?: boolean): Promise<void> {
-		return this.files.copyEntry(src, destDir, move);
 	}
 
 	/** 文件树右键菜单：在系统资源管理器中定位（issue #187）。 */
@@ -11874,7 +11782,6 @@ export class ClientSession {
 	async setCwd(newCwd: string): Promise<void> {
 		try {
 			const { resolve } = await import("node:path");
-			this.files.unwatchGit(); // stale repo's watcher must not fire across projects
 			const fs = await import("node:fs/promises");
 			const trimmed = newCwd.trim();
 			if (trimmed === MACHINE_ROOT) {
@@ -12897,7 +12804,6 @@ export class ClientSession {
 			this.stallTimer = null;
 		}
 		this.files.unwatchDir();
-		this.files.unwatchGit();
 		this.webUi.dispose();
 		// 关闭所有挂起的用户提问（dispose 时以「取消」解析，避免模型挂死）。
 		this.cancelPendingQuestions();
