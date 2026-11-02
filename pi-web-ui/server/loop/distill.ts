@@ -24,6 +24,8 @@ export function buildDistilledMarkdown(st: LoopState): string {
 		: "";
 	const bestLine = st.bestRound
 		? `第 ${st.bestRound.round} 轮（${st.bestRound.verdict}${st.bestRound.commitSha ? ` · commit ${st.bestRound.commitSha}` : ""}${
+				st.bestRound.snapshotRef ? ` · 快照 ${st.bestRound.snapshotRef}` : ""
+			}${
 				st.bestRound.metrics
 					? ` · ${Object.entries(st.bestRound.metrics)
 							.map(([k, v]) => `${k}=${v}`)
@@ -71,7 +73,8 @@ export function buildDistilledMarkdown(st: LoopState): string {
 								.join(", ")}`
 						: "";
 					const sha = h.commitSha ? ` | sha: ${h.commitSha}` : "";
-					return `- 第 ${h.round} 轮：${h.verdict}${h.code !== null ? ` (exit ${h.code})` : ""}${m}${sha} (${h.at})`;
+					const snap = h.snapshotRef ? ` | 快照: ${h.snapshotRef}` : "";
+					return `- 第 ${h.round} 轮：${h.verdict}${h.code !== null ? ` (exit ${h.code})` : ""}${m}${sha}${snap} (${h.at})`;
 				})
 			: ["- 暂无轮次验证记录"]),
 	];

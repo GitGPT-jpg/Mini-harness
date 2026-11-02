@@ -424,8 +424,11 @@ registerLoopRoutes(app, { dataDir: DATA_DIR, agentDir: getAgentDir() });
 app.get("/api/health", (_req, res) => {
 	// 审查 #352：该端点对未鉴权开放（监控探针需要），故只保留版本/引擎与 SDK
 	// 副本诊断信息，不再暴露 cwd（工作区路径披露）与 pid（指纹/信息收集面）。
+	// `app` 是 Harness 产品标识：安装/启动脚本据此区分「本服务」与任意占用端口的程序，
+	// 避免把带 token 的 URL 交给来路不明的本地服务。
 	res.json({
 		ok: true,
+		app: "mini-harness",
 		piVersion: VERSION,
 		// issue #260：服务实际加载的是自带副本，不是全局 pi CLI 那份。这里把两份都报出来，
 		// 用户就不用猜「为什么升了全局 SDK 不生效」。（纯新增字段，piVersion 语义不变。）
@@ -1228,6 +1231,10 @@ export interface DispatchSession {
 		taskId?: string;
 		criteria?: string;
 		artifactRoots?: string[];
+		primaryMetric?: string;
+		metricDirection?: "maximize" | "minimize";
+		metricPrecision?: number;
+		packId?: string;
 	}): Promise<void>;
 	stopLoop?(runId?: string): Promise<void>;
 	resumeLoop?(runId: string): Promise<void>;

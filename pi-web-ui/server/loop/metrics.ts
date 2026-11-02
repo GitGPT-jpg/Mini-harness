@@ -19,6 +19,8 @@ export interface BestRoundRecord {
 	round: number;
 	verdict: string;
 	commitSha: string | null;
+	/** 可恢复的代码快照引用（git 快照 ref / 目录快照路径）；无则 null。 */
+	snapshotRef?: string | null;
 	metrics?: HarnessMetrics;
 	at: string;
 }
@@ -62,13 +64,28 @@ export function parseHarnessMetrics(output: unknown): HarnessMetrics | null {
 	return Object.keys(out).length > 0 ? out : null;
 }
 
+/** 任务声明的「主指标 + 优化方向 + 精度」硬约束（可选）。 */
+export interface MetricTarget {
+	/** 主指标名（如 loss_pct / tps / ttft_ms）。声明后比较只认它，不再按名字猜。 */
+	metric: string;
+	/** 优化方向：maximize（越大越好）/ minimize（越小越好）。 */
+	direction: "maximize" | "minimize";
+	/** 精度/硬约束（如数值精度、目标阈值），仅记录展示，不参与择优。 */
+	precision?: number;
+}
+
 /**
- * 指标优劣比较：
- * - 若包含 score / tps / throughput / hit_rate / cache_hit / speedup，越大越好；
- * - 若包含 loss / loss_pct / ttft / ttft_ms / latency / latency_ms / error_rate，越小越好。
+ * 指标优劣得分（越大越好）：
+ * - 声明了主指标：只认该指标，方向 minimize 时取负；该轮没报出主指标 → null（不猜）。
+ * - 未声明主指标：沿用旧启发——先看「越大越好」的吞吐/命中类，再看「越小越好」的损耗/延迟类。
  */
-function metricScore(metrics?: HarnessMetrics | null): number | null {
+function metricScore(metrics?: HarnessMetrics | null, target?: MetricTarget | null): number | null {
 	if (!metrics) return null;
+	if (target?.metric) {
+		const v = metrics[target.metric];
+		if (typeof v === "number" && Number.isFinite(v)) return target.direction === "minimize" ? -v : v;
+		return null;
+	}
 	const higher = ["score", "tps", "throughput", "hit_rate", "cache_hit", "speedup"];
 	for (const k of higher) {
 		if (typeof metrics[k] === "number" && Number.isFinite(metrics[k])) return metrics[k]!;
@@ -83,25 +100,33 @@ function metricScore(metrics?: HarnessMetrics | null): number | null {
 
 /**
  * 决定本轮是否应更新 bestRound：
- * 1. 尚无 bestRound：只要本轮 pass 或带有效指标，即记为初始 bestRound；
+ * 1. 尚无 bestRound：未声明主指标时只要本轮 pass 或带有效指标即可记录；声明主指标时必须报出该指标；
  * 2. 已有 bestRound 为 fail 而本轮为 pass：必更新；
  * 3. 本轮为 fail 而已有 bestRound 为 pass：绝不覆盖；
  * 4. 同为 pass（或同为 fail）：若双方都有指标，得分更高（或持平但更新）时更新；无指标时取最新 pass。
+ *    target 声明了主指标时，比较只认主指标与方向；否则回退旧启发。
  */
 export function pickBetterRound(
 	current: BestRoundRecord | null | undefined,
 	candidate: BestRoundRecord,
+	target?: MetricTarget | null,
 ): BestRoundRecord | null {
 	const hasMetrics = candidate.metrics && Object.keys(candidate.metrics).length > 0;
+	const candScore = metricScore(candidate.metrics, target);
 	if (!current) {
+		if (target?.metric) return candScore !== null ? candidate : null;
 		return candidate.verdict === "pass" || hasMetrics ? candidate : null;
 	}
 	const curPass = current.verdict === "pass";
 	const candPass = candidate.verdict === "pass";
 	if (candPass && !curPass) return candidate;
 	if (!candPass && curPass) return current;
-	const curScore = metricScore(current.metrics);
-	const candScore = metricScore(candidate.metrics);
+	const curScore = metricScore(current.metrics, target);
+	if (target?.metric) {
+		if (candScore === null) return current;
+		if (curScore === null) return candidate;
+		return candScore >= curScore ? candidate : current;
+	}
 	if (curScore !== null && candScore !== null) {
 		return candScore >= curScore ? candidate : current;
 	}

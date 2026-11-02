@@ -6,11 +6,19 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import express from "express";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { collectModels, parseToolTimeline, registerLoopRoutes } from "../../server/loop/routes.js";
 import { configureGoalLog, deleteGoalLog, listGoalLog, recordGoalEvent } from "../../server/goal-history-log.js";
+
+// routes.ts loads extension.ts, whose run root is fixed at module initialization.
+const LOOP_RUNS_ROOT = mkdtempSync(join(tmpdir(), "loop-routes-runs-"));
+const previousLoopRunsRoot = process.env.MINI_HARNESS_RUNTIME_ROOT;
+process.env.MINI_HARNESS_RUNTIME_ROOT = LOOP_RUNS_ROOT;
+const { collectModels, parseToolTimeline, registerLoopRoutes } = await import("../../server/loop/routes.js");
+const { createLoopRun, stopRunExternal } = await import("../../server/loop/extension.js");
+if (previousLoopRunsRoot === undefined) delete process.env.MINI_HARNESS_RUNTIME_ROOT;
+else process.env.MINI_HARNESS_RUNTIME_ROOT = previousLoopRunsRoot;
 
 const entry = (kind: string, goal = "补齐 README") => ({
 	convId: "conv-1",
@@ -132,6 +140,7 @@ describe("/api/mini-harness/*", () => {
 		server?.close();
 		rmSync(dataDir, { recursive: true, force: true });
 		rmSync(agentDir, { recursive: true, force: true });
+		rmSync(LOOP_RUNS_ROOT, { recursive: true, force: true });
 	});
 
 	const post = (path: string, body: unknown) =>
@@ -163,10 +172,42 @@ describe("/api/mini-harness/*", () => {
 		expect(del).toEqual({ ok: true, removed: 1 });
 	});
 
-	it("runs/delete 拒绝非法 runId（防路径穿越）", async () => {
+	it("runs/delete 按删除结果映射 malformed/missing/active/cleanup-error/success 状态", async () => {
 		expect((await post("/api/mini-harness/runs/delete", { runId: "../../.ssh" })).status).toBe(400);
-		const j = await (await fetch(`${base}/api/mini-harness/runs?history=1`)).json();
-		expect(Array.isArray(j.runs)).toBe(true);
+		expect((await post("/api/mini-harness/runs/delete", { runId: "20261102000000-deadbe" })).status).toBe(404);
+
+		const active: any = createLoopRun({ sessionId: `route-active-${Date.now()}`, cwd: dataDir, goal: "active" });
+		expect(active.ok).toBe(true);
+		const activeResponse = await post("/api/mini-harness/runs/delete", { runId: active.runId });
+		expect(activeResponse.status).toBe(409);
+		expect(await activeResponse.json()).toMatchObject({ ok: false, code: "active" });
+
+		expect(stopRunExternal(active.runId).ok).toBe(true);
+		const success = await post("/api/mini-harness/runs/delete", { runId: active.runId });
+		expect(success.status).toBe(200);
+		expect(await success.json()).toMatchObject({ ok: true, runId: active.runId });
+		expect(existsSync(join(LOOP_RUNS_ROOT, active.runId))).toBe(false);
+
+		const malformedCleanup: any = createLoopRun({
+			sessionId: `route-cleanup-${Date.now()}`,
+			cwd: dataDir,
+			goal: "terminal malformed cleanup",
+		});
+		expect(malformedCleanup.ok).toBe(true);
+		writeFileSync(
+			join(LOOP_RUNS_ROOT, malformedCleanup.runId, "state.json"),
+			JSON.stringify({
+				...malformedCleanup.st,
+				status: "stopped",
+				stage: "stopped",
+				worktreeDir: "/tmp/not-this-run-worktree",
+				worktreeBranch: "mini-harness/not-this-run",
+			}),
+		);
+		const cleanupError = await post("/api/mini-harness/runs/delete", { runId: malformedCleanup.runId });
+		expect(cleanupError.status).toBe(500);
+		expect(await cleanupError.json()).toMatchObject({ ok: false, code: "cleanup-error" });
+		rmSync(join(LOOP_RUNS_ROOT, malformedCleanup.runId), { recursive: true, force: true });
 	});
 
 	it("cluster：未配置时报 not-configured；空 kubeconfig 拒绝；clear 幂等", async () => {

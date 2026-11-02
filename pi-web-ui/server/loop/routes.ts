@@ -28,7 +28,9 @@ import type { Express } from "express";
 import { deleteGoalLog, listGoalLog } from "../goal-history-log.js";
 import { distillLoopRun } from "./distill.js";
 import type { BestRoundRecord, HarnessMetrics } from "./metrics.js";
+import { listCapabilityPacks } from "./packs.js";
 import {
+	deleteLoopRun,
 	familyOf,
 	listRuns,
 	loadLoopState,
@@ -420,17 +422,22 @@ export function registerLoopRoutes(app: Express, opts: LoopRoutesOptions): void 
 		}
 	});
 	app.post("/api/mini-harness/runs/delete", (req, res) => {
-		const id = String(req.body?.runId ?? "");
-		if (!RUN_ID_RE.test(id)) {
-			res.status(400).json({ error: "bad runId" });
+		const deleted = deleteLoopRun(String(req.body?.runId ?? ""));
+		if (!deleted.ok) {
+			const status =
+				deleted.code === "invalid" ? 400 : deleted.code === "missing" ? 404 : deleted.code === "active" ? 409 : 500;
+			res.status(status).json(deleted);
 			return;
 		}
-		rmSync(join(runsRoot(), id), { recursive: true, force: true });
-		res.json({ ok: true });
+		res.status(200).json(deleted);
 	});
 
 	app.get("/api/mini-harness/models", (_req, res) => {
 		res.json({ models: collectModels(opts.agentDir) });
+	});
+
+	app.get("/api/mini-harness/packs", (_req, res) => {
+		res.json({ packs: listCapabilityPacks() });
 	});
 
 	// 会话文件定位缓存：sid → 路径（每 1.5s 一次的轮询不重复扫目录）。

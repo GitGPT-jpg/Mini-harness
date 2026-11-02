@@ -50,6 +50,20 @@ const MODELS = [
 	{ provider: "oneapi", id: "qwen3", family: "qwen" },
 ];
 
+const PACKS = [
+	{
+		id: "inference-perf",
+		title: "推理性能（吞吐最大化）",
+		summary: "以 tps 为主指标的吞吐优化任务",
+		goal: "优化推理吞吐",
+		criteria: "tps 越大越好",
+		primaryMetric: "tps",
+		metricDirection: "maximize",
+		maxRounds: 6,
+		useReviewer: true,
+	},
+];
+
 let root: Root | null = null;
 let sent: ClientMessage[] = [];
 
@@ -210,12 +224,13 @@ describe("新任务弹窗：验收方式三选一", () => {
 				criteria: "npm test 退出码 0",
 				useReviewer: true,
 				reviewerModel: "oneapi/qwen3",
+				worktree: true,
 			},
 		]);
 		expect($(".task-modal")).toBeNull();
 	});
 
-	it("仅代码验证 → 评审下拉收起，loop_start_request 带 useReviewer=false", async () => {
+	it("仅代码验证 → 评审下拉收起，默认隔离可显式关闭", async () => {
 		mount(taskModal());
 		await openModal();
 		click($('input[name="task-accept"][value="code"]'));
@@ -223,6 +238,7 @@ describe("新任务弹窗：验收方式三选一", () => {
 		expect($("#task-cmd")).not.toBeNull();
 		setValue($("#task-goal"), "跑测试直到通过");
 		setValue($("#task-cmd"), "npm test");
+		click($("#task-worktree"));
 		click(startBtn());
 		expect(sent).toEqual([
 			{
@@ -232,6 +248,62 @@ describe("新任务弹窗：验收方式三选一", () => {
 				maxRounds: 5,
 				validateCmd: "npm test",
 				useReviewer: false,
+				worktree: false,
+			},
+		]);
+	});
+
+	it("高级项填主指标/方向/精度 → loop_start_request 带 primaryMetric/metricDirection/metricPrecision", async () => {
+		mount(taskModal());
+		await openModal();
+		setValue($("#task-goal"), "优化吞吐");
+		setValue($("#task-metric"), "tps");
+		setValue($("#task-metric-dir"), "maximize");
+		setValue($("#task-metric-prec"), "0.5");
+		click(startBtn());
+		expect(sent).toEqual([
+			{
+				type: "loop_start_request",
+				goal: "优化吞吐",
+				mode: "code",
+				maxRounds: 5,
+				useReviewer: true,
+				primaryMetric: "tps",
+				metricDirection: "maximize",
+				metricPrecision: 0.5,
+				worktree: true,
+			},
+		]);
+	});
+
+	it("能力模板一键填充 → 只发送语义字段，不注入命令或产物路径", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => ({ ok: true, json: async () => ({ models: MODELS, packs: PACKS }) })),
+		);
+		mount(taskModal());
+		await openModal();
+		await act(async () => {
+			await new Promise((r) => setTimeout(r, 0));
+		});
+		const packSel = $<HTMLSelectElement>("#task-pack");
+		expect(packSel).not.toBeNull();
+		setValue(packSel, "inference-perf");
+		expect(($("#task-metric") as HTMLInputElement).value).toBe("tps");
+		expect(($("#task-metric-dir") as HTMLSelectElement).value).toBe("maximize");
+		click(startBtn());
+		expect(sent).toEqual([
+			{
+				type: "loop_start_request",
+				goal: "优化推理吞吐",
+				mode: "code",
+				maxRounds: 6,
+				criteria: "tps 越大越好",
+				useReviewer: true,
+				primaryMetric: "tps",
+				metricDirection: "maximize",
+				packId: "inference-perf",
+				worktree: true,
 			},
 		]);
 	});

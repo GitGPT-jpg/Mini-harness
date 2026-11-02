@@ -1,0 +1,15 @@
+{
+  "id": "cache-loss",
+  "title": "缓存损耗（损耗率最小化）",
+  "summary": "以 loss_pct 为主指标、cache_hit 为观察项的缓存损耗优化任务。证明 Loop 能处理「越小越好」的指标方向（minimize，第二方向）。",
+  "goal": "降低缓存命中损耗：尽量压低 validator 报告的 loss_pct（HARNESS_METRIC），越小越好。",
+  "criteria": "以 validate.py 输出的 HARNESS_METRIC.loss_pct 为唯一主指标，越小越好；cache_hit 只作观察、不参与择优。",
+  "precheckCmd": "python3 validate.py --precheck",
+  "validateCmd": "python3 validate.py --validate",
+  "primaryMetric": "loss_pct",
+  "metricDirection": "minimize",
+  "metricPrecision": 0.1,
+  "artifactRoots": ["runs"],
+  "maxRounds": 6,
+  "useReviewer": true
+}

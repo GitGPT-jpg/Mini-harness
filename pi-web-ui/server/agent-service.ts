@@ -55,18 +55,20 @@ import {
 import { BG_CLEANUP_FALLBACK_MIN, BgServerTracker } from "./bg-servers.js";
 import {
 	acceptRunValidatorOnly,
+	addLoopEventReporter,
 	createLoopExtension,
 	createLoopRun,
-	setLoopEventReporter,
 	stopRunExternal,
 	loadLoopState,
 	reactivateForReview,
+	rebindLoopSession,
 	reviewBrief,
 	reviewerEnabledOf,
 	type LoopEvent,
 	type LoopState,
 } from "./loop/extension.js";
 import { modelsConfigHasCredentials } from "./pi-setup-state.js";
+import { resolvePack } from "./loop/packs.js";
 import {
 	checkAll as checkAllUpdates,
 	collectTargets,
@@ -971,6 +973,7 @@ export class ClientSession {
 		parentId?: string,
 		persist?: boolean,
 		title?: string,
+		deferKickoff = false,
 	): Promise<string> {
 		// 数量上限先行：每个子代理都是完整 runtime + TerminalManager，无上限时一次
 		// 并行派发几十个会把服务进程拖垮。持久化普通对话则受项目会话上限限制。
@@ -1156,19 +1159,23 @@ export class ClientSession {
 			}
 			// 触发回合（后台执行；失败转识为通知）。把 Promise 挂在对话上：目标模式的
 			// 「等本回合结束」要先等它落定，才能区分「还没开跑」与「已跑完」。
-			conv.kickoff = conv.session
-				.sendUserMessage(prompt)
-				.catch((err) => {
-					this.emit({
-						type: "notice",
-						level: "error",
-						text: `子代理 ${conversationId} 启动失败: ${err instanceof Error ? err.message : String(err)}`,
-						textEn: `Subagent ${conversationId} failed to start: ${err instanceof Error ? err.message : String(err)}`,
+			// deferKickoff（worktree 执行者会话用）：先建好会话、由调用方重绑 run.sessionId
+			// 之后再 sendUserMessage —— 否则首回合的 before_agent_start 按旧 sessionId 找不到 run。
+			if (!deferKickoff) {
+				conv.kickoff = conv.session
+					.sendUserMessage(prompt)
+					.catch((err) => {
+						this.emit({
+							type: "notice",
+							level: "error",
+							text: `子代理 ${conversationId} 启动失败: ${err instanceof Error ? err.message : String(err)}`,
+							textEn: `Subagent ${conversationId} failed to start: ${err instanceof Error ? err.message : String(err)}`,
+						});
+					})
+					.finally(() => {
+						conv.promptInFlight = false;
 					});
-				})
-				.finally(() => {
-					conv.promptInFlight = false;
-				});
+			}
 			if (persist) {
 				this.pushProjects().catch(() => {});
 			}
@@ -2291,6 +2298,8 @@ export class ClientSession {
 	 * Conversation — see Conversation above.
 	 */
 	private disposed = false;
+	/** mini-harness Loop 事件退订（dispose 时调用，见 addLoopEventReporter）。 */
+	private loopEventUnsubscribe?: () => void;
 	/** pi-config readiness check, cached briefly so 60ms snapshots don't hit disk. */
 	private piCheckCache: { at: number; configured: boolean } | null = null;
 
@@ -2601,9 +2610,10 @@ export class ClientSession {
 			adoptModelAfterKey: (provider) => this.adoptModelAfterKey(provider),
 			onOAuthActivated: (provider) => this.stateStore.deleteProviderEverywhere(provider),
 		});
-		// mini-harness Loop 事件上报（server/loop/extension.ts 的全局单上报器）：
-		// 按 sessionId 路由到本客户端的对应会话 → 更新 conv.loop → 刷快照。
-		setLoopEventReporter((e) => this.handleLoopEvent(e));
+		// mini-harness Loop 事件上报（server/loop/extension.ts 的多上报器注册表）：
+		// 每个 ClientSession 注册一份，按 sessionId 路由到本客户端的对应会话 → 更新 conv.loop → 刷快照。
+		// dispose 时退订，避免跨标签页覆盖或残留。
+		this.loopEventUnsubscribe = addLoopEventReporter((e) => this.handleLoopEvent(e));
 
 		// Prune dead background tasks every 30s (only spawns netstat/lsof while
 		// the list is non-empty). unref: must not keep the process alive.
@@ -12343,6 +12353,9 @@ export class ClientSession {
 		if (!conv) return;
 		if (e.type === "run-state") {
 			conv.loop = loopUiFromState(e.st);
+			// worktree 执行者会话：run 绑在子代理上，主对话（父）的 LoopBar 也随 run-state 走
+			const parent = conv.parentId ? this.convs.get(conv.parentId) : undefined;
+			if (parent && parent !== conv) parent.loop = loopUiFromState(e.st);
 		} else {
 			conv.loop = {
 				kind: "request-failed",
@@ -12370,14 +12383,37 @@ export class ClientSession {
 		taskId?: string;
 		criteria?: string;
 		artifactRoots?: string[];
+		primaryMetric?: string;
+		metricDirection?: "maximize" | "minimize";
+		metricPrecision?: number;
+		packId?: string;
 	}): Promise<void> {
 		const conv = this.conv;
 		if (!conv?.session) return;
-		const goal = msg.goal?.trim() ?? "";
+		// 能力模板只填任务语义；命令、产物根目录始终来自本次明确请求。
+		const pack = msg.packId ? resolvePack(msg.packId) : null;
 		const taskId = msg.taskId ?? `loop-${Date.now().toString(36)}`;
-		const criteria = msg.criteria?.trim() ?? "";
-		const precheckCmd = msg.precheckCmd?.trim() ?? "";
-		const validateCmd = msg.validateCmd?.trim() ?? "";
+		if (msg.packId && !pack) {
+			conv.loop = {
+				kind: "request-failed",
+				taskId,
+				goal: msg.goal?.trim() || "",
+				reason: `未知能力模板：${msg.packId}`,
+				createdAt: new Date().toISOString(),
+			};
+			this.emitNotice("warning", `Loop 启动失败：未知能力模板 ${msg.packId}`);
+			this.flushSnapshot();
+			return;
+		}
+		const goal = (msg.goal?.trim() || pack?.goal || "").trim();
+		const criteria = (msg.criteria?.trim() || pack?.criteria || "").trim();
+		const precheckCmd = msg.precheckCmd?.trim() || "";
+		const validateCmd = msg.validateCmd?.trim() || "";
+		const primaryMetric = msg.primaryMetric ?? pack?.primaryMetric;
+		const metricDirection = msg.metricDirection ?? pack?.metricDirection;
+		const metricPrecision = msg.metricPrecision;
+		const useReviewer = msg.useReviewer ?? pack?.useReviewer;
+		const maxRounds = msg.maxRounds ?? pack?.maxRounds;
 		const roots = (msg.artifactRoots ?? []).map((r) => String(r).trim()).filter(Boolean);
 		// cwd 取会话运行时的 cwd：与扩展 ctx.cwd 同源，run 的工作区就是模型干活的目录
 		const created = createLoopRun({
@@ -12387,9 +12423,12 @@ export class ClientSession {
 			criteria,
 			precheckCmd,
 			validateCmd,
+			primaryMetric,
+			metricDirection,
+			metricPrecision,
 			mode: msg.mode,
-			maxRounds: msg.maxRounds,
-			useReviewer: msg.useReviewer,
+			maxRounds,
+			useReviewer,
 			plannerModel: msg.plannerModel,
 			reviewerModel: msg.reviewerModel,
 			worktree: msg.worktree,
@@ -12412,8 +12451,6 @@ export class ClientSession {
 			`goal: ${goal}`,
 		];
 		if (criteria) lines.push(`验收标准：${criteria}`);
-		if (st.worktreeBranch)
-			lines.push(`工作目录：${st.workspace}（独立 git worktree，分支 ${st.worktreeBranch}），所有修改都在这里做。`);
 		if (precheckCmd) lines.push(`precheckCmd（L0 快速预检，先跑它）：${precheckCmd}`);
 		if (validateCmd) lines.push(`validateCmd（运行时用它验证）：${validateCmd}`);
 		else if (st.mode !== "llm")
@@ -12426,7 +12463,83 @@ export class ClientSession {
 			"如果运行状态显示这个运行没有启动起来（例如模型家族冲突），把原因原样告诉用户并停止，不要自行更换模型或另起运行。",
 		);
 		lines.push("不要向用户提问。");
-		await this.prompt(lines.join("\n"));
+		if (st.worktreeBranch && st.worktreeDir) {
+			// worktree 执行者会话：模型工具/终端/validator/reviewer 全落独立 worktree，不污染 base 工作区
+			await this.startWorktreeExecutor(conv, st, lines.join("\n"));
+		} else {
+			await this.prompt(lines.join("\n"));
+		}
+	}
+
+	/** worktree 模式：起一个绑定在 st.workspace 的执行者子代理跑 loop，模型工具/终端都落 worktree。
+	 *  失败显式报错并停 run，绝不静默回退到 base 工作区（否则「模型改原目录、验收查 worktree」不一致）。 */
+	private async startWorktreeExecutor(conv: Conversation, st: LoopState, prompt: string): Promise<void> {
+		try {
+			// deferKickoff：先建会话、重绑 run.sessionId，再触发首回合 —— 否则首回合的
+			// before_agent_start 按旧 sessionId 找不到 run。
+			const execConvId = await this.spawnSubagentConversation(
+				"", // 不立即触发回合，重绑后再 kickoff
+				"loop-executor",
+				st.workspace,
+				undefined,
+				null,
+				conv.id,
+				true,
+				`Loop ${st.runId}`,
+				true, // deferKickoff
+			);
+			const execConv = this.convs.get(execConvId);
+			if (!execConv?.session) throw new Error("执行者会话创建失败");
+			const re = rebindLoopSession(st.runId, execConv.session.sessionId);
+			if (!re.ok) throw new Error(re.error || "run 会话重绑失败");
+			// 执行者会话 cwd 就是 worktree：工具/终端天然落 worktree，提示词不再需要「先 cd」兜底。
+			// 与 spawnSubagentConversation 同一 fire-and-forget 通道，不阻塞 loop_start_request 返回。
+			const kickPrompt = `${prompt}\n工作目录：${st.workspace}（独立 git worktree，分支 ${st.worktreeBranch}）。你的 shell/终端/文件工具默认就在这个目录，所有修改都直接做在这里。`;
+			execConv.kickoff = execConv.session.sendUserMessage(kickPrompt).catch((err) => {
+				const reason = `worktree 执行者会话启动失败：${err instanceof Error ? err.message : String(err)}`;
+				stopRunExternal(st.runId, "worktree-executor-error");
+				conv.loop = {
+					kind: "request-failed",
+					taskId: st.taskId ?? `loop-${st.runId}`,
+					goal: st.goal,
+					reason,
+					createdAt: new Date().toISOString(),
+				};
+				this.emitNotice("warning", reason);
+				this.flushSnapshot();
+			});
+		} catch (err) {
+			stopRunExternal(st.runId, "worktree-executor-error");
+			conv.loop = {
+				kind: "request-failed",
+				taskId: st.taskId ?? `loop-${st.runId}`,
+				goal: st.goal,
+				reason: `worktree 执行环境绑定失败：${(err as Error)?.message || err}`,
+				createdAt: new Date().toISOString(),
+			};
+			this.emitNotice("warning", `worktree 执行环境绑定失败：${(err as Error)?.message || err}`);
+			this.flushSnapshot();
+		}
+	}
+
+	/** 该 run 是否属于本对话：sessionId 匹配本对话，或匹配本对话派生的子代理（worktree 执行者会话）。 */
+	private ownsLoopRun(st: LoopState): boolean {
+		const conv = this.conv;
+		if (!conv?.session) return false;
+		if (st.sessionId === conv.session.sessionId) return true;
+		return [...this.convs.values()].some(
+			(c) => c.parentId === conv.id && c.session?.sessionId === st.sessionId,
+		);
+	}
+
+	/** worktree 执行者会话：run 绑在子代理上时，续跑/评审提示词要发到执行者会话，而不是主对话。 */
+	private loopExecutorConv(st: LoopState): Conversation | undefined {
+		const conv = this.conv;
+		if (!conv?.session) return undefined;
+		if (st.sessionId === conv.session.sessionId) return conv;
+		return [...this.convs.values()].find(
+			(c) => c.parentId === conv.id && c.session?.sessionId === st.sessionId,
+		);
 	}
 
 	/** 停止当前会话的活跃 Loop（与 loop_stop 工具同语义：epoch+1，在途回调失效）。 */
@@ -12456,7 +12569,7 @@ export class ClientSession {
 			this.emitNotice("warning", `Loop 续跑失败：run 不存在（${runId}）`);
 			return;
 		}
-		if (st.sessionId !== conv.session.sessionId) {
+		if (st.sessionId !== conv.session.sessionId && !this.ownsLoopRun(st)) {
 			this.emitNotice("warning", "Loop 续跑失败：该 run 不属于当前会话（显式绑定，不做 cwd 接管）");
 			return;
 		}
@@ -12479,13 +12592,25 @@ export class ClientSession {
 			}
 			conv.loop = loopUiFromState(cur);
 			this.flushSnapshot();
-			await this.prompt(
-				retryReview
-					? `受控运行 ${runId} 的代码验证已通过，但上次模型评审出错，现在重新验收：` +
-							"不要修改任何代码或文件，直接调用 loop_validate；运行时会重新执行 validator 并让 reviewer 评审。不要向用户提问。"
-					: `继续执行当前受控运行（runId: ${runId}）：先查看当前状态，从上次中断处继续，` +
-							"完成后调用 loop_done(summary)。不要重复已完成的步骤，不要向用户提问。",
-			);
+			const resumePrompt = retryReview
+				? `受控运行 ${runId} 的代码验证已通过，但上次模型评审出错，现在重新验收：` +
+						"不要修改任何代码或文件，直接调用 loop_validate；运行时会重新执行 validator 并让 reviewer 评审。不要向用户提问。"
+				: `继续执行当前受控运行（runId: ${runId}）：先查看当前状态，从上次中断处继续，` +
+						"完成后调用 loop_done(summary)。不要重复已完成的步骤，不要向用户提问。";
+			// worktree 执行者会话：续跑提示词发到绑 worktree 的子代理，主对话不跑模型
+			const executor = this.loopExecutorConv(cur);
+			if (executor && executor !== conv) {
+				executor.kickoff = executor.session.sendUserMessage(resumePrompt).catch((err) => {
+					this.emit({
+						type: "notice",
+						level: "error",
+						text: `Loop 续跑投递失败: ${err instanceof Error ? err.message : String(err)}`,
+						textEn: `Loop resume dispatch failed: ${err instanceof Error ? err.message : String(err)}`,
+					});
+				});
+			} else {
+				await this.prompt(resumePrompt);
+			}
 		} finally {
 			this.loopResuming.delete(runId);
 		}
@@ -12500,7 +12625,7 @@ export class ClientSession {
 			this.emitNotice("warning", `按代码验证收下失败：run 不存在（${runId}）`);
 			return;
 		}
-		if (st.sessionId !== conv.session.sessionId) {
+		if (st.sessionId !== conv.session.sessionId && !this.ownsLoopRun(st)) {
 			this.emitNotice("warning", "按代码验证收下失败：该 run 不属于当前会话");
 			return;
 		}
@@ -12759,6 +12884,8 @@ export class ClientSession {
 
 	async dispose(): Promise<void> {
 		this.disposed = true;
+		this.loopEventUnsubscribe?.();
+		this.loopEventUnsubscribe = undefined;
 		this.modelAdmin.dispose();
 		// 关机路径：Windows 下跳过 pty.kill()（issue #215 ConPTY 死锁），只做
 		// TerminateProcess + 状态清理，句柄由 OS 在进程退出时回收。

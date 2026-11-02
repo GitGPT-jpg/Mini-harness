@@ -32,12 +32,15 @@ import {
 	resolveGitHeadSha,
 	type BestRoundRecord,
 	type HarnessMetrics,
+	type MetricTarget,
 } from "./metrics.js";
+import { createWorkspaceSnapshot } from "../workspace-snapshot.js";
 
 const DEFAULT_MAX_ROUNDS = 5;
 const CUSTOM_TYPE = "mini-harness-loop";
 const ROOT = process.env.MINI_HARNESS_RUNTIME_ROOT || path.join(os.homedir(), ".mini-harness", "runs");
 const ACTIVE_STAGES = new Set(["intake", "plan", "run", "validate"]);
+const RUN_ID_RE = /^[0-9]{8,}-[a-z0-9]{4,}$/i;
 
 /** 工具执行的 ctx（模型注册表/会话 id 等）；SDK 类型面较宽，这里按实际使用收窄。 */
 type LoopCtx = {
@@ -76,6 +79,12 @@ export interface LoopState {
 	/** L0 快速预检命令（语法/配置/轻量检查）：失败直接拦截，不跑昂贵的 L1 validateCmd 与 reviewer。 */
 	precheckCmd?: string | null;
 	validateCmd: string | null;
+	/** 主指标名（如 loss_pct / tps / ttft_ms）：声明后 bestRound 比较只认它，不按名字猜。 */
+	primaryMetric?: string | null;
+	/** 主指标优化方向。 */
+	metricDirection?: "maximize" | "minimize" | null;
+	/** 精度/硬约束（仅记录展示）。 */
+	metricPrecision?: number | null;
 	maxRounds: number;
 	auto: boolean;
 	mode: "code" | "llm";
@@ -107,6 +116,8 @@ export interface LoopState {
 		evidence: string | null;
 		metrics?: HarnessMetrics;
 		commitSha?: string | null;
+		/** 可恢复的代码快照引用（git 快照 ref / 目录快照路径）。 */
+		snapshotRef?: string | null;
 		precheckFailed?: boolean;
 	}>;
 	/** 最近一轮提取的 HARNESS_METRIC 数值指标。 */
@@ -143,17 +154,30 @@ export type LoopEvent =
 	| { type: "run-state"; st: LoopState }
 	| { type: "request-failed"; sessionId: string; taskId: string; goal: string; reason: string };
 
-let eventReporter: ((e: LoopEvent) => void) | null = null;
+/** 多客户端事件上报器注册表：每个 ClientSession 注册一份，后注册不再覆盖先注册。
+ *  事件按 sessionId 由各上报器自行过滤路由（handleLoopEvent 只更新属于本客户端的会话）。 */
+const eventReporters = new Set<((e: LoopEvent) => void)>();
 
-/** 服务层注册全局事件上报器（传 null 注销）。上报器异常不影响运行时。 */
+/** 注册全局事件上报器，返回注销函数（dispose 时调用退订）。上报器异常不影响其它上报器。 */
+export function addLoopEventReporter(fn: (e: LoopEvent) => void): () => void {
+	eventReporters.add(fn);
+	return () => {
+		eventReporters.delete(fn);
+	};
+}
+
+/** 兼容旧的单上报器语义（单元测试用）：fn 替换为唯一上报器；null 清空全部。 */
 export function setLoopEventReporter(fn: ((e: LoopEvent) => void) | null) {
-	eventReporter = fn;
+	eventReporters.clear();
+	if (fn) eventReporters.add(fn);
 }
 
 function reportEvent(e: LoopEvent) {
-	try {
-		eventReporter?.(e);
-	} catch {}
+	for (const fn of eventReporters) {
+		try {
+			fn(e);
+		} catch {}
+	}
 }
 
 // 挂起的启动请求：登记后 loop_start 成功即消费；回合结束仍是挂起 → 上报 request-failed。
@@ -450,6 +474,19 @@ function resolveRunModels(
 
 // ---------- validator ----------
 
+/** 一轮 validator 的执行结果（pass 或 fail / 无 validator / 预检失败 / 被停止取消）。 */
+interface ValidationResult {
+	pass: boolean;
+	noValidator: boolean;
+	precheckFailed: boolean;
+	/** 运行在验收期间被停止：结果已作废，调用方不得落盘、不得推进下一轮。 */
+	cancelled?: boolean;
+	code: number | null;
+	evidence: string | null;
+	output: string;
+	metrics: HarnessMetrics | null;
+}
+
 function resolveValidator(st: LoopState) {
 	if (st.validateCmd) {
 		return { cmd: "bash", args: ["-lc", st.validateCmd], label: st.validateCmd };
@@ -464,7 +501,7 @@ function resolveValidator(st: LoopState) {
 	return null;
 }
 
-async function runValidation(pi: ExtensionAPI, st: LoopState) {
+async function runValidation(pi: ExtensionAPI, st: LoopState): Promise<ValidationResult> {
 	const cwd = st.workspace || process.cwd();
 	// L0 快速预检：若配置了 precheckCmd，先秒级拦截语法/导包/配置错误，不浪费集群与压测资源
 	const preCmd = String(st.precheckCmd ?? "").trim();
@@ -495,7 +532,20 @@ async function runValidation(pi: ExtensionAPI, st: LoopState) {
 				code: pre.code ?? -1,
 				evidence,
 				output,
-				metrics: null as HarnessMetrics | null,
+				metrics: null,
+			};
+		}
+		// 停止/取消守卫：L0 预检期间若被停止（epoch 已递增），绝不再启动昂贵的 L1 完整验收。
+		if (!stillCurrent(st.runId, st.epoch)) {
+			return {
+				pass: false,
+				noValidator: false,
+				precheckFailed: false,
+				cancelled: true,
+				code: null,
+				evidence: null,
+				output: "运行已停止：L0 预检期间收到停止，已跳过 L1 完整验收。",
+				metrics: null,
 			};
 		}
 	}
@@ -543,7 +593,30 @@ async function runValidation(pi: ExtensionAPI, st: LoopState) {
 	};
 }
 
-function recordValidationOutcome(
+/**
+ * 给一轮验证绑一个「可恢复」的代码快照引用（P2-⑤）：连续多轮修改但不提交时，
+ * 单记 git HEAD 会让多轮指向同一个 baseline、无法恢复真正测试过的代码。
+ * 用 workspace-snapshot 的备用 index 生成提交对象（包含未跟踪文件且不触碰真实 index），再用 update-ref 固定到
+ * `refs/mini-harness/checkpoints/<runId>-r<round>`，避免被 GC 回收；后续可 `git checkout` 恢复。
+ * 无改动（测试的就是 HEAD）或非 git 仓库返回 null（commitSha 兜底定位）。
+ */
+async function captureSnapshotRef(st: LoopState, epoch: number): Promise<string | null> {
+	try {
+		if (!stillCurrent(st.runId, epoch)) return null;
+		const sha = await createWorkspaceSnapshot(st.workspace);
+		if (!sha) return null;
+		// createWorkspaceSnapshot is async. A stop/delete can win while it is producing the commit;
+		// never pin a checkpoint ref for a run that is no longer current.
+		if (!stillCurrent(st.runId, epoch)) return null;
+		const ref = `refs/mini-harness/checkpoints/${st.runId}-r${st.round}`;
+		gitSync(["-C", st.workspace, "update-ref", ref, sha], st.workspace, 15000);
+		return ref;
+	} catch {
+		return null;
+	}
+}
+
+async function recordValidationOutcome(
 	st: LoopState,
 	v: {
 		pass: boolean;
@@ -553,10 +626,16 @@ function recordValidationOutcome(
 		metrics?: HarnessMetrics | null;
 		precheckFailed?: boolean;
 	},
-) {
+	epoch: number,
+): Promise<boolean> {
 	const at = now();
 	const verdict = v.pass ? "pass" : "fail";
 	const commitSha = resolveGitHeadSha(st.workspace || process.cwd());
+	const snapshotRef = await captureSnapshotRef(st, epoch);
+	if (!stillCurrent(st.runId, epoch)) {
+		journal(st, "late-callback-dropped", { at: "recordValidationOutcome/snapshot", epoch });
+		return false;
+	}
 	st.validatedRound = st.round;
 	st.lastVerdict = verdict;
 	st.lastCode = v.code;
@@ -570,15 +649,30 @@ function recordValidationOutcome(
 		evidence: v.evidence,
 		...(v.metrics ? { metrics: v.metrics } : {}),
 		...(commitSha ? { commitSha } : {}),
+		...(snapshotRef ? { snapshotRef } : {}),
 		...(v.precheckFailed ? { precheckFailed: true } : {}),
 	});
-	st.bestRound = pickBetterRound(st.bestRound, {
-		round: st.round,
-		verdict,
-		commitSha,
-		...(v.metrics ? { metrics: v.metrics } : {}),
-		at,
-	});
+	const target: MetricTarget | null =
+		st.primaryMetric && st.metricDirection
+			? {
+					metric: st.primaryMetric,
+					direction: st.metricDirection,
+					...(st.metricPrecision != null ? { precision: st.metricPrecision } : {}),
+				}
+			: null;
+	st.bestRound = pickBetterRound(
+		st.bestRound,
+		{
+			round: st.round,
+			verdict,
+			commitSha,
+			...(snapshotRef ? { snapshotRef } : {}),
+			...(v.metrics ? { metrics: v.metrics } : {}),
+			at,
+		},
+		target,
+	);
+	return true;
 }
 
 // ---------- 提示词 ----------
@@ -588,6 +682,7 @@ function stateBlock(st: LoopState) {
 		"<mini_harness_loop>",
 		`runId: ${st.runId}`,
 		`mode: ${st.mode} | stage: ${st.stage} | round: ${st.round}/${st.maxRounds}`,
+		`workspace: ${st.workspace}${st.worktreeBranch ? `（独立 git worktree，分支 ${st.worktreeBranch}；shell/终端默认 cwd 不在此，改动请用绝对路径或先 cd ${st.workspace}）` : ""}`,
 		`goal: ${st.goal}`,
 		st.criteria ? `criteria（用户给定的验收标准）: ${tail(st.criteria, 800)}` : "",
 		st.plannerModel ? `planner: ${st.plannerModel.family}/${st.plannerModel.id}` : "",
@@ -1064,6 +1159,12 @@ export interface CreateLoopRunInput {
 	criteria?: string;
 	precheckCmd?: string;
 	validateCmd?: string;
+	/** 主指标名（声明后 bestRound 只认它，不按名字猜）。 */
+	primaryMetric?: string;
+	/** 主指标优化方向：maximize / minimize。 */
+	metricDirection?: "maximize" | "minimize";
+	/** 精度/硬约束（仅记录展示）。 */
+	metricPrecision?: number;
 	mode?: "code" | "llm";
 	maxRounds?: number;
 	useReviewer?: boolean;
@@ -1109,16 +1210,19 @@ export function createLoopRun(
 	if (input.worktree) {
 		try {
 			const inside = gitSync(["-C", baseWorkspace, "rev-parse", "--is-inside-work-tree"], baseWorkspace, 15000);
-			if (inside.trim() === "true") {
-				const dir = path.join(ROOT, runId, "worktree");
-				const branch = `mini-harness/${runId}`;
-				gitSync(["-C", baseWorkspace, "worktree", "add", "-b", branch, dir], baseWorkspace, 60000);
-				worktreeDir = dir;
-				worktreeBranch = branch;
-				workspace = real(dir);
+			if (inside.trim() !== "true") {
+				return { ok: false, error: `要求 worktree 隔离，但 ${baseWorkspace} 不是 git 仓库。` };
 			}
-		} catch {
-			// 不是 git 仓库 / worktree 建不出来：照旧在原工作区执行
+			const dir = path.join(ROOT, runId, "worktree");
+			const branch = `mini-harness/${runId}`;
+			gitSync(["-C", baseWorkspace, "worktree", "add", "-b", branch, dir], baseWorkspace, 60000);
+			worktreeDir = dir;
+			worktreeBranch = branch;
+			workspace = real(dir);
+		} catch (e) {
+			// 要求隔离时，创建失败必须显式报错，绝不静默回退到原工作区
+			//（否则会出现「模型改原目录、验收查 worktree」的不一致）。
+			return { ok: false, error: `worktree 隔离失败：${String((e as Error)?.message || e)}` };
 		}
 	}
 	const criteria = String(input.criteria ?? "").trim();
@@ -1140,6 +1244,9 @@ export function createLoopRun(
 			.map((x) => real(x)),
 		precheckCmd: String(input.precheckCmd ?? "").trim() || null,
 		validateCmd: String(input.validateCmd ?? "").trim() || null,
+		primaryMetric: String(input.primaryMetric ?? "").trim() || null,
+		metricDirection: input.metricDirection === "minimize" ? "minimize" : input.metricDirection === "maximize" ? "maximize" : null,
+		metricPrecision: input.metricPrecision != null && Number.isFinite(Number(input.metricPrecision)) ? Number(input.metricPrecision) : null,
 		maxRounds,
 		auto: input.auto !== false,
 		mode: input.mode === "llm" ? "llm" : "code",
@@ -1309,6 +1416,13 @@ export function createLoopExtension() {
 				harnessRoot: Type.Optional(
 					Type.String({ description: "infer-forge-harness 仓库根目录（用于定位 validate.py）" }),
 				),
+				primaryMetric: Type.Optional(
+					Type.String({ description: "主指标名（如 loss_pct / tps / ttft_ms）；声明后最优轮次只按它比较，不按名字猜" }),
+				),
+				metricDirection: Type.Optional(
+					Type.String({ description: "主指标优化方向：maximize（越大越好）或 minimize（越小越好）" }),
+				),
+				metricPrecision: Type.Optional(Type.Number({ description: "精度/硬约束（仅记录展示）" })),
 				artifactRoots: Type.Optional(
 					Type.Array(Type.String(), { description: "产物根目录（可多个，workspace 之外）；reviewer 会核验这些目录" }),
 				),
@@ -1382,6 +1496,9 @@ export function createLoopExtension() {
 					precheckCmd: params.precheckCmd,
 					validateCmd: params.validateCmd,
 					harnessRoot: params.harnessRoot,
+					primaryMetric: params.primaryMetric,
+					metricDirection: params.metricDirection === "minimize" || params.metricDirection === "maximize" ? params.metricDirection : undefined,
+					metricPrecision: params.metricPrecision,
 					artifactRoots: Array.isArray(params.artifactRoots) ? params.artifactRoots : [],
 					maxRounds: params.maxRounds,
 					auto: params.auto,
@@ -1509,8 +1626,23 @@ export function createLoopExtension() {
 						details: { runId: st.runId, mode: "llm", review: st.lastReview?.verdict },
 					};
 				}
+				const epoch = st.epoch;
 				const v = await runValidation(pi, st);
-				recordValidationOutcome(st, v);
+				// 停止/取消守卫：手动验收期间被停止（epoch 已递增）时，不得把旧状态写回 active，
+				// 也不得继续跑 reviewer 或推进下一轮（回归：停止后手动验收的迟到结果复活任务）。
+				if (v.cancelled || !stillCurrent(st.runId, epoch)) {
+					journal(st, "late-callback-dropped", { at: "loop_validate", epoch });
+					return {
+						content: [{ type: "text", text: "运行已停止，本次手动验证结果已丢弃，不再推进。" }],
+						details: { runId: st.runId, cancelled: true },
+					};
+				}
+				if (!(await recordValidationOutcome(st, v, epoch))) {
+					return {
+						content: [{ type: "text", text: "运行已停止，本次手动验证结果已丢弃，不再推进。" }],
+						details: { runId: st.runId, cancelled: true },
+					};
+				}
 				journal(st, "manual-validate", {
 					pass: v.pass,
 					code: v.code,
@@ -1691,7 +1823,14 @@ export function createLoopExtension() {
 				if (st.mode === "llm") {
 					await handleLlmVerdict(pi, c, st);
 				} else {
-					let v: { pass: boolean; noValidator: boolean; code: number | null; evidence: string | null; output: string };
+					let v: {
+						pass: boolean;
+						noValidator: boolean;
+						code: number | null;
+						evidence: string | null;
+						output: string;
+						cancelled?: boolean;
+					};
 					if (st.validatedRound === st.round && st.lastVerdict) {
 						// 模型本轮已手动 loop_validate：复用结果，不再重复执行
 						v = {
@@ -1703,24 +1842,26 @@ export function createLoopExtension() {
 						};
 					} else {
 						v = await runValidation(pi, st);
-						if (!stillCurrent(st.runId, epoch)) {
+						if (v.cancelled || !stillCurrent(st.runId, epoch)) {
 							journal(st, "late-callback-dropped", { at: "agent_end/runValidation", epoch });
 							return;
 						}
-						recordValidationOutcome(st, v);
+						if (!(await recordValidationOutcome(st, v, epoch))) return;
 					}
 					await handleVerdict(pi, c, st, v);
 				}
 			} catch (e) {
 				journal(st, "runtime-error", { error: String((e as Error)?.message || e) });
-				// 执行异常必须可见：不吞错，标记中断态（不伪装成完成）
-				if (st.status === "active") {
-					st.status = "stopped";
-					st.stage = "stopped";
-					st.stopReason = "runtime-error";
-					st.epoch += 1;
-					saveState(st);
-					journal(st, "runtime-error-stop", { epoch: st.epoch });
+				// 执行异常必须可见：不吞错，标记中断态（不伪装成完成）。
+				// 用磁盘态 + 捕获的代次判定，避免把用户「停止」后的旧内存态重新落盘（epoch 回退会让迟到回调复活）。
+				const fresh = loadState(st.runId);
+				if (fresh && fresh.status === "active" && fresh.epoch === epoch) {
+					fresh.status = "stopped";
+					fresh.stage = "stopped";
+					fresh.stopReason = "runtime-error";
+					fresh.epoch += 1;
+					saveState(fresh);
+					journal(fresh, "runtime-error-stop", { epoch: fresh.epoch });
 					notify(c, `⚠️ mini-harness：运行时异常，已停止（${String((e as Error)?.message || e)}）。`, "warning");
 				}
 			} finally {
@@ -1747,6 +1888,135 @@ export function stopRunExternal(runId: string, reason = "user-stop"): { ok: bool
 	st.epoch += 1;
 	saveState(st);
 	journal(st, "stop", { source: "server", reason, epoch: st.epoch });
+	return { ok: true };
+}
+
+export type DeleteLoopRunResult =
+	| {
+			ok: true;
+			runId: string;
+			worktreeRemoved: boolean;
+			checkpointRefsRemoved: string[];
+			runDirRemoved: true;
+	  }
+	| {
+			ok: false;
+			code: "invalid" | "missing" | "active" | "cleanup-error";
+			error: string;
+			runId?: string;
+			worktreeRemoved?: boolean;
+			checkpointRefsRemoved?: string[];
+	  };
+
+function isGitWorkspaceAt(cwd: string): boolean {
+	try {
+		return gitSync(["-C", cwd, "rev-parse", "--is-inside-work-tree"], cwd, 15000).trim() === "true";
+	} catch {
+		return false;
+	}
+}
+
+function removeRunWorktree(st: LoopState, runId: string): boolean {
+	if (st.worktreeDir == null) return false;
+	const expected = path.resolve(runDir(runId), "worktree");
+	if (path.resolve(st.worktreeDir) !== expected) {
+		throw new Error(`worktreeDir 不属于该 run：${st.worktreeDir}`);
+	}
+
+	const baseWorkspace = st.baseWorkspace || st.workspace;
+	const registered = gitSync(["-C", baseWorkspace, "worktree", "list", "--porcelain"], baseWorkspace, 60000)
+		.split("\n")
+		.some(
+			(line) => line.startsWith("worktree ") && real(path.resolve(line.slice("worktree ".length))) === real(expected),
+		);
+	if (!registered) {
+		if (fs.existsSync(expected)) throw new Error(`run worktree 未注册，拒绝删除目录：${expected}`);
+		return false;
+	}
+
+	// Deliberately do not delete st.worktreeBranch. A terminal run remains inspectable/recoverable by branch.
+	gitSync(["-C", baseWorkspace, "worktree", "remove", "--force", expected], baseWorkspace, 60000);
+	return true;
+}
+
+function removeCheckpointRefs(st: LoopState, runId: string): string[] {
+	const repo = st.baseWorkspace || st.workspace;
+	if (!isGitWorkspaceAt(repo)) return [];
+	const prefix = `refs/mini-harness/checkpoints/${runId}-`;
+	const refs = gitSync(["-C", repo, "for-each-ref", "--format=%(refname)", `${prefix}*`], repo, 15000)
+		.split("\n")
+		.map((ref) => ref.trim())
+		.filter((ref) => ref.startsWith(prefix));
+	for (const ref of refs) {
+		gitSync(["-C", repo, "update-ref", "-d", ref], repo, 15000);
+	}
+	return refs;
+}
+
+/**
+ * Remove a terminal run and its owned resources. Active runs are never removed, and a worktree is only
+ * eligible when its recorded path is exactly `<runsRoot>/<runId>/worktree`.
+ */
+export function deleteLoopRun(runIdInput: string): DeleteLoopRunResult {
+	const runId = String(runIdInput ?? "").trim();
+	if (!RUN_ID_RE.test(runId)) return { ok: false, code: "invalid", error: "bad runId" };
+
+	const st = loadState(runId);
+	if (!st) return { ok: false, code: "missing", runId, error: "run not found" };
+	if (st.status === "active") return { ok: false, code: "active", runId, error: "run is active" };
+
+	let worktreeRemoved = false;
+	let checkpointRefsRemoved: string[] = [];
+	try {
+		worktreeRemoved = removeRunWorktree(st, runId);
+	} catch (e) {
+		return {
+			ok: false,
+			code: "cleanup-error",
+			runId,
+			error: String((e as Error)?.message || e),
+			worktreeRemoved,
+			checkpointRefsRemoved,
+		};
+	}
+	try {
+		checkpointRefsRemoved = removeCheckpointRefs(st, runId);
+	} catch (e) {
+		return {
+			ok: false,
+			code: "cleanup-error",
+			runId,
+			error: String((e as Error)?.message || e),
+			worktreeRemoved,
+			checkpointRefsRemoved,
+		};
+	}
+	try {
+		fs.rmSync(runDir(runId), { recursive: true, force: true });
+	} catch (e) {
+		return {
+			ok: false,
+			code: "cleanup-error",
+			runId,
+			error: String((e as Error)?.message || e),
+			worktreeRemoved,
+			checkpointRefsRemoved,
+		};
+	}
+	return { ok: true, runId, worktreeRemoved, checkpointRefsRemoved, runDirRemoved: true };
+}
+
+/** 把 active run 重绑到执行者会话（worktree 模式：loop 在绑定 worktree 的子代理里跑，
+ *  模型工具/终端/validator/reviewer 全落 worktree）。落盘即上报 run-state，新 sessionId 的事件会路由到执行者会话。 */
+export function rebindLoopSession(runId: string, sessionId: string): { ok: boolean; error?: string } {
+	const st = loadState(runId);
+	if (!st) return { ok: false, error: `run 不存在：${runId}` };
+	if (st.status !== "active") return { ok: false, error: `run 已是终态：${st.status}` };
+	const next = String(sessionId ?? "").trim();
+	if (!next) return { ok: false, error: "缺少 sessionId" };
+	st.sessionId = next;
+	saveState(st);
+	journal(st, "rebind-session", { sessionId: next });
 	return { ok: true };
 }
 

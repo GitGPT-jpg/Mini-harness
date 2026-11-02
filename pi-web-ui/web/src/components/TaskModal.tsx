@@ -13,6 +13,19 @@ interface LoopModel {
 	family: string;
 }
 
+/** 能力模板（GET /api/mini-harness/packs）：一键填充任务语义与主指标，不携带可执行命令。 */
+interface CapabilityPack {
+	id: string;
+	title: string;
+	summary: string;
+	goal: string;
+	criteria: string;
+	primaryMetric: string;
+	metricDirection: "maximize" | "minimize";
+	maxRounds?: number;
+	useReviewer?: boolean;
+}
+
 /** 模板：领域里最常见的三类任务（做什么 + 可检查的完成条件）。 */
 const PRESETS: Array<{
 	key: "codeLoopPresetHarness" | "codeLoopPresetFile" | "codeLoopPresetTests";
@@ -82,6 +95,12 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 	const [cmd, setCmd] = useState("");
 	const [roots, setRoots] = useState("");
 	const [rounds, setRounds] = useState(5);
+	const [primaryMetric, setPrimaryMetric] = useState("");
+	const [metricDirection, setMetricDirection] = useState<"" | "maximize" | "minimize">("");
+	const [metricPrecision, setMetricPrecision] = useState("");
+	const [packs, setPacks] = useState<CapabilityPack[] | null>(null);
+	const [packId, setPackId] = useState("");
+	const [worktree, setWorktree] = useState(true);
 	// LLM loop（GoalService 偏好；空 = 使用主模型，轮数 0 = 不限）
 	const [llmPlanner, setLlmPlanner] = useState("");
 	const [execModel, setExecModel] = useState("");
@@ -111,6 +130,17 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 		let alive = true;
 		void mhGet<{ models: LoopModel[] }>("models").then((j) => {
 			if (alive) setModels(j?.models ?? []);
+		});
+		return () => {
+			alive = false;
+		};
+	}, [open]);
+
+	useEffect(() => {
+		if (!open) return;
+		let alive = true;
+		void mhGet<{ packs: CapabilityPack[] }>("packs").then((j) => {
+			if (alive) setPacks(j?.packs ?? []);
 		});
 		return () => {
 			alive = false;
@@ -156,6 +186,20 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 		closeTaskModal();
 	};
 
+	/** 选中能力模板：一键填充任务语义与主指标，验收命令仍由用户明确填写。 */
+	const applyPack = (id: string) => {
+		setPackId(id);
+		if (!id) return;
+		const p = (packs ?? []).find((x) => x.id === id);
+		if (!p) return;
+		setGoal(p.goal);
+		setCriteria(p.criteria);
+		setPrimaryMetric(p.primaryMetric);
+		setMetricDirection(p.metricDirection);
+		if (p.maxRounds) setRounds(p.maxRounds);
+		if (p.useReviewer != null) setAcceptance(p.useReviewer ? "code-review" : "code");
+	};
+
 	/** LLM loop：先把本次选的偏好记下（同旧编辑器的 set_goal_prefs），再发目标 / 启动细化向导。 */
 	const sendLlmPrefs = (maxRounds: number) =>
 		appSend({ type: "set_goal_prefs", maxRounds, reviewModel: llmPlanner, execModel });
@@ -190,6 +234,11 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 				...(planner ? { plannerModel: planner } : {}),
 				useReviewer: mode === "code-review",
 				...(mode === "code-review" && reviewer ? { reviewerModel: reviewer } : {}),
+				...(primaryMetric.trim() ? { primaryMetric: primaryMetric.trim() } : {}),
+				...(metricDirection ? { metricDirection } : {}),
+				...(metricPrecision.trim() ? { metricPrecision: Number(metricPrecision) } : {}),
+				...(packId ? { packId } : {}),
+				worktree,
 			});
 		}
 		finish();
@@ -235,6 +284,26 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 						</button>
 					))}
 				</div>
+				{codeMode && (packs?.length ?? 0) > 0 && (
+					<>
+						<label className="cockpit-label" htmlFor="task-pack">
+							{t("taskPackLabel")}
+						</label>
+						<select
+							id="task-pack"
+							className="cockpit-input"
+							value={packId}
+							onChange={(e) => applyPack(e.target.value)}
+						>
+							<option value="">{t("taskPackNone")}</option>
+							{packs!.map((p) => (
+								<option key={p.id} value={p.id} title={p.summary}>
+									{p.title}
+								</option>
+							))}
+						</select>
+					</>
+				)}
 				<label className="cockpit-label" htmlFor="task-goal">
 					{t("codeLoopGoalLabel")}
 				</label>
@@ -365,6 +434,16 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 					<summary>{t("codeLoopAdvanced")}</summary>
 					{codeMode && (
 						<>
+							<label className="cockpit-label" htmlFor="task-worktree">
+								<input
+									id="task-worktree"
+									type="checkbox"
+									checked={worktree}
+									onChange={(e) => setWorktree(e.target.checked)}
+								/>{" "}
+								{t("codeLoopWorktree")}
+							</label>
+							<div className="cockpit-note">{t("codeLoopWorktreeNote")}</div>
 							<label className="cockpit-label" htmlFor="task-precheck">
 								{t("codeLoopPrecheck")}
 							</label>
@@ -395,6 +474,46 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 								placeholder="/external/runs/xxx"
 								onChange={(e) => setRoots(e.target.value)}
 							/>
+							<label className="cockpit-label" htmlFor="task-metric">
+								{t("codeLoopPrimaryMetric")}
+							</label>
+							<input
+								id="task-metric"
+								className="cockpit-input"
+								value={primaryMetric}
+								placeholder={t("codeLoopPrimaryMetricPh")}
+								onChange={(e) => setPrimaryMetric(e.target.value)}
+							/>
+							<div className="cockpit-models">
+								<div>
+									<label className="cockpit-label" htmlFor="task-metric-dir">
+										{t("codeLoopMetricDirection")}
+									</label>
+									<select
+										id="task-metric-dir"
+										className="cockpit-input"
+										value={metricDirection}
+										onChange={(e) => setMetricDirection(e.target.value as "" | "maximize" | "minimize")}
+									>
+										<option value="">{t("codeLoopMetricDirectionAuto")}</option>
+										<option value="maximize">{t("codeLoopMetricDirectionMax")}</option>
+										<option value="minimize">{t("codeLoopMetricDirectionMin")}</option>
+									</select>
+								</div>
+								<div>
+									<label className="cockpit-label" htmlFor="task-metric-prec">
+										{t("codeLoopMetricPrecision")}
+									</label>
+									<input
+										id="task-metric-prec"
+										className="cockpit-input"
+										type="number"
+										step="any"
+										value={metricPrecision}
+										onChange={(e) => setMetricPrecision(e.target.value)}
+									/>
+								</div>
+							</div>
 						</>
 					)}
 					<label

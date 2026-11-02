@@ -246,6 +246,7 @@ npx vitest run <相关测试>          # 全量：npx vitest run
 6. **已知小缺口**：
    - 填 key 后的补选模型只作用于保存 key 的那个页面，同时开着的其他标签页要手动选一次模型。
    - 旧版左下角「多 run 状态药丸」没有移植，由 LoopBar 状态条和任务台的运行列表覆盖。
+7. **worktree 执行环境绑定（P1 #3，已实现执行者会话）**：validator / reviewer / diff / 快照 / 提交都落 `st.workspace`（worktree），隔离失败直接报错（不静默回退），成功路径 + 失败路径都有回归。模型工具/终端的绑定走「执行者会话」：`startLoop` 在 `worktree: true` 时用 `spawnSubagentConversation(cwd=st.workspace, deferKickoff)` 起一个绑定 worktree 的常驻子代理，`rebindLoopSession` 把 run 的 `sessionId` 重绑到执行者会话，再 fire-and-forget `sendUserMessage` 触发首回合（子代理 runtime 的 cwd 即 worktree ⇒ bash/文件/终端天然落 worktree）。run-state 事件经 `handleLoopEvent` 同时路由到执行者与父对话（主对话 LoopBar 随动）；`resumeLoop`/`acceptLoop` 用 `ownsLoopRun`/`loopExecutorConv` 识别「run 绑在子代理上仍属本对话」并把续跑提示词发到执行者会话。**未做真实模型验证**：子代理工具确实落 worktree 这一机制与 GoalService/delegate 执行对话同源（已长期在用），但 Loop 跑在执行者会话的端到端行为需真模型/GPU 实测。
 
 ## 12. 附：干净 HOME 实测步骤
 

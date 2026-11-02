@@ -15,7 +15,7 @@
  *    loop_start 不重复建 run；运行列表（collectRuns）的新字段与旧 state.json 兼容。
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, existsSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, expect } from "vitest";
@@ -27,12 +27,15 @@ const ext = await import("../../server/loop/extension.js");
 const {
 	createLoopExtension,
 	setLoopEventReporter,
+	addLoopEventReporter,
 	markLoopRequestPending,
 	takePendingLoopRequest,
 	createLoopRun,
 	acceptRunValidatorOnly,
 	reactivateForReview,
+	rebindLoopSession,
 	stopRunExternal,
+	deleteLoopRun,
 	listRuns,
 	loadLoopState,
 } = ext;
@@ -56,8 +59,8 @@ interface Harness {
 	/** planner 调用挂起（测「模型准备期间被停止不得复活」）。 */
 	deferPlanner: boolean;
 	resolvePlanner?: (v: string) => void;
-	/** pi.exec 调用记录（断言 worktree 有没有被提交）。 */
-	execCalls: Array<{ cmd: string; args: string[] }>;
+	/** pi.exec 调用记录（断言 worktree 有没有被提交 / validator 是否落在 st.workspace）。 */
+	execCalls: Array<{ cmd: string; args: string[]; cwd?: string }>;
 	/** 模型调用记录（断言规划 / 评审提示词带上验收标准）。 */
 	modelCalls: Array<{ id: string; text: string }>;
 }
@@ -110,8 +113,8 @@ function makeHarness(sessionId: string, opts: Partial<Harness> = {}): Harness & 
 			if (!h.handlers.has(ev)) h.handlers.set(ev, []);
 			h.handlers.get(ev)!.push(fn);
 		},
-		exec: async (cmd: string, args: string[]) => {
-			h.execCalls.push({ cmd, args });
+		exec: async (cmd: string, args: string[], opts?: { cwd?: string }) => {
+			h.execCalls.push({ cmd, args, cwd: opts?.cwd });
 			if (h.execThrows) throw new Error("exec boom");
 			return { code: h.validator.code, stdout: h.validator.stdout ?? "", stderr: h.validator.stderr ?? "" };
 		},
@@ -234,6 +237,109 @@ describe("mini-harness loop extension", () => {
 		expect(st.status).toBe("stopped");
 		expect(st.stopReason).toBe("user");
 		expect(journalEvents(runId)).toContain("late-callback-dropped");
+	});
+
+	it("手动验收期间停止：validator 随后失败不得把 stopped 写回 active（回归#7）", async () => {
+		const sid = SID();
+		const tools = new Map<string, any>();
+		const handlers = new Map<string, any[]>();
+		const execCalls: Array<{ cmd: string; args: string[] }> = [];
+		let resolveExec: ((r: any) => void) | null = null;
+		const pi: any = {
+			registerTool: (t: any) => tools.set(t.name, t),
+			on: (ev: string, fn: any) => {
+				if (!handlers.has(ev)) handlers.set(ev, []);
+				handlers.get(ev)!.push(fn);
+			},
+			exec: (cmd: string, args: string[]) =>
+				new Promise((res) => {
+					execCalls.push({ cmd, args });
+					resolveExec = res;
+				}),
+			sendUserMessage: () => {},
+		};
+		createLoopExtension()(pi);
+		const created = createLoopRun({ sessionId: sid, cwd: CWD, goal: "g", validateCmd: "true", useReviewer: false });
+		if (!created.ok) throw new Error(created.error);
+		const runId = created.runId;
+		const ctx: any = { sessionManager: { getSessionId: () => sid }, cwd: CWD };
+		// 手动验收：loop_validate 里 runValidation 的 L1 exec 挂起，期间停止
+		const pending = tools.get("loop_validate")!.execute("tc", {}, undefined, undefined, ctx);
+		await waitFor(() => resolveExec !== null);
+		stopRunExternal(runId);
+		resolveExec!({ code: 1, stdout: "", stderr: "boom" }); // validator 随后失败
+		const result = await pending;
+		const st = loadRun(runId);
+		expect(st.status).toBe("stopped"); // 不得复活成 active
+		expect(st.stopReason).toBe("user-stop");
+		expect(result.details.cancelled).toBe(true);
+		expect(journalEvents(runId)).toContain("late-callback-dropped");
+		expect(st.round).toBe(1); // 没有进入下一轮
+	});
+
+	it("L0 预检期间停止：后续 L1 完整验收不得启动（回归#7）", async () => {
+		const sid = SID();
+		const tools = new Map<string, any>();
+		const handlers = new Map<string, any[]>();
+		const execCmds: string[] = [];
+		let resolvePre: ((r: any) => void) | null = null;
+		let deferred = true;
+		const pi: any = {
+			registerTool: (t: any) => tools.set(t.name, t),
+			on: (ev: string, fn: any) => {
+				if (!handlers.has(ev)) handlers.set(ev, []);
+				handlers.get(ev)!.push(fn);
+			},
+			exec: (cmd: string, args: string[]) => {
+				execCmds.push(args.join(" "));
+				if (deferred) return new Promise((res) => (resolvePre = res));
+				return Promise.resolve({ code: 0, stdout: "ok", stderr: "" });
+			},
+			sendUserMessage: () => {},
+		};
+		createLoopExtension()(pi);
+		const created = createLoopRun({
+			sessionId: sid,
+			cwd: CWD,
+			goal: "g",
+			precheckCmd: "precheck_cmd",
+			validateCmd: "expensive_l1_bench",
+			useReviewer: false,
+		});
+		if (!created.ok) throw new Error(created.error);
+		const runId = created.runId;
+		const ctx: any = { sessionManager: { getSessionId: () => sid }, cwd: CWD };
+		await tools.get("loop_done")!.execute("tc", { summary: "s" }, undefined, undefined, ctx);
+		// agent_end 触发验收：L0 预检挂起，期间停止
+		const pending = handlers.get("agent_end")![0]({}, ctx);
+		await waitFor(() => resolvePre !== null);
+		stopRunExternal(runId);
+		deferred = false;
+		resolvePre!({ code: 0, stdout: "", stderr: "" }); // L0 预检通过，但已停止
+		await pending;
+		expect(execCmds.some((c) => c.includes("precheck_cmd"))).toBe(true);
+		expect(execCmds.some((c) => c.includes("expensive_l1_bench"))).toBe(false); // L1 不得启动
+		expect(loadRun(runId).status).toBe("stopped");
+	});
+
+	it("多客户端事件：多个上报器都收到事件，后注册不覆盖先注册（回归#8）", async () => {
+		const a: any[] = [];
+		const b: any[] = [];
+		const unA = addLoopEventReporter((e) => a.push(e));
+		const unB = addLoopEventReporter((e) => b.push(e));
+		try {
+			const h = makeHarness(SID());
+			await h.tools.get("loop_start")!.execute("t", { goal: "g", validateCmd: "true" }, undefined, undefined, h.ctx);
+			expect(a.length).toBeGreaterThan(0);
+			expect(b.length).toBeGreaterThan(0);
+			expect(a[a.length - 1].type).toBe("run-state");
+			expect(b[b.length - 1].type).toBe("run-state");
+			expect(a[a.length - 1].st.runId).toBe(b[b.length - 1].st.runId);
+		} finally {
+			unA();
+			unB();
+			setLoopEventReporter(null);
+		}
 	});
 
 	it("同 cwd 双会话不串任务（显式 sessionId 绑定，回归#3）", async () => {
@@ -391,6 +497,71 @@ describe("mini-harness loop extension", () => {
 		rmSync(wt, { recursive: true, force: true });
 	});
 
+	it("Checkpoint 快照：连续两轮不提交也各有可恢复 ref（回归#9）", async () => {
+		const repo = mkdtempSync(join(tmpdir(), "loop-snap-"));
+		const git = (...args: string[]) =>
+			execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+		git("init", "-q");
+		git("config", "user.email", "t@example.com");
+		git("config", "user.name", "t");
+		writeFileSync(join(repo, "a.txt"), "v0");
+		git("add", "-A");
+		git("commit", "-qm", "baseline");
+		writeFileSync(join(repo, "staged.txt"), "keep the real index\n");
+		git("add", "staged.txt");
+		const realIndexBefore = git("diff", "--cached", "--name-status");
+
+		const h = makeHarness(SID(), { validator: { code: 1, stdout: "", stderr: "bad" } });
+		const start = await h.tools
+			.get("loop_start")!
+			.execute("t", { goal: "g", validateCmd: "true", maxRounds: 3 }, undefined, undefined, h.ctx);
+		const runId = start.details.runId;
+		patchRun(runId, { workspace: repo }); // validator / 快照都落到这个 git 仓库
+
+		// 第 1 轮：改 tracked 文件但不提交，验收失败 → 进入第 2 轮
+		writeFileSync(join(repo, "a.txt"), "v1");
+		writeFileSync(join(repo, "untracked.txt"), "round-1\n");
+		await h.tools.get("loop_done")!.execute("t", { summary: "s1" }, undefined, undefined, h.ctx);
+		await h.handlers.get("agent_end")![0](undefined, h.ctx);
+		expect(loadRun(runId).round).toBe(2);
+
+		// 第 2 轮：再改但仍不提交，验收通过
+		h.validator = { code: 0, stdout: "ok", stderr: "" };
+		writeFileSync(join(repo, "a.txt"), "v2");
+		writeFileSync(join(repo, "untracked.txt"), "round-2\n");
+		await h.tools.get("loop_done")!.execute("t", { summary: "s2" }, undefined, undefined, h.ctx);
+		await h.handlers.get("agent_end")![0](undefined, h.ctx);
+		const st = loadRun(runId);
+		expect(st.status).toBe("done");
+
+		const [r1, r2] = st.history;
+		expect(r1.commitSha).toBe(r2.commitSha); // 两轮都没提交：HEAD 相同（原缺陷）
+		expect(r1.snapshotRef).toBeTruthy();
+		expect(r2.snapshotRef).toBeTruthy();
+		expect(r1.snapshotRef).not.toBe(r2.snapshotRef); // 但快照各不同，可分别恢复
+		expect(git("rev-parse", r1.snapshotRef)).toBeTruthy(); // ref 已固定，checkout 可恢复
+		expect(git("show", `${r1.snapshotRef}:untracked.txt`)).toBe("round-1\n");
+		expect(git("show", `${r2.snapshotRef}:untracked.txt`)).toBe("round-2\n");
+		expect(git("diff", "--cached", "--name-status")).toBe(realIndexBefore); // 备用 index 不改用户暂存区
+		rmSync(repo, { recursive: true, force: true });
+	});
+
+	it("worktree 绑定：validator 执行落在 st.workspace，不随会话 cwd（回归#10）", async () => {
+		const h = makeHarness(SID());
+		const start = await h.tools
+			.get("loop_start")!
+			.execute("t", { goal: "g", validateCmd: "true", maxRounds: 3 }, undefined, undefined, h.ctx);
+		const runId = start.details.runId;
+		// 模拟 worktree：run 的 workspace 与会话 cwd（CWD）不同
+		patchRun(runId, { workspace: "/tmp/loop-test-worktree-target" });
+		await h.tools.get("loop_done")!.execute("t", { summary: "s" }, undefined, undefined, h.ctx);
+		await h.handlers.get("agent_end")![0](undefined, h.ctx);
+		// validator（validateCmd="true" → bash -lc true）必须在 patch 后的 workspace 里跑
+		const validateCall = h.execCalls.find((c) => c.cmd === "bash" && c.args[1] === "true");
+		expect(validateCall?.cwd).toBe("/tmp/loop-test-worktree-target");
+		expect(validateCall?.cwd).not.toBe(CWD);
+	});
+
 	it("代码 loop：没开评审（skip）→ done/passed-validator-only", async () => {
 		const h = makeHarness(SID());
 		const start = await h.tools
@@ -543,12 +714,17 @@ describe("D-12：评审掉线的两条路 / 服务端结构化启动", () => {
 		expect(loadRun(runId)).toMatchObject({ status: "done", acceptance: "passed" });
 	});
 
-	it("createLoopRun：落盘 setupPending + sessionId 绑定；同会话第二个拒绝；空 goal / 空 sessionId 拒绝", () => {
+	it("createLoopRun：落盘 setupPending + sessionId 绑定；同会话第二个拒绝；空 goal / 空 sessionId 拒绝；worktree 隔离失败直接报错", () => {
 		const sid = SID();
 		const events: any[] = [];
 		setLoopEventReporter((e) => events.push(e));
 		try {
 			const nonGit = mkdtempSync(join(tmpdir(), "loop-ext-nongit-"));
+			// 要求 worktree 隔离但目录不是 git 仓库 → 直接报错，绝不静默回退到原工作区
+			const wtFail: any = createLoopRun({ sessionId: SID(), cwd: nonGit, goal: "g", worktree: true });
+			expect(wtFail.ok).toBe(false);
+			expect(wtFail.error).toContain("worktree");
+
 			const r1: any = createLoopRun({
 				sessionId: sid,
 				cwd: nonGit,
@@ -557,7 +733,6 @@ describe("D-12：评审掉线的两条路 / 服务端结构化启动", () => {
 				useReviewer: false,
 				plannerModel: "gpt-planner",
 				maxRounds: 99,
-				worktree: true, // 不是 git 仓库：照旧在原工作区执行
 			});
 			expect(r1.ok).toBe(true);
 			const st = loadRun(r1.runId);
@@ -589,6 +764,139 @@ describe("D-12：评审掉线的两条路 / 服务端结构化启动", () => {
 		} finally {
 			setLoopEventReporter(null);
 		}
+	});
+
+	it("createLoopRun worktree 隔离成功：在 git 仓库里真正开出独立 worktree 并绑定 st.workspace（回归 #9）", () => {
+		const repo = mkdtempSync(join(tmpdir(), "loop-ext-wt-ok-"));
+		const git = (...args: string[]) =>
+			execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+		try {
+			git("init", "-q");
+			git("config", "user.email", "t@example.com");
+			git("config", "user.name", "t");
+			writeFileSync(join(repo, "base.txt"), "base\n");
+			git("add", "-A");
+			git("commit", "-qm", "init");
+
+			const sid = SID();
+			const r: any = createLoopRun({
+				sessionId: sid,
+				cwd: repo,
+				goal: "在 worktree 里改东西",
+				worktree: true,
+			});
+			expect(r.ok).toBe(true);
+			const st = loadRun(r.runId);
+			expect(st.worktreeBranch).toBe(`mini-harness/${r.runId}`);
+			expect(st.worktreeDir).toBe(join(RUNS_ROOT, r.runId, "worktree"));
+			// workspace 是 worktreeDir 的 realpath（macOS /var → /private/var 归一）
+			expect(st.workspace).toBe(realpathSync(st.worktreeDir!));
+			expect(st.baseWorkspace).toBe(realpathSync(repo));
+			// 独立 worktree 真实存在，且是可用的 git checkout（.git 是指向主仓的文件）
+			expect(existsSync(st.worktreeDir!)).toBe(true);
+			expect(existsSync(join(st.worktreeDir!, ".git"))).toBe(true);
+			expect(existsSync(join(st.worktreeDir!, "base.txt"))).toBe(true);
+			// 在 worktree 里改文件 → 主仓（base workspace）不受污染
+			writeFileSync(join(st.worktreeDir!, "done.txt"), "done\n");
+			expect(existsSync(join(repo, "done.txt"))).toBe(false);
+
+			// 清理：先 git worktree remove 再删 run 目录（worktree 目录由 createLoopRun 建在 RUNS_ROOT 下）
+			execFileSync("git", ["-C", repo, "worktree", "remove", "--force", st.worktreeDir!], {
+				stdio: ["ignore", "pipe", "pipe"],
+			});
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+		}
+	});
+
+	it("deleteLoopRun：拒绝 active run；终态 worktree 注销、删 checkpoint ref 且保留分支", () => {
+		const active: any = createLoopRun({ sessionId: SID(), cwd: CWD, goal: "active" });
+		expect(active.ok).toBe(true);
+		expect(deleteLoopRun(active.runId)).toMatchObject({ ok: false, code: "active" });
+		expect(existsSync(join(RUNS_ROOT, active.runId, "state.json"))).toBe(true);
+		expect(stopRunExternal(active.runId).ok).toBe(true);
+		expect(deleteLoopRun(active.runId)).toMatchObject({ ok: true, runId: active.runId });
+
+		const repo = mkdtempSync(join(tmpdir(), "loop-delete-wt-"));
+		const worktrees: string[] = [];
+		const git = (...args: string[]) =>
+			execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+		try {
+			git("init", "-q");
+			git("config", "user.email", "t@example.com");
+			git("config", "user.name", "t");
+			writeFileSync(join(repo, "base.txt"), "base\n");
+			git("add", "-A");
+			git("commit", "-qm", "init");
+
+			for (const committed of [false, true]) {
+				const created: any = createLoopRun({
+					sessionId: SID(),
+					cwd: repo,
+					goal: committed ? "committed terminal run" : "uncommitted terminal run",
+					worktree: true,
+				});
+				expect(created.ok).toBe(true);
+				const st = loadRun(created.runId);
+				const worktree = st.worktreeDir!;
+				worktrees.push(worktree);
+				writeFileSync(join(worktree, "result.txt"), committed ? "committed\n" : "uncommitted\n");
+				if (committed) {
+					execFileSync("git", ["-C", worktree, "add", "-A"], { stdio: ["ignore", "pipe", "pipe"] });
+					execFileSync("git", ["-C", worktree, "commit", "-qm", "result"], { stdio: ["ignore", "pipe", "pipe"] });
+				}
+				const refs = [
+					`refs/mini-harness/checkpoints/${created.runId}-r1`,
+					`refs/mini-harness/checkpoints/${created.runId}-r2`,
+				];
+				for (const ref of refs) git("update-ref", ref, "HEAD");
+				expect(stopRunExternal(created.runId, "terminal").ok).toBe(true);
+
+				const removed = deleteLoopRun(created.runId);
+				expect(removed).toMatchObject({
+					ok: true,
+					runId: created.runId,
+					worktreeRemoved: true,
+					checkpointRefsRemoved: refs,
+				});
+				expect(existsSync(worktree)).toBe(false);
+				expect(existsSync(join(RUNS_ROOT, created.runId))).toBe(false);
+				expect(git("worktree", "list", "--porcelain")).not.toContain(`worktree ${worktree}`);
+				expect(git("rev-parse", `refs/heads/${st.worktreeBranch}`)).toBeTruthy();
+				for (const ref of refs) expect(() => git("show-ref", "--verify", "--quiet", ref)).toThrow();
+			}
+		} finally {
+			for (const worktree of worktrees) {
+				try {
+					execFileSync("git", ["-C", repo, "worktree", "remove", "--force", worktree], {
+						stdio: ["ignore", "pipe", "pipe"],
+					});
+				} catch {}
+			}
+			rmSync(repo, { recursive: true, force: true });
+		}
+	});
+
+	it("rebindLoopSession：active run 重绑到执行者会话；终态/不存在/空 sessionId 拒绝（回归 #3 执行者会话）", () => {
+		const sid = SID();
+		const r: any = createLoopRun({ sessionId: sid, cwd: CWD, goal: "g" });
+		expect(r.ok).toBe(true);
+		expect(loadRun(r.runId).sessionId).toBe(sid);
+
+		// active → 重绑成功，落盘即上报（journal 记 rebind-session）
+		const re = rebindLoopSession(r.runId, "executor-session");
+		expect(re.ok).toBe(true);
+		expect(loadRun(r.runId).sessionId).toBe("executor-session");
+		expect(journalEvents(r.runId)).toContain("rebind-session");
+
+		// 终态 → 拒绝
+		expect(stopRunExternal(r.runId, "user-stop").ok).toBe(true);
+		expect(rebindLoopSession(r.runId, "another").ok).toBe(false);
+
+		// 不存在 / 空 sessionId → 拒绝
+		expect(rebindLoopSession("nonexistent-run", "x").ok).toBe(false);
+		const r2: any = createLoopRun({ sessionId: SID(), cwd: CWD, goal: "g2" });
+		expect(rebindLoopSession(r2.runId, "  ").ok).toBe(false);
 	});
 
 	it("before_agent_start：服务端建的 run 开跑前做模型准备 → 清 setupPending、stage=plan、plannerOutput 落盘", async () => {

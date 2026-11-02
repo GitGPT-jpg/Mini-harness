@@ -1,0 +1,15 @@
+{
+  "id": "inference-perf",
+  "title": "推理性能（吞吐最大化）",
+  "summary": "以 tps 为主指标、ttft_ms 为观察项的推理吞吐优化任务。证明 Loop 能处理「越大越好」的指标方向（maximize）。",
+  "goal": "优化推理服务的吞吐：在保持正确性不劣化的前提下，尽量提高 validator 报告的 tps（HARNESS_METRIC）。",
+  "criteria": "以 validate.py 输出的 HARNESS_METRIC.tps 为唯一主指标，越大越好；ttft_ms 只作观察、不参与择优；正确性不得劣化；产物落到 artifactRoots。",
+  "precheckCmd": "python3 validate.py --precheck",
+  "validateCmd": "python3 validate.py --validate",
+  "primaryMetric": "tps",
+  "metricDirection": "maximize",
+  "metricPrecision": 1,
+  "artifactRoots": ["runs"],
+  "maxRounds": 6,
+  "useReviewer": true
+}

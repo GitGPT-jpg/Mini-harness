@@ -850,6 +850,14 @@ export type ClientMessage =
 			criteria?: string;
 			/** 产物目录（取证/验收用，原样传给 loop_start）。 */
 			artifactRoots?: string[];
+			/** 主指标名（如 loss_pct / tps / ttft_ms）；声明后最优轮次只按它比较。 */
+			primaryMetric?: string;
+			/** 主指标优化方向：maximize / minimize。 */
+			metricDirection?: "maximize" | "minimize";
+			/** 精度/硬约束（仅记录展示）。 */
+			metricPrecision?: number;
+			/** 能力包 id：服务端按包内默认值填充未显式提供的字段（显式字段优先）。 */
+			packId?: string;
 	  }
 	/** 停止当前会话的活跃 Loop（不传 runId = 快照 loop 里的当前 run）。停止
 	 *  即递增 epoch：在途/迟到回调全部失效，不得把 stopped 翻成 done。 */
