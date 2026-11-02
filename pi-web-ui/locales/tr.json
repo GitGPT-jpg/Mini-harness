@@ -97,6 +97,7 @@
 		"attachImage": "Görsel: {name}",
 		"attachFile": "Dosya: {name}",
 		"removeAttachment": "Eki kaldır",
+		"removeAllAttachments": "Remove all",
 		"attachHint": "Sonraki iletiyle birlikte gönderilecek",
 		"uploadFile": "Dosya ekle (görsel / metin / herhangi bir dosya — ayrıca sürükleyip bırakabilir veya ekran görüntüsü yapıştırabilirsiniz)",
 		"dropHereToAttach": "Dosyayı eklemek için bırakın",

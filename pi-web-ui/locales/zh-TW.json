@@ -97,6 +97,7 @@
 		"attachImage": "圖片：{name}",
 		"attachFile": "檔案：{name}",
 		"removeAttachment": "移除附件",
+		"removeAllAttachments": "全部移除",
 		"attachHint": "將隨下一條訊息傳送",
 		"uploadFile": "新增檔案（圖片/文字/任意檔案，也可直接拖入或貼上截圖）",
 		"dropHereToAttach": "鬆開以新增檔案",

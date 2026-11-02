@@ -97,6 +97,7 @@
 		"attachImage": "이미지: {name}",
 		"attachFile": "파일: {name}",
 		"removeAttachment": "첨부파일을 제거해요",
+		"removeAllAttachments": "Remove all",
 		"attachHint": "다음 메시지와 함께 전송돼요",
 		"uploadFile": "파일을 추가해요(이미지/텍스트/모든 파일, 직접 드래그하거나 스크린샷을 붙여넣어도 돼요)",
 		"dropHereToAttach": "여기에 놓으면 파일이 추가돼요",

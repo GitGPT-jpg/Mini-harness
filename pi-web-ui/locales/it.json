@@ -97,6 +97,7 @@
 		"attachImage": "Immagine: {name}",
 		"attachFile": "File: {name}",
 		"removeAttachment": "Rimuovi allegato",
+		"removeAllAttachments": "Remove all",
 		"attachHint": "Verrà inviato con il prossimo messaggio",
 		"uploadFile": "Aggiungi file (immagini / testo / qualsiasi file — oppure trascina / incolla uno screenshot)",
 		"dropHereToAttach": "Rilascia per allegare il file",

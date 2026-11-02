@@ -97,6 +97,7 @@
 		"attachImage": "Изображение: {name}",
 		"attachFile": "Файл: {name}",
 		"removeAttachment": "Удалить вложение",
+		"removeAllAttachments": "Remove all",
 		"attachHint": "Будет отправлено со следующим сообщением",
 		"uploadFile": "Добавить файлы (изображения / текст / любые файлы — можно перетащить или вставить скриншот)",
 		"dropHereToAttach": "Отпустите, чтобы прикрепить файл",

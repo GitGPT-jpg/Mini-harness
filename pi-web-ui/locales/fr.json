@@ -97,6 +97,7 @@
 		"attachImage": "Image : {name}",
 		"attachFile": "Fichier : {name}",
 		"removeAttachment": "Retirer la pièce jointe",
+		"removeAllAttachments": "Remove all",
 		"attachHint": "Sera envoyé avec le prochain message",
 		"uploadFile": "Ajouter des fichiers (images / texte / tout fichier — ou glissez-déposez / collez une capture)",
 		"dropHereToAttach": "Relâchez pour joindre le fichier",

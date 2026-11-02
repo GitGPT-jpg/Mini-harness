@@ -2216,6 +2216,21 @@
         color: var(--text-faint);
     }
 
+    /* 附件 ≥2 条时的「全部移除」：文字按钮，跟在提示后面，悬停才变红。 */
+    .attach-clear {
+        border: none;
+        background: transparent;
+        padding: 0 2px;
+        font-size: 11.5px;
+        color: var(--text-dim);
+        cursor: pointer;
+    }
+
+    .attach-clear:hover {
+        color: var(--red);
+        text-decoration: underline;
+    }
+
     /* ------------------------------------------------- quick phrases (inputbar) */
     /* 输入框上方的快捷短语按钮行：与上面的文件引用 chips（.attach-row）是两套
  * 独立 UI —— 文件引用管附件，短语管一键发送，视觉与职责都不重叠。

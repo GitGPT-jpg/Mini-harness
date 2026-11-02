@@ -1675,6 +1675,7 @@ export function App() {
 								defaultModel={chat.defaultModel ?? undefined}
 								attachments={attachments}
 								onRemoveAttachment={removeAttachmentCb}
+								onClearAttachments={clearAttachments}
 								onAddImageFiles={addImageFilesCb}
 								onAddLocalFiles={addLocalFilesCb}
 								onAddPathAttachment={addPathAttachmentCb}

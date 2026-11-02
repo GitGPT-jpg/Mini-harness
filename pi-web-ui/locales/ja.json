@@ -97,6 +97,7 @@
 		"attachImage": "画像：{name}",
 		"attachFile": "ファイル：{name}",
 		"removeAttachment": "添付を削除します",
+		"removeAllAttachments": "Remove all",
 		"attachHint": "次のメッセージと一緒に送信されます",
 		"uploadFile": "ファイルを追加します（画像/テキスト/任意のファイル。ドラッグやスクリーンショットの貼り付けも可能です）",
 		"dropHereToAttach": "離してファイルを追加します",
