@@ -1987,10 +1987,12 @@ wss.on("connection", (ws) => {
 							type: "notice",
 							level: "error",
 							text:
-								"当前实例不是由 训推引擎组 Harness 服务启动的（前台运行），无法自动重启；请在终端里重启，或先用 pi-web-ui server install 安装服务。",
+								"当前实例不是由 训推引擎组 Harness 服务启动的（前台运行），无法自动重启；" +
+								"请在终端里重启，或先用 pi-web-ui server install 安装服务。",
 							textEn:
 								"This instance runs in the foreground, not as a 训推引擎组 Harness service — " +
-									"nothing would bring it back. Restart it in its terminal, or install the service with `pi-web-ui server install`.",
+								"nothing would bring it back. Restart it in its terminal, or install the service " +
+								"with `pi-web-ui server install`.",
 						});
 						break;
 					}
