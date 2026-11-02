@@ -447,8 +447,8 @@ export class SlashCommandsService {
 				this.host.emit({
 					type: "notice",
 					level: "info",
-					text: "正在退出 pi-web-ui… supervisor 将自动重启服务",
-					textEn: "Quitting pi-web-ui… the supervisor will restart the service",
+					text: "正在退出 训推引擎组 Harness… supervisor 将自动重启服务",
+					textEn: "Quitting 训推引擎组 Harness… the supervisor will restart the service",
 				});
 				setTimeout(() => {
 					const didSchedule = this.host.onQuit?.() ?? false;

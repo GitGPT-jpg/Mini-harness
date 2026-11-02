@@ -16,7 +16,7 @@
 				"scripts/release-notes.mjs",
 				"scripts/screenshot-themes-preview.mjs",
 				"scripts/sync-locales.mjs",
-				"scripts/zh-tw-locale/{build-pack,glossary,verify}.mjs"
+				"scripts/zh-tw-locale/{build-pack,glossary,opencc,verify}.mjs"
 			],
 			"options": { "singleQuote": true }
 		}

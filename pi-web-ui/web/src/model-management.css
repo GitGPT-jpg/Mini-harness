@@ -236,6 +236,7 @@
 .candidate-checkbox {
     width: 16px;
     height: 16px;
+    /* stylelint-disable-next-line property-no-unknown -- standard CSS UI for themed native checkboxes. */
     accent-color: var(--accent);
     cursor: pointer;
     flex-shrink: 0;

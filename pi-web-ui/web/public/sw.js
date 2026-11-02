@@ -22,20 +22,24 @@
  * risk serving stale theme/plugin code or caching anything sensitive.
  */
 
-const BUILD_ID = "__BUILD_ID__";
-const STATIC_CACHE = BUILD_ID.startsWith('__') ? "pi-web-ui-static-dev" : `pi-web-ui-static-${BUILD_ID}`;
+const BUILD_ID = '__BUILD_ID__';
+const STATIC_CACHE = BUILD_ID.startsWith('__') ? 'pi-web-ui-static-dev' : `pi-web-ui-static-${BUILD_ID}`;
 const SHELL_CACHE = 'pi-web-ui-shell-v1';
 
 // App root within this origin — "/" for root deployments, "/pi/" behind an
 // nginx sub-path reverse proxy. All path checks below are relative to it, so
 // the worker behaves identically under either deployment layout.
-const SCOPE = new URL("./", self.registration.scope).pathname;
+const SCOPE = new URL('./', self.registration.scope).pathname;
 
 /** Map a request pathname to an app-relative path ("/pi/ws" → "/ws"), or null
  *  when the request lies outside the registration scope (shouldn't happen). */
 function appPath(pathname) {
-	if (SCOPE === "/") {return pathname;}
-	if (pathname.startsWith(SCOPE)) {return "/" + pathname.slice(SCOPE.length);}
+	if (SCOPE === '/') {
+		return pathname;
+	}
+	if (pathname.startsWith(SCOPE)) {
+		return '/' + pathname.slice(SCOPE.length);
+	}
 	return null;
 }
 
@@ -46,12 +50,16 @@ self.addEventListener('install', (event) => {
 	event.waitUntil(caches.open(SHELL_CACHE));
 });
 
-self.addEventListener("activate", (event) => {
+self.addEventListener('activate', (event) => {
 	event.waitUntil(
 		caches
 			.keys()
 			.then((keys) =>
-				Promise.all(keys.filter((k) => k !== STATIC_CACHE && k !== SHELL_CACHE).map((k) => caches.delete(k))),
+				Promise.all(
+					keys
+						.filter((k) => k !== STATIC_CACHE && k !== SHELL_CACHE)
+						.map((k) => caches.delete(k)),
+				),
 			)
 			// Apply to already-open pages immediately.
 			.then(() => self.clients.claim()),
@@ -61,19 +69,23 @@ self.addEventListener("activate", (event) => {
 // Only cache simple, safe GET requests. Everything else goes straight through.
 function isCachable(request) {
 	const method = request.method;
-	if (method !== "GET") return false;
+	if (method !== 'GET') {
+		return false;
+	}
 
 	const url = new URL(request.url);
-	if (url.origin !== self.location.origin) {return false;}
+	if (url.origin !== self.location.origin) {
+		return false;
+	}
 
 	// Never cache real-time, dynamic or credential/data endpoints.
 	const path = appPath(url.pathname);
 	if (
 		path === null ||
 		path.startsWith('/ws') ||
-		path.startsWith("/api") ||
+		path.startsWith('/api') ||
 		path.startsWith('/themes') ||
-		path.startsWith("/plugins")
+		path.startsWith('/plugins')
 	) {
 		return false;
 	}
@@ -83,14 +95,37 @@ function isCachable(request) {
 function assetContentOk(requestUrl, response) {
 	const ct = (response.headers.get('content-type') || '').toLowerCase();
 	const path = requestUrl.pathname.toLowerCase();
-	if (path.endsWith('.js')) {return ct.includes('javascript');}
-	if (path.endsWith(".css")) return ct.includes("css");
-	if (path.endsWith('.svg')) return ct.includes("svg");
-	if (path.endsWith(".webmanifest")) {return ct.includes("json");}
+	if (path.endsWith('.js')) {
+		return ct.includes('javascript');
+	}
+	if (path.endsWith('.css')) {
+		return ct.includes('css');
+	}
+	if (path.endsWith('.svg')) {
+		return ct.includes('svg');
+	}
+	if (path.endsWith('.webmanifest')) {
+		return ct.includes('json');
+	}
 	return true;
 }
 
-self.addEventListener("fetch", (event) => {
+function fetchStaticAsset(request, requestUrl) {
+	return fetch(request)
+		.then((response) => {
+			// Only cache bytes matching the extension: a missing file falls
+			// through to the SPA catch-all (index.html, 200) and must never be
+			// stored under an asset URL, or the page stays black until purged.
+			if (response && response.ok && assetContentOk(requestUrl, response)) {
+				const copy = response.clone();
+				caches.open(STATIC_CACHE).then((cache) => cache.put(request, copy));
+			}
+			return response;
+		})
+		.catch(() => caches.match(request).then((fallback) => fallback || Response.error()));
+}
+
+self.addEventListener('fetch', (event) => {
 	const { request } = event;
 	if (!isCachable(request)) {
 		// Let the browser/backend handle WebSockets, API calls and cross-origin
@@ -110,7 +145,11 @@ self.addEventListener("fetch", (event) => {
 					caches.open(SHELL_CACHE).then((cache) => cache.put(request, copy));
 					return response;
 				})
-				.catch(() => caches.match(request).then((cached) => cached || caches.match(SCOPE) || Response.error())),
+				.catch(() =>
+					caches
+						.match(request)
+						.then((cached) => cached || caches.match(SCOPE) || Response.error()),
+				),
 		);
 		return;
 	}
@@ -121,27 +160,18 @@ self.addEventListener("fetch", (event) => {
 		path !== null &&
 		(path.startsWith('/assets/') ||
 			path.startsWith('/icons/') ||
-			path === "/favicon.svg" ||
-			path === "/favicon.png" ||
-			path === "/icon.ico" ||
-			path === "/manifest.webmanifest");
+			path === '/favicon.svg' ||
+			path === '/favicon.png' ||
+			path === '/icon.ico' ||
+			path === '/manifest.webmanifest');
 
 	if (isStatic) {
 		event.respondWith(
 			caches.match(request).then((cached) => {
-				if (cached) return cached;
-				return fetch(request)
-					.then((response) => {
-						// Only cache bytes matching the extension: a missing file falls
-						// through to the SPA catch-all (index.html, 200) and must never be
-						// stored under an asset URL, or the page stays black until purged.
-						if (response && response.ok && assetContentOk(requestUrl, response)) {
-							const copy = response.clone();
-							caches.open(STATIC_CACHE).then((cache) => cache.put(request, copy));
-						}
-						return response;
-					})
-					.catch(() => caches.match(request).then((fallback) => fallback || Response.error()));
+				if (cached) {
+					return cached;
+				}
+				return fetchStaticAsset(request, requestUrl);
 			}),
 		);
 	}
@@ -159,20 +189,25 @@ self.addEventListener("fetch", (event) => {
 // minimised window still counts as open) and only open a new one when none
 // exists. Windows never restores a window for us, so we match on URL first so
 // the session that raised the notification is the one that comes forward.
-self.addEventListener("notificationclick", (event) => {
+self.addEventListener('notificationclick', (event) => {
 	event.notification.close();
-	const target = (event.notification.data && event.notification.data.url) || new URL(SCOPE, self.location.origin).href;
+	const target =
+		(event.notification.data && event.notification.data.url) || new URL(SCOPE, self.location.origin).href;
 
 	event.waitUntil(
 		self.clients
-			.matchAll({ type: "window", includeUncontrolled: true })
+			.matchAll({ type: 'window', includeUncontrolled: true })
 			.then((clients) => {
-				const inScope = clients.filter((client) => appPath(new URL(client.url).pathname) !== null);
+				const inScope = clients.filter(
+					(client) => appPath(new URL(client.url).pathname) !== null,
+				);
 				const match = inScope.find((client) => client.url === target) || inScope[0];
 				// focus() rejects when the browser refuses to raise the window
 				// (rare); fall back to just returning the client so the click
 				// never logs an unhandled rejection.
-				if (match) {return match.focus ? match.focus().catch(() => match) : match;}
+				if (match) {
+					return match.focus ? match.focus().catch(() => match) : match;
+				}
 				return self.clients.openWindow(target);
 			})
 			.catch(() => undefined),

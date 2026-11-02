@@ -1,18 +1,18 @@
 /**
  * screenshot-themes-preview.mjs —— 真机截取壁纸弹窗内 5 款可切换专属主题实景效果
  */
-import { spawn } from "node:child_process";
-import { cpSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { spawn } from 'node:child_process';
+import { cpSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chromium } from "playwright-core";
+import { chromium } from 'playwright-core';
 import { CHROME_PATH } from '../tests/lib/chrome.mjs';
-import { freePort, portUp } from "../tests/lib/port-utils.mjs";
+import { freePort, portUp } from '../tests/lib/port-utils.mjs';
 
-const REPO = fileURLToPath(new URL("..", import.meta.url));
+const REPO = fileURLToPath(new URL('..', import.meta.url));
 const PORT = 8960;
 const SCREENSHOT_DIR = join(REPO, 'test-screenshots');
-const DATA_DIR = join(REPO, ".tmp-verify-data");
+const DATA_DIR = join(REPO, '.tmp-verify-data');
 
 mkdirSync(SCREENSHOT_DIR, { recursive: true });
 
@@ -21,25 +21,25 @@ async function sleep(ms) {
 }
 
 async function main() {
-	console.log("=== 启动壁纸弹窗多主题实机测试与截图 ===");
+	console.log('=== 启动壁纸弹窗多主题实机测试与截图 ===');
 	await freePort(PORT);
 
-	mkdirSync(join(DATA_DIR, 'plugins', "wallpaper-engine"), { recursive: true });
-	cpSync(join(REPO, "plugins", "wallpaper-engine"), join(DATA_DIR, "plugins", "wallpaper-engine"), {
+	mkdirSync(join(DATA_DIR, 'plugins', 'wallpaper-engine'), { recursive: true });
+	cpSync(join(REPO, 'plugins', 'wallpaper-engine'), join(DATA_DIR, 'plugins', 'wallpaper-engine'), {
 		recursive: true,
 	});
 
 	const env = {
 		...process.env,
 		PI_WEB_PORT: String(PORT),
-		PI_WEB_HOST: "127.0.0.1",
+		PI_WEB_HOST: '127.0.0.1',
 		PI_WEB_CWD: REPO,
 		PI_WEB_DATA_DIR: DATA_DIR,
 	};
 
-	const srv = spawn(process.execPath, [join(REPO, 'dist', "server", "index.js")], {
+	const srv = spawn(process.execPath, [join(REPO, 'dist', 'server', 'index.js')], {
 		env,
-		stdio: "ignore",
+		stdio: 'ignore',
 	});
 
 	let up = false;
@@ -52,13 +52,13 @@ async function main() {
 	}
 	if (!up) {
 		srv.kill();
-		throw new Error("服务启动失败");
+		throw new Error('服务启动失败');
 	}
 
 	const browser = await chromium.launch({
 		executablePath: CHROME_PATH,
 		headless: true,
-		args: ["--no-sandbox", "--disable-gpu-sandbox", "--enable-webgl"],
+		args: ['--no-sandbox', '--disable-gpu-sandbox', '--enable-webgl'],
 	});
 
 	const context = await browser.newContext({
@@ -73,13 +73,13 @@ async function main() {
 		await page.waitForFunction(() => Boolean(window.__piWallpaperEngineRuntime), { timeout: 15000 });
 
 		// 1. 打开壁纸抽屉，截取包含专属主题选择器的抽屉面板图
-		console.log("1. 打开壁纸抽屉截取主题切换器...");
+		console.log('1. 打开壁纸抽屉截取主题切换器...');
 		await page.evaluate(() => {
 			window.__piWallpaperEngineRuntime.drawer.open();
 		});
 		await sleep(1500);
 
-		const shotDrawer = join(SCREENSHOT_DIR, "05-drawer-with-theme-selector.png");
+		const shotDrawer = join(SCREENSHOT_DIR, '05-drawer-with-theme-selector.png');
 		await page.screenshot({ path: shotDrawer });
 		console.log(`✓ 已生成抽屉主题切换器截图: ${shotDrawer}`);
 
@@ -87,17 +87,20 @@ async function main() {
 		console.log('2. 激活壁纸并设置示例消息...');
 		await page.evaluate(async () => {
 			const rt = window.__piWallpaperEngineRuntime;
-			const res = await fetch("/plugins-api/wallpaper-engine/api/wallpapers");
+			const res = await fetch('/plugins-api/wallpaper-engine/api/wallpapers');
 			const json = await res.json();
-			const w = json.wallpapers.find((item) => item.type === "scene" || item.hasScene) || json.wallpapers[0];
+			const w =
+				json.wallpapers.find((item) => item.type === 'scene' || item.hasScene) ||
+				json.wallpapers[0];
 			if (w) {
 				rt.state.activeId = w.id;
 				void rt.bgLayer.setWallpaper(w, rt.state.settings);
 			}
 
-			const msgsWrap = document.querySelector(".messages");
+			const msgsWrap = document.querySelector('.messages');
 			if (msgsWrap) {
-				msgsWrap.innerHTML = `
+				msgsWrap.innerHTML =
+					`
 					<div class="msg msg-user">
 						<div class="msg-role">You</div>
 						<div class="msg-body">
@@ -107,7 +110,10 @@ async function main() {
 					<div class="msg msg-assistant">
 						<div class="msg-role">Assistant</div>
 						<div class="msg-body md">
-							<p>已为你设计了<strong>极光微晶流体着色器（Aurora Micro-Crystal Shader）</strong>！我们在高分屏下启用了 <strong>1:1 原生物理像素渲染</strong> 与 <strong>MSAA 4x</strong> 抗锯齿，即使在强动态壁纸背景下，多层立体防眩光阴影也能保证文字极其清晰醒目：</p>
+							<p>已为你设计了<strong>极光微晶流体着色器（Aurora Micro-Crystal Shader）</strong>！` +
+					'我们在高分屏下启用了 <strong>1:1 原生物理像素渲染</strong> 与 <strong>MSAA 4x</strong> ' +
+					`抗锯齿，即使在强动态壁纸背景下，多层立体防眩光阴影也能保证` +
+					`文字极其清晰醒目：</p>
 							<pre><code>// 片段着色器：极光流体微光模拟
 precision highp float;
 uniform vec2 u_resolution;
@@ -127,65 +133,65 @@ void main() {
 			}
 			const textarea = document.querySelector('.inputbox textarea');
 			if (textarea) {
-				textarea.value = "当前正在预览壁纸专属炫酷主题，文字与配色均已优化至最佳观感！";
+				textarea.value = '当前正在预览壁纸专属炫酷主题，文字与配色均已优化至最佳观感！';
 			}
 			rt.drawer.close();
 		});
 		await sleep(3500);
 
 		// 3. 切换并截取 霓虹幻紫 (Synthwave) 主题
-		console.log("3. 切换至【🔮 霓虹幻紫】主题...");
+		console.log('3. 切换至【🔮 霓虹幻紫】主题...');
 		await page.evaluate(() => {
 			const select = document.querySelector('#pi-we-theme-select');
 			if (select) {
-				select.value = "synthwave";
-				select.dispatchEvent(new Event("change"));
+				select.value = 'synthwave';
+				select.dispatchEvent(new Event('change'));
 			}
 		});
 		await sleep(1500);
-		const shotSynthwave = join(SCREENSHOT_DIR, "06-theme-synthwave.png");
+		const shotSynthwave = join(SCREENSHOT_DIR, '06-theme-synthwave.png');
 		await page.screenshot({ path: shotSynthwave });
 		console.log(`✓ 已生成霓虹幻紫主题截图: ${shotSynthwave}`);
 
 		// 4. 切换并截取 黑曜冷月 (Obsidian) 主题
-		console.log("4. 切换至【🌑 黑曜冷月】主题...");
+		console.log('4. 切换至【🌑 黑曜冷月】主题...');
 		await page.evaluate(() => {
 			const select = document.querySelector('#pi-we-theme-select');
 			if (select) {
-				select.value = "obsidian";
-				select.dispatchEvent(new Event("change"));
+				select.value = 'obsidian';
+				select.dispatchEvent(new Event('change'));
 			}
 		});
 		await sleep(1500);
-		const shotObsidian = join(SCREENSHOT_DIR, "07-theme-obsidian.png");
+		const shotObsidian = join(SCREENSHOT_DIR, '07-theme-obsidian.png');
 		await page.screenshot({ path: shotObsidian });
 		console.log(`✓ 已生成黑曜冷月主题截图: ${shotObsidian}`);
 
 		// 5. 切换并截取 极光翡翠 (Aurora) 主题
 		console.log('5. 切换至【🌲 极光翡翠】主题...');
 		await page.evaluate(() => {
-			const select = document.querySelector("#pi-we-theme-select");
+			const select = document.querySelector('#pi-we-theme-select');
 			if (select) {
 				select.value = 'aurora';
-				select.dispatchEvent(new Event("change"));
+				select.dispatchEvent(new Event('change'));
 			}
 		});
 		await sleep(1500);
-		const shotAurora = join(SCREENSHOT_DIR, "08-theme-aurora.png");
+		const shotAurora = join(SCREENSHOT_DIR, '08-theme-aurora.png');
 		await page.screenshot({ path: shotAurora });
 		console.log(`✓ 已生成极光翡翠主题截图: ${shotAurora}`);
 
 		// 6. 切换并截取 晚霞琥珀 (Amber) 主题
-		console.log("6. 切换至【🌅 晚霞琥珀】主题...");
+		console.log('6. 切换至【🌅 晚霞琥珀】主题...');
 		await page.evaluate(() => {
 			const select = document.querySelector('#pi-we-theme-select');
 			if (select) {
-				select.value = "amber";
-				select.dispatchEvent(new Event("change"));
+				select.value = 'amber';
+				select.dispatchEvent(new Event('change'));
 			}
 		});
 		await sleep(1500);
-		const shotAmber = join(SCREENSHOT_DIR, "09-theme-amber.png");
+		const shotAmber = join(SCREENSHOT_DIR, '09-theme-amber.png');
 		await page.screenshot({ path: shotAmber });
 		console.log(`✓ 已生成晚霞琥珀主题截图: ${shotAmber}`);
 	} finally {
@@ -193,7 +199,7 @@ void main() {
 		srv.kill();
 		await freePort(PORT);
 	}
-	console.log("=== 全部多主题截图完成 ===");
+	console.log('=== 全部多主题截图完成 ===');
 }
 
 main().catch((err) => {

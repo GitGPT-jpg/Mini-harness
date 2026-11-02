@@ -867,7 +867,7 @@ if (existsSync(webDist)) {
 		// dotfiles: allow — issue #223：nvm 等安装路径本身在隐藏目录下（如 ~/.nvm/…），同上需放行。
 		res.sendFile(join(webDist, "index.html"), { dotfiles: "allow" }, (err) => {
 			if (err && !res.headersSent) {
-				res.status(503).send("正在更新 pi-web-ui，请稍后刷新…");
+				res.status(503).send("正在更新 训推引擎组 Harness，请稍后刷新…");
 			}
 		});
 	});
@@ -1986,9 +1986,11 @@ wss.on("connection", (ws) => {
 						send({
 							type: "notice",
 							level: "error",
-							text: "当前实例不是由 pi-web-ui 服务启动的（前台运行），无法自动重启；请在终端里重启，或先用 pi-web-ui server install 安装服务。",
+							text:
+								"当前实例不是由 训推引擎组 Harness 服务启动的（前台运行），无法自动重启；请在终端里重启，或先用 pi-web-ui server install 安装服务。",
 							textEn:
-								"This instance runs in the foreground, not as a pi-web-ui service — nothing would bring it back. Restart it in its terminal, or install the service with `pi-web-ui server install`.",
+								"This instance runs in the foreground, not as a 训推引擎组 Harness service — " +
+									"nothing would bring it back. Restart it in its terminal, or install the service with `pi-web-ui server install`.",
 						});
 						break;
 					}
@@ -2219,7 +2221,7 @@ if (process.env[RESTART_CHILD_ENV] === "1") {
 
 httpServer.listen(PORT, HOST, () => {
 	console.log("");
-	console.log("  ⚡ pi-web-ui — web chat for the pi coding agent");
+	console.log("  ⚡ 训推引擎组 Harness — web chat for the pi coding agent");
 	console.log(`    http://localhost:${PORT}`);
 	console.log(`    workspace   : ${CWD}`);
 	console.log(`    session dir : ${SESSION_DIR_ROOT}`);

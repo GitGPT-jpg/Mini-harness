@@ -878,7 +878,7 @@ const TCC_HINT =
 		"\x1b[90m  · 需要隐私权限的命令会被系统静默拒绝：不弹授权窗，系统设置里也无法勾选，表现多为卡死或无输出。",
 		"  · 这类任务请在你自己已授权的前台终端里运行。",
 		"  · 本终端内可运行不需要隐私权限的命令（如文件处理、网络请求、远程设备流）。",
-		"  · 若改在前台终端里运行 pi-web-ui，本提示即不再出现。\x1b[0m",
+		"  · 若改在前台终端里运行 训推引擎组 Harness，本提示即不再出现。\x1b[0m",
 	].join("\r\n") + "\r\n";
 
 /** True when this server was spawned by launchd (or orphaned) on macOS — no GUI app in the ancestry, so camera/mic TCC grants are unavailable. */

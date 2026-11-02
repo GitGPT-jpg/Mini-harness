@@ -107,7 +107,9 @@ export const zh = {
 	hostResources: "主机资源",
 	hostProcessor: "CPU",
 	hostMemory: "RAM",
-	hostResourcesTip: "运行 pi-web-ui 服务的主机 · CPU 为约 10 秒平均（2 秒采样），与任务管理器采样时刻不同会有几秒偏差",
+	hostResourcesTip:
+		"运行 训推引擎组 Harness 服务的主机 · CPU 为约 10 秒平均（2 秒采样），" +
+			"与任务管理器采样时刻不同会有几秒偏差",
 
 	/* chat input */
 	folderRef: "文件夹引用：{path}",
@@ -364,9 +366,10 @@ export const zh = {
 	updateAvailable: "发现新版本 v{version}",
 	updateJustPublished: "v{version} 刚刚发布，npm 缓存可能尚未同步——若未检测到新版本，请稍后重新检查",
 	updateNow: "在终端中更新",
-	updateTabTitle: "更新 pi-web-ui",
+	updateTabTitle: "更新 训推引擎组 Harness",
 	updateTerminalHint:
-		"点击后会在可见终端中运行 npm i -g pi-web-ui@latest；完成后重启服务生效（pi-web-ui server restart）。",
+		"点击后会在可见终端中运行 npm i -g pi-web-ui@latest；完成后重启 " +
+			"训推引擎组 Harness 服务生效（pi-web-ui server restart）。",
 	updatesAllTitle: "全部组件更新",
 	updatesAllBadge: "{n} 个更新",
 	updatesAllUpToDate: "全部组件均为最新",
@@ -384,15 +387,19 @@ export const zh = {
 	updateAllTabTitle: "更新全部组件",
 	piCoreSplitRun: "服务运行 v{running}",
 	piSdkSplitNote:
-		"本服务运行的是 pi v{running}；机器上装有更新的全局 pi v{installed}。重启服务即可跟上（默认自动选用更新的那份）；设了 PI_WEB_SDK=bundled 时会一直用自带副本，升级 pi-web-ui 也可让自带副本跟上。",
+		"本服务运行的是 pi v{running}；机器上装有更新的全局 pi v{installed}。" +
+			"重启服务即可跟上（默认自动选用更新的那份）；设了 PI_WEB_SDK=bundled 时会一直用自带副本，" +
+			"升级 训推引擎组 Harness 也可让自带副本跟上。",
 	piSdkBundledNote:
-		"当前使用随包自带的 pi 引擎 v{running}（随 pi-web-ui 更新）。安装全局引擎后重启服务即可自动切换（服务默认跟随版本更高的那份）。",
+		"当前使用随包自带的 pi 引擎 v{running}（随 训推引擎组 Harness 更新）。" +
+			"安装全局引擎后重启服务即可自动切换（服务默认跟随版本更高的那份）。",
 	installGlobalEngineBtn: "安装全局引擎",
 	installGlobalEngineTabTitle: "安装全局 pi 引擎",
 	restartService: "重启服务",
 	restartingService: "重启中…",
 	restartServiceTip:
-		"重启 pi-web-ui 服务（{name}）：本实例由系统服务托管（launchd/systemd/Windows watchdog），进程退出后会被自动拉起，本页会自动重连；更新完成后用它生效",
+		"重启 训推引擎组 Harness 服务（{name}）：本实例由系统服务托管（launchd/systemd/" +
+			"Windows watchdog），进程退出后会被自动拉起，本页会自动重连；更新完成后用它生效",
 
 	/* right panel */
 	computer: "此电脑",
@@ -496,7 +503,8 @@ export const zh = {
 	notifyInsecure:
 		"当前地址不是安全上下文（非 localhost 的 http 访问），浏览器不提供通知接口 —— 请改用 127.0.0.1 或 HTTPS 打开，或将本机地址加入浏览器白名单。",
 	notifyWindowsHint:
-		"Windows 额外一层系统开关：请允许浏览器（或已安装的 pi-web-ui 应用）在「设置 → 系统 → 通知」里推送，并关闭专注助手/勿扰；关窗后进程结束也不会再提醒。",
+		"Windows 额外一层系统开关：请允许浏览器（或已安装的 训推引擎组 Harness 应用）" +
+			"在「设置 → 系统 → 通知」里推送，并关闭专注助手/勿扰；关窗后进程结束也不会再提醒。",
 	notifyTest: "发送测试通知",
 	notifyTestBody: "能看到这条系统通知，就说明浏览器和 Windows 都放行了。",
 	notifyTestSent: "已发送（通道：{path}）",
@@ -868,7 +876,8 @@ export const zh = {
 	goalBarExecModelTip: "执行对话的模型；空 = 跟随当前对话",
 	goalBarOpenExec: "执行对话",
 	goalBarOpenExecTip: "打开执行者对话（左栏可随时点开；执行期间在本对话发送的消息会自动同步给执行者）",
-	goalBarStaleBackend: "⚠️ 服务端版本较旧（进程未重启）：目标模式 2.0 不会生效，请重启 pi-web-ui 服务",
+	goalBarStaleBackend:
+		"⚠️ 服务端版本较旧（进程未重启）：目标模式 2.0 不会生效，请重启 训推引擎组 Harness 服务",
 	goalBarStop: "停止目标（并停掉执行对话）",
 
 	goalBarReviewing: "审查中…",
@@ -1221,7 +1230,8 @@ export const zh = {
 		"开启：隐藏助手消息顶部的模型名字行（角色 · 模型名 · 时间）并收紧消息间距，使对话流更加紧凑；关闭：保持默认显示",
 	projectTitle: "标题显示项目名",
 	projectTitleDesc:
-		"开启：浏览器标签页标题为「项目目录名 — pi-web-ui」，切项目即时更新（多标签页开多个项目时好区分）；关闭：固定显示应用名",
+		"开启：浏览器标签页标题为「项目目录名 — 训推引擎组 Harness」，" +
+			"切项目即时更新（多标签页开多个项目时好区分）；关闭：固定显示应用名",
 	terminalBashTakeover: "终端接管 bash",
 	terminalBashTakeoverDesc:
 		"此开关决定 bash 是否覆盖为终端版：关 = 原生 SDK bash（纯进程、不开终端）；开 = 跑进可见终端，且 persist 参数在本开关的基础上决定一次性（false，命令跑完进程退出、输出留档）还是持久（true，shell 状态跨调用保留、静默自动转后台并通知 AI）",
@@ -1437,7 +1447,7 @@ export const zh = {
 
 	/* app */
 	loadingSession: "正在加载会话…",
-	connectingServer: "正在连接 pi-web-ui 服务器…",
+	connectingServer: "正在连接 训推引擎组 Harness 服务器…",
 
 	/* 语言包（下载） */
 	localePacks: "语言包",
@@ -1744,7 +1754,8 @@ export const en: Record<keyof typeof zh, string> = {
 	hostProcessor: "CPU",
 	hostMemory: "RAM",
 	hostResourcesTip:
-		"Host running pi-web-ui · CPU is a ~10s average (2s samples); a few seconds of skew vs Task Manager is normal",
+		"Host running 训推引擎组 Harness · CPU is a ~10s average (2s samples); " +
+			"a few seconds of skew vs Task Manager is normal",
 
 	/* chat input */
 	folderRef: "Folder reference: {path}",
@@ -2013,9 +2024,10 @@ export const en: Record<keyof typeof zh, string> = {
 	updateJustPublished:
 		"v{version} was just published — npm cache may lag; if the new version isn't detected yet, re-check in a moment",
 	updateNow: "Update in terminal",
-	updateTabTitle: "Update pi-web-ui",
+	updateTabTitle: "Update 训推引擎组 Harness",
 	updateTerminalHint:
-		"Clicking runs npm i -g pi-web-ui@latest in a visible terminal; restart the service afterwards to take effect (pi-web-ui server restart).",
+		"Clicking runs npm i -g pi-web-ui@latest in a visible terminal; restart the " +
+			"训推引擎组 Harness service afterwards to take effect (pi-web-ui server restart).",
 	updatesAllTitle: "Component updates",
 	updatesAllBadge: "{n} updates",
 	updatesAllUpToDate: "All components up to date",
@@ -2033,15 +2045,19 @@ export const en: Record<keyof typeof zh, string> = {
 	updateAllTabTitle: "Update all components",
 	piCoreSplitRun: "service runs v{running}",
 	piSdkSplitNote:
-		"This service runs pi v{running}; a newer global pi v{installed} is installed. Restart the service to catch up (the newest copy is followed by default); PI_WEB_SDK=bundled pins the bundled copy — upgrading pi-web-ui refreshes it too.",
+		"This service runs pi v{running}; a newer global pi v{installed} is installed. " +
+			"Restart the service to catch up (the newest copy is followed by default); " +
+			"PI_WEB_SDK=bundled pins the bundled copy — upgrading 训推引擎组 Harness refreshes it too.",
 	piSdkBundledNote:
-		"Currently using the bundled pi engine v{running} (updated with pi-web-ui). Install the global engine and restart the service to switch to it (the newest copy is followed by default).",
+		"Currently using the bundled pi engine v{running} (updated with 训推引擎组 Harness). " +
+			"Install the global engine and restart the service to switch to it (the newest copy is followed by default).",
 	installGlobalEngineBtn: "Install global engine",
 	installGlobalEngineTabTitle: "Install global pi engine",
 	restartService: "Restart service",
 	restartingService: "Restarting…",
 	restartServiceTip:
-		"Restart the pi-web-ui service ({name}): this instance is supervised (launchd/systemd/Windows watchdog), so it comes back automatically and the page reconnects — run it after an update",
+		"Restart the 训推引擎组 Harness service ({name}): this instance is supervised " +
+			"(launchd/systemd/Windows watchdog), so it comes back automatically and the page reconnects — run it after an update",
 
 	/* right panel */
 	computer: "This PC",
@@ -2146,7 +2162,9 @@ export const en: Record<keyof typeof zh, string> = {
 	notifyInsecure:
 		"This address is not a secure context (plain http on a non-localhost host), so the browser withholds the notification API — open the app via 127.0.0.1 or HTTPS.",
 	notifyWindowsHint:
-		"Windows adds an OS-level gate: allow the browser (or the installed pi-web-ui app) under Settings → System → Notifications and turn off Focus assist, otherwise toasts stay silent; closing the window also ends the process, so nothing can be delivered after that.",
+		"Windows adds an OS-level gate: allow the browser (or the installed 训推引擎组 " +
+			"Harness app) under Settings → System → Notifications and turn off Focus assist, " +
+			"otherwise toasts stay silent; closing the window also ends the process, so nothing can be delivered after that.",
 	notifyTest: "Send test notification",
 	notifyTestBody:
 		"If you can see this OS notification, both the browser and Windows are letting notifications through.",
@@ -2172,7 +2190,7 @@ export const en: Record<keyof typeof zh, string> = {
 	settingsNotifyTab: "Notifications",
 
 	/* pi setup modal */
-	setupTitle: "Harness · First-time setup",
+	setupTitle: "训推引擎组 Harness · First-time setup",
 	setupDesc:
 		"Just enter your own One API key: the Baidu One API provider (oneapi) is preselected and its Base URL is prefilled as https://oneapi-comate.baidu-int.com/v1, no change needed. The key stays on this machine; it is never committed or sent elsewhere.",
 	installFailed: "✖ pi agent installation failed:",
@@ -2523,7 +2541,8 @@ export const en: Record<keyof typeof zh, string> = {
 	goalBarOpenExecTip:
 		"Open the executor conversation (also reachable from the left panel; messages sent here while executing are forwarded to the executor)",
 	goalBarStaleBackend:
-		"⚠️ Stale server build (process not restarted): goal mode 2.0 will not take effect — restart the pi-web-ui service",
+		"⚠️ Stale server build (process not restarted): goal mode 2.0 will not take effect — " +
+			"restart the 训推引擎组 Harness service",
 	goalBarStop: "Stop goal (also stops the executor conversation)",
 	goalBarReviewing: "Reviewing…",
 	goalBarExecuting: "Executing…",
@@ -2898,7 +2917,8 @@ export const en: Record<keyof typeof zh, string> = {
 		"On: hide the assistant message header row (role · model · time) and tighten message spacing for a more compact conversation flow; Off: keep the default header",
 	projectTitle: "Show project name in title",
 	projectTitleDesc:
-		"On: the browser tab title becomes “<project folder> — pi-web-ui” and updates when you switch projects (handy with several tabs open); Off: always show the app name",
+		"On: the browser tab title becomes “<project folder> — 训推引擎组 Harness” and " +
+			"updates when you switch projects (handy with several tabs open); Off: always show the app name",
 	terminalBashTakeover: "Terminal-backed bash",
 	terminalBashTakeoverDesc:
 		"This switch decides whether bash is overridden to a terminal version: OFF = native SDK bash (process spawn, no terminal); ON = runs in a visible terminal, where the persist parameter decides (on top of the switch) one-shot (false — process exits when the command finishes, output retained) vs persistent (true — shell state retained across calls, silent commands move to the background and notify the AI)",
@@ -3122,7 +3142,7 @@ export const en: Record<keyof typeof zh, string> = {
 
 	/* app */
 	loadingSession: "Loading session…",
-	connectingServer: "Connecting to pi-web-ui server…",
+	connectingServer: "Connecting to 训推引擎组 Harness server…",
 
 	/* language packs (downloadable) */
 	localePacks: "Language packs",
