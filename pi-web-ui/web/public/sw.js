@@ -90,8 +90,6 @@ function assetContentOk(requestUrl, response) {
 	return true;
 }
 
-const cachedOrError = (fallback) => fallback || Response.error();
-
 self.addEventListener("fetch", (event) => {
 	const { request } = event;
 	if (!isCachable(request)) {
@@ -143,7 +141,7 @@ self.addEventListener("fetch", (event) => {
 						}
 						return response;
 					})
-					.catch(() => caches.match(request).then(cachedOrError));
+					.catch(() => caches.match(request).then((fallback) => fallback || Response.error()));
 			}),
 		);
 	}

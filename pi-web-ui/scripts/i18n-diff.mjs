@@ -326,7 +326,7 @@ function parseEntries(block) {
 			break;
 		}
 	};
-	for (;;) {
+	while (true) {
 		skipWS();
 		if (i >= n) {break;}
 		let key;

@@ -107,9 +107,7 @@ async function main() {
 					<div class="msg msg-assistant">
 						<div class="msg-role">Assistant</div>
 						<div class="msg-body md">
-							<p>已为你设计了<strong>极光微晶流体着色器（Aurora Micro-Crystal Shader）</strong>！\
-我们在高分屏下启用了 <strong>1:1 原生物理像素渲染</strong> 与 <strong>MSAA 4x</strong> 抗锯齿，\
-即使在强动态壁纸背景下，多层立体防眩光阴影也能保证文字极其清晰醒目：</p>
+							<p>已为你设计了<strong>极光微晶流体着色器（Aurora Micro-Crystal Shader）</strong>！我们在高分屏下启用了 <strong>1:1 原生物理像素渲染</strong> 与 <strong>MSAA 4x</strong> 抗锯齿，即使在强动态壁纸背景下，多层立体防眩光阴影也能保证文字极其清晰醒目：</p>
 							<pre><code>// 片段着色器：极光流体微光模拟
 precision highp float;
 uniform vec2 u_resolution;

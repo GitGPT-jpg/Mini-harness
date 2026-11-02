@@ -93,8 +93,7 @@ async function loadOpenCc(repoRoot) {
 
 		const glossaryPath = join(repoRoot, 'scripts/zh-tw-locale/glossary.mjs');
 		const manualPath = join(repoRoot, 'scripts/zh-tw-locale/manual.json');
-		const twRules = existsSync(glossaryPath)
-			? await import(pathToFileURL(glossaryPath).href) : { pre: [], post: [] };
+		const twRules = existsSync(glossaryPath) ? await import(pathToFileURL(glossaryPath).href) : { pre: [], post: [] };
 		const twManual = existsSync(manualPath) ? JSON.parse(readFileSync(manualPath, "utf8")) : {};
 
 		const twBase = OpenCC.Converter({ from: 'cn', to: "twp" });
@@ -171,9 +170,7 @@ export async function syncLocales(options = {}) {
 	const extraEn = en.order.filter((k) => !zhSet.has(k));
 	if (missingEn.length > 0) {
 		warnings.push(
-			`web/src/i18n.tsx 中 en 缺少 ${missingEn.length} 个 key：${missingEn.slice(0, 5).join(', ')}${
-				missingEn.length > 5 ? "…" : ""
-			}`,
+			`web/src/i18n.tsx 中 en 缺少 ${missingEn.length} 个 key：${missingEn.slice(0, 5).join(', ')}${missingEn.length > 5 ? "…" : ""}`,
 		);
 	}
 	if (extraEn.length > 0) {
@@ -185,9 +182,7 @@ export async function syncLocales(options = {}) {
 		const orderMismatch = zhKeys.findIndex((k, idx) => en.order[idx] !== k);
 		if (orderMismatch !== -1) {
 			warnings.push(
-				`web/src/i18n.tsx 中 zh 与 en 键顺序在第 ${orderMismatch + 1} 项错位（zh: "${
-					zhKeys[orderMismatch]
-				}", en: "${en.order[orderMismatch]}"）`,
+				`web/src/i18n.tsx 中 zh 与 en 键顺序在第 ${orderMismatch + 1} 项错位（zh: "${zhKeys[orderMismatch]}", en: "${en.order[orderMismatch]}"）`,
 			);
 		}
 	}
@@ -245,8 +240,7 @@ export async function syncLocales(options = {}) {
 				if (pack.code === "zh-TW") {
 					newStrings[k] = opencc ? opencc.tw(zhVal, k) : applyRules(applyRules(zhVal, COMMON_S2T), PUNCT_RULES);
 				} else if (pack.code === "zh-Hant") {
-					newStrings[k] = opencc
-						? opencc.hant(zhVal) : applyRules(applyRules(zhVal, COMMON_S2T), PUNCT_RULES);
+					newStrings[k] = opencc ? opencc.hant(zhVal) : applyRules(applyRules(zhVal, COMMON_S2T), PUNCT_RULES);
 				} else if (pack.code === 'zh-HK') {
 					newStrings[k] = opencc ? opencc.hk(zhVal) : applyRules(applyRules(zhVal, COMMON_S2T), PUNCT_RULES);
 				} else {
