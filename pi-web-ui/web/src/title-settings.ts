@@ -2,8 +2,8 @@
 /**
  * 浏览器标题显示项目名开关（纯前端 localStorage，不经过 server）。
  *
- * - 默认开启：标题为 `<工作目录文件夹名> — pi-web-ui`，切项目（set_cwd）即时更新。
- *   如需固定应用名，可在设置面板手动关闭。
+ * - 默认关闭：标题固定为应用名「训推引擎组 Harness」。
+ *   在设置面板开启后标题为 `<工作目录文件夹名> — 训推引擎组 Harness`，切项目（set_cwd）即时更新。
  * - normalize/load/projectNameFromCwd 为纯函数，可单测（tests/unit/title-settings.test.ts）。
  *
  * 与 chat-width-settings.ts 同构：都是"只影响浏览器端呈现"的偏好，
@@ -19,7 +19,7 @@ interface TitleSettings {
 	projectName: boolean;
 }
 
-export const DEFAULT_TITLE_SETTINGS: TitleSettings = { projectName: true };
+export const DEFAULT_TITLE_SETTINGS: TitleSettings = { projectName: false };
 
 /** 规整设置值：非对象 / 字段类型错误一律回退默认值。 */
 export function normalizeTitleSettings(raw: unknown): TitleSettings {

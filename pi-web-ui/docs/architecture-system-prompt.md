@@ -1,12 +1,13 @@
 # 系统提示词组成与组合模板（compose）
 
 > 本文档说明 SDK（`@earendil-works/pi-coding-agent`）如何组装最终发给模型的系统提示词，
-> 以及 pi-web-ui 的「组合模板」如何让你**自由组合**这些来源、**单独覆盖**其中任意一层。
+> 以及当前服务仍保留的组合模板、来源覆盖和 pi 扩展链。系统提示词设置分区已从界面移除，
+> 但存储字段和运行时组装仍有效，不能随设置预设分享一起删除。
 > 事实源：SDK `dist/core/system-prompt.js`（`buildSystemPrompt`）、`dist/core/resource-loader.js`
 > （`discoverSystemPromptFile` / `loadProjectContextFiles` / override 重放）、
 > `dist/core/agent-session.js`（`_rebuildSystemPrompt`）、`dist/core/extensions/runner.js`
 > （`before_agent_start` 链式替换）；pi-web-ui 侧在 `server/prompt-composer.ts`（纯函数引擎）、
-> `server/agent-service.ts`（集成）、`web/src/components/SettingsModal.tsx`（设置 UI）。
+> `server/prompt-assembler.ts`、`server/persona-chain.ts` 与 `server/agent-service.ts`（集成）。
 
 ## 一、总览：最终提示词的组装顺序
 
@@ -62,7 +63,7 @@
         - 覆盖优先：overrides[token] 非空白 → 用之；否则 texts[token]
         - 未知 token 保留原文（UI 可提示 typo）
         - 自动内容为空的 token（如非 win32 的 {{persona}}）展开为空串
-    DEFAULT_PROMPT_TEMPLATE / PROMPT_TOKENS 供设置 UI（token 插入、恢复默认）。
+    DEFAULT_PROMPT_TEMPLATE / PROMPT_TOKENS 定义默认模板和可组合来源。
     单测：tests/unit/prompt-composer.test.ts。
 
 ## 五、运行时集成（server/agent-service.ts）
@@ -88,12 +89,12 @@
         行为（pre/post 为空），绝不把整段提示词翻倍。完全默认（未自定义）时主会话仍
         返回 undefined，扩展的改动原样生效。
         纯函数 splitExtensionWrap 在 prompt-composer.ts，单测见
-        tests/unit/prompt-composer.test.ts；设置面板预览不跑扩展，因此预览与真实 run
+        tests/unit/prompt-composer.test.ts；settings_state 中的预览不跑扩展，因此预览与真实 run
         会相差这部分扩展增补。
     设置改动无需 reload 即可在下一个 run 生效（逐 run 读取 settingsSvc）；
     session.reload() 仅用于让 loader 侧（默认分支/技能过滤等）同步。
-    设置面板预览（settings_state.effectiveSystemPrompt）：用当前会话资源
-        走同一渲染函数 —— 与真实 run 一致（只读查看）。
+    settings_state.effectiveSystemPrompt：用当前会话资源走同一渲染函数，
+        不包含 before_agent_start 中临时追加的扩展内容；当前设置面板不提供预览入口。
 
 ## 六、设置与迁移
 
@@ -103,20 +104,15 @@
     旧存档迁移（getSettings）：customSystemPrompt 非空时 —
         append → 文字成为 {{append}} 覆盖（独立追加块）
         replace → 文字成为 {{soul}} 覆盖
-    遗留字段 promptMode/customSystemPrompt 保留在数据结构里（DSH 子系统与旧预设
-    共用同一份 client-state 存储，见 dsh-agent-service.ts），主会话 UI 不再使用。
-    预设（SettingsPreset）新增捕获 promptTemplate/promptOverrides，应用时旧预设
-    缺字段保留当前值。
+    遗留字段 promptMode/customSystemPrompt 仍保留在数据结构与迁移逻辑中。
+    当前已删除设置预设的保存/应用/导入导出，不再有 SettingsPreset 捕获链路。
 
-## 七、设置 UI（SettingsModal → 「系统提示词」页）
+## 七、界面边界
 
-    组合模板编辑框（{{token}} 可任意排序/穿插文字；placeholder = 默认模板）
-    一键插入 token 的 chips
-    每来源覆盖行：token + 说明 + 覆盖输入框（留空 = 自动）
-        单来源「恢复默认」按钮（清空该覆盖）
-    整体「恢复默认模板并清空所有覆盖」按钮
-    「查看当前完整提示词」只读预览 = 组合渲染结果
-    文案键：promptTok_<token> / promptTok_<token>_desc（zh/en 同步）
+原 SettingsModal「系统提示词」页已删除。已存 promptTemplate/promptOverrides 仍由
+settings-service 读取，运行时继续组装；不要把保留的协议字段误当作当前可点击的设置入口。
+`server/prompt-composer.ts` 的 BUILTIN_SOUL / BUILTIN_SOUL_ZH 是本发行版的领域默认文案。
+直接编辑数据目录的 client-state.json 前应停止对应服务，避免被内存态回写覆盖。
 
 ## 八、与子代理模板的关系
 
@@ -131,9 +127,9 @@
     派发会话当前强度（session.thinkingLevel）。两者都在换模型之后套用，
     setThinkingLevel 会按模型能力收敛（reasoning:false → off，xhigh/max 需
     thinkingLevelMap），不传 persist，只影响该子代理会话。
-    内置模板在 server/subagent-templates.ts 的 DEFAULT_TEMPLATES（含 oh-my-pi
-    specialist 系列：oracle/librarian/explore/metis/momus/multimodal-looker/
-    sisyphus-junior）；老用户已有文件时缺失的内置模板一次性补齐（sidecar
+    内置模板在 server/subagent-templates.ts 的 DEFAULT_TEMPLATES：
+    review / implement / explore / harness-runner / prefill-opt / cache-adapt /
+    cache-loss / hitrate-debug；老用户已有文件时缺失的内置模板一次性补齐（sidecar
     subagent-templates.seeded.json 记已播种名单，删后不再复活）。
     繁中视图：resolveServerLang 把 zh-TW/zh-HK/zh-Hant 都折成 "zh"，繁中用户
     会拿到简体。localizeTemplate 按**原始 locale**（isTraditionalLocale）在内置
@@ -157,15 +153,14 @@
             填进 PromptComposerInputs.skills[].content；{{skills}} 对名单技能按全文格式展开。
     名单由 before_agent_start 逐 run 实时读取：改完下一轮即生效，不走
     session.reload()（settings-service needsReload 不含它们）；设置预览
-    （sessionPromptSnapshot）走同一逻辑。DSH 引擎只透传存储值（切回 pi 生效）。
-    预设捕获名单（旧预设缺字段保留当前值）。
+    （sessionPromptSnapshot）走同一逻辑。当前只有 pi 运行路径。
 
 ## 相关源码定位
 
     - pi-web-ui：server/prompt-composer.ts（token/引擎/默认模板）、
       server/agent-service.ts（override + 内联扩展 + 渲染预览）、
       server/settings-service.ts / client-state.ts（设置持久化与迁移）、
-      server/protocol.ts（UiSettingsState 字段）、web/src/components/SettingsModal.tsx
+      server/protocol.ts（UiSettingsState 字段）
     - SDK：dist/core/system-prompt.js（buildSystemPrompt 默认拼装）、
       dist/core/resource-loader.js（SYSTEM.md / 上下文收集 / override 重放）、
       dist/core/extensions/runner.js（before_agent_start 链式替换）

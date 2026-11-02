@@ -1,5 +1,15 @@
 # 目标模式 2.0 设计：把「目标审查」变成对话
 
+> **当前源码入口（2026-11-02 核对）**：`TaskModal.tsx` 的「仅模型评审」经
+> `set_goal_prefs` / `set_goal` 进入 GoalService；「帮我细化」走 `start_goal_wizard`。
+> GoalBar 显示运行进度，任务台展示目标历史；暂停/继续在服务端作废代次并重做中断轮。
+> 当前仅 pi，系统提示词组装、permissionPreset 和 GoalService 审查硬闸门仍保留。
+> 代码验收任务走独立的 `server/loop/extension.ts`（createLoopRun），详见 [交接文档](../../HANDOFF.md)。
+>
+> **以下为上游设计与实施沿革**：§0–10 是当时的提案/背景，§11 是当时逐步实施的记录。
+> 文中“今天/本次”、旧行号、DSH/插件、已删除设置页和测试数量均属历史语境，不是当前功能清单。
+> 未实施方案与已移除路径只用于解释决策；当前目录入口以 [目录索引](directory-reference.md) 为准。
+
 > **状态**：**已实施，且只剩一条路径**。目标模式 2.0 = 服务端驱动 + 执行对话干活 + **当前对话当审查者**（本文的 Plan A，下文简称「执行对话模式」）。v1 的隐藏隔离审查会话与自治标记路径（`runGoalReview` / `isAutonomous` / `GOAL_COMPLETION_RE`）已按产品决策**删除**；Plan B（审查者=角色子代理）与 `reviewMode` 开关**不再实现**。实施细节与偏差见 §11。
 > 关联：#385（AI 提炼超时，已有 PR #386 待合）、#389（Goal & Plan，本设计可与之 Phase 1 合流）。
 > **修订记录**
@@ -11,7 +21,7 @@
 
 ---
 
-## 0. 现状与痛点
+## 0. 历史背景与痛点
 
 今天的「目标模式」是一条**单向的、服务端编排的自动化流水线**：
 
@@ -67,7 +77,7 @@ GoalBar 设目标
 | **`steerSubagent` = `sendUserMessage(msg, isStreaming ? {deliverAs:"steer"} : undefined)`** —— 对**已完成**的子代理发消息就是开启新一轮                                                    | `agent-service.ts:2999-3002`                                   | 「审查不通过就让执行者改」天然成立                                                                                                                          |
 | ❗ **`steerSubagent` 对已消失的会话静默 no-op**（`if (!conv?.session) return;`），`subagent_get_result` 才会明确报 not found                                                               | `agent-service.ts:2999`、`subagents.ts:316-330`                | 循环每步**必须先查存在性**，否则会「以为已派单、实际没人做」而空转到熔断                                                                                    |
 | ❗ **`subagent_get_result` 没有 `view` 参数**（v1 写错了）；它只返回 snapshot 的 `output`，而 `output = getLastAssistantText()`（最后一条 assistant 文本）                                 | `subagents.ts:297-357`、`agent-service.ts:2614`                | 想让审查者读执行者细节，要用 **`conversation_read`**（`view: chat/full`、`maxChars ≤ 60000`，`conversation-read-tool.ts:228/327`），并支持按 live convId 读 |
-| `subagent` 工具 `wait_all` 阻塞上限 = `max(min(60s, 0.8×工具看门狗), 5s)`，超时返回未完成清单（禁轮询）                                                                                                    | `subagents.ts:42-45, 476-560`                                  | 这是**模型**的等待旋钮；服务端自己的等待必须事件驱动（§4.4）                                                                                                |
+| `subagent` 工具 `wait_all` 阻塞上限 = `max(min(60s, 0.8×工具看门狗), 5s)`，超时返回未完成清单（禁轮询）                                                                                    | `subagents.ts:42-45, 476-560`                                  | 这是**模型**的等待旋钮；服务端自己的等待必须事件驱动（§4.4）                                                                                                |
 | 子代理模型优先级：显式 `model` > 模板 `model` > 设置面板 `subagentDefaultModel` > 跟随派发会话当前模型；思考强度同理                                                                       | `agent-service.ts:2494-2545`                                   | 角色模型偏好的默认值链条已存在                                                                                                                              |
 | `SubagentTemplate` 只有 `systemPrompt / enabledSkills / enabledExtensions / model / thinkingLevel / enabled` —— **没有工具白名单**                                                         | `subagent-templates.ts:36-61`                                  | 只读改走 `permissionPreset` + 扩展白名单（§1-5），不改模板结构                                                                                              |
 | 子代理 `bindExtensions` 用 `WebUIContext.headless()`：UI 输出丢弃、**弹窗按取消返回**                                                                                                      | `agent-service.ts:2477-2487`                                   | 角色对话**不能向用户提问**，契约必须明令禁止（否则拿到「取消」后卡死）                                                                                      |
@@ -460,7 +470,7 @@ export interface GoalStatus {
 - **「中止 / 关闭就是停止」**：`waitRoleAgent` 返回 `canceled`（子代理被 ⏹/abort）或 `gone`（对话被移出 / 服务重启）时，循环**立即收束**，不再 steer 下一轮；只有 `error` / `timeout`（可恢复的失败）才在预算内进下一轮。停掉后 GoalBar 的「■ 停止目标」随时可点。
 - **折叠态只是一枚药丸，不是面板**：收起时 `GoalBar` 只渲染 `.goalbar-collapsed`（**刻意不带 `.goalbar` 类**）—— `.goalbar` 那套边框/底色/圆角/内边距在收起时全是多余，主题再用 `.goalbar { border-top: … !important }` 一画，就是一条横跨整列的带子横在最后一条消息上把它切断（实报「折叠时一整行遮挡底部消息」）。药丸行自带 `min-width:0` + `max-width:100%` + `overflow:hidden`，插件往 pill 行贡献条目也顶不宽。守卫：`tests/unit/goalbar-collapsed-pill.test.ts`。
 
-### 11.4 验证状态（本次本地实施）
+### 11.4 历史验证记录（当时本地实施，未在本次复跑）
 
 - `npm run check:protocol` ✓ · `tsc -p tsconfig.server.json` ✓ · `oxlint`（改动文件零告警）✓ · `prettier --check` ✓
 - `vitest run`：3082 passed（含 delegated 单测 11 例）；`goal-test` / `goal-prefs-test` / `goal-delegated-test` 冒烟全绿
@@ -492,10 +502,10 @@ export interface GoalStatus {
 | B9    | **审查者输入补齐「执行者到底跑了什么」（#543 §1）**：新模块 `server/goal-evidence.ts`（纯函数 `collectToolEvidence` / `formatEvidenceDigest` / `sessionMessagesOf` / `buildEvidenceDigest`，单测 `goal-evidence.test.ts`）；`GoalHost` 新增**可选** `readRoleEvidence(convId)`（`agent-service` 用执行者会话最近的 `bashExecution` / `toolResult` 生成：工具名 + 参数提示 + 输出尾部，单条 400 字符、整段 6000 字符封顶，超出丢最早并标注）；`reviewerRoundPrompt` 在「执行者本轮自述」后注入证据段 —— 缺席 / 读失败 = 不注入（老 host、fake host 零改动）                                                                                                                                                                                                 | `goal-evidence.ts`、`goal-service.ts`、`agent-service.ts`                                                       |
 | B10   | **判定口径四条 + 空 feedback 兜底（#543 §2/§3）**：审查契约（中英双模板）内置「只判本轮**声称完成**的条目 / 未声称的后续阶段不构成 fail / 忽略与目标无关的本地改动 / 无命令或文件证据必须 fail 并点名缺哪条输出 / feedback 不得为空」；`ensureReviewerFeedback` 统一在 verdict 落地处兜底（fail 且上一轮有意见 → 沿用并标注，两轮都空 → 给可执行的失败说明，pass 且无说明 → 不编造理由只补中性标注），审查结论卡与下一轮执行者提示词共用同一份文案。回归：`goal-delegated.test.ts` E1–E5                                                                                                                                                                                                                                                                   | `goal-service.ts`                                                                                               |
 
-### 11.5 已知遗留 / 后续
+### 11.5 当时记录的遗留 / 后续（非当前待办清单）
 
 1. **审查者只读门禁未启用**（D2 的一半）：主对话是用户自己的会话，审查回合靠契约「只读核实」约束，没有临时改它的 `permissionPreset`。要硬门禁需实现「按 convId 设权限」（§4.4 已列该回调）。
 2. **过户（takeover）**：执行对话随父对话搬（`collectSubagentDescendantIds`），但 `goal` 状态不搬 → 新持有方需重设目标；未做自动续跑。
 3. **服务重启**：goal 状态是内存态（重启即丢）；执行对话**已落盘**，转录可在历史里回看，但循环不会自动续跑。
 4. **计划联动（#389 Phase 1）**：已完成（见 B8，审查契约带 `describePlan`、向导产出带步骤看板）。
-5. **DSH 引擎**：仍是它自己那套目标实现（模型自判定 + round-driver），未接入执行对话模式；设置里的 `reviewPrompt` 对它仍然有效。
+5. **DSH 引擎（历史）**：当时有独立目标实现，未接入执行对话模式；该引擎现已删除，此项关闭。

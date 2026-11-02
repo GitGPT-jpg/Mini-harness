@@ -1,74 +1,59 @@
-# pi-web-ui
+# 训推引擎组 Harness
 
-[English](https://github.com/xing-shuyin/pi-web-ui/blob/main/README.md) | **简体中文** · [繁體中文](https://github.com/xing-shuyin/pi-web-ui/blob/main/README.zh-TW.md) · 🌐 [**官方网站**](https://xing-shuyin.github.io/pi-web-ui-site/) · 📖 [**详细文档中心**](https://xing-shuyin.github.io/pi-web-ui-site/docs.html)
+[English](README.md) | **简体中文** · [繁體中文](README.zh-TW.md) · [Harness 仓库指南](../README.md)
 
-[![npm 版本](https://img.shields.io/npm/v/pi-web-ui?color=cb3837&logo=npm)](https://www.npmjs.com/package/pi-web-ui)
-[![Node.js](https://img.shields.io/node/v/pi-web-ui?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-> 打开浏览器，完成所有工作 —— 面向 AI 编码智能体的全功能 Web 驾驶舱（对话、代码、文件树、终端、Git 尽在一屏）。
+> 基于 pi 与 Baidu One API、面向推理工程任务的浏览器驾驶舱。
 
-pi-web-ui 是基于 pi 智能体 SDK（`@earendil-works/pi-coding-agent`）与 DeepSeek Harness (DSH) 的现代 Web 界面与桌面端工作台。它将本地命令行智能体转化为具备丰富可视化、多任务并发、完整文件与终端交互的一站式编程座舱，并原生支持直接打开与协同远程 SSH 服务器项目。
+本目录是**训推引擎组 Harness（mini-harness）** 的定制驾驶舱源码，源自 [xing-shuyin/pi-web-ui](https://github.com/xing-shuyin/pi-web-ui) v0.111.0，使用 pi 智能体 SDK（`@earendil-works/pi-coding-agent`）与 Baidu One API。请通过当前仓库根目录的 [setup.sh](../setup.sh) 安装；上游 npm 包和发行版不包含这些定制。来源记录见 [PROVENANCE.md](PROVENANCE.md)。
 
 ---
 
-## 🌟 全面功能特性
+## 当前 Harness 能力
 
 ### 💬 智能对话与交互体验
 
 - **快照驱动与毫秒级流式响应**：基于 WebSocket 的快照增量推流，思考链（Thinking/Reasoning）、工具调用状态、执行耗时与终端输出实时呈现。
 - **人机协同结构化问卷 (`ask_user_question`)**：模型可主动向用户发起结构化问卷（单选/多选/富文本选项/自由输入），以优雅对话框展示；支持超时豁免与页面刷新自动恢复。
-- **网页元素交互 (`Page Picker`)**：配套 Chrome 浏览器扩展，一键在真实网页中点选 DOM 元素，将视觉快照与精确选择器无缝带入对话供智能体分析。
 - **并发多会话与独立运行态**：单项目支持多对话并行执行，后台会话持续运行；支持对话分支重问（Fork）、排队消息撤回（↩）与会话过户。
-- **丰富对话辅助**：全局斜杠命令 picker（`/new`、`/model`、`/compact` 等）、一键提示词模板库、上下文压缩卡片、报错自动重试与桌面声音提醒。
+- **对话辅助**：斜杠命令、推理提示词模板、上下文压缩卡片、报错自动重试与桌面通知。
 
-### 📁 工作区、多模态与 🌐 远程 SSH 项目
+### 本地工作区与成果
 
-- **多根工作区（Multi-Root）与丰富文件树**：支持主工作区及最多 8 个外部根目录，实时监控工作区变动与快速文件过滤；配备全功能文件右键菜单，支持一键在资源管理器中显示、作为新项目/工作区根打开、整目录打包压缩并下载、路径一键链接到对话等。
-- **🌐 远程 SSH 服务器项目**：支持直接打开远程 Linux 服务器项目（`ssh://user@host:port/path`）：
-  - **凭据与连接**：支持密码、SSH 私钥（`~/.ssh/id_rsa` / `id_ed25519`）及 SSH-Agent，配置经 AES-256-GCM 本地加密保存；
-  - **远端环境探针**：自动探测远程 OS 架构及 Git/Node/Bash 依赖，缺失工具一键远程安装；
-  - **无缝远端全栈开发**：SFTP 驱动的文件树浏览、在线预览与实时编辑（`Ctrl+S`）、AI 工具远端执行、交互式远程 PTY 终端；本地自动持久化对话记录。
-- **多功能富媒体文件预览**：支持语法高亮、Markdown 渲染、图片/音视频媒体播放，并在预览窗口中直接编辑与一键保存（`Ctrl+S`）。
-- **智能附件与多模态视觉桥（Vision Bridge）**：拖拽任意文件上传；对图片及文档自动转写为多模态视觉载荷，兼具纯文本引用模式与局部行截取。
+- **本地项目**：打开工作目录，将文件引用带入对话。后端保留多根工作区能力，原侧栏文件树已移除。
+- **文件预览与编辑**：浏览代码、Markdown 和图片，编辑本地文件，并将文件引用带入对话。
+- **连接集群**：通过集群按钮填写 kubeconfig，用 `kubectl cluster-info` 实测连接；K8s 访问说明见仓库指南。
 - **成果卡片呈现 (`present_files`)**：智能体产出的图表、报告、网页及编译产物自动生成交互式预览卡片，支持本地唤起与一键导出。
 
-### 💻 内置终端与 Git 源代码管理
+### 💻 内置终端与变更证据
 
 - **服务端 PTY 终端**：基于 node-pty 与 xterm.js，提供多标签页、全功能交互式终端，智能体可在可见的 `ai-bash` 终端中交互式执行命令。
-- **可视化 Git 驾驶舱**：代码变更一览无余，支持单文件 Diff 查看、Stage/Unstage 暂存、一键 Commit 提交、分支切换与快进合并（Fetch/Pull）。
+- **Git 与变更证据**：在终端执行 Git 命令，在任务详情查看运行记录中的 diff。原可视化 Git 面板已移除。
 - **终端样式与主题统一**：终端配色实时跟随选定主题，支持选择文本自动复制、拖拽文件直接粘贴路径。
 
-### 🤖 多引擎与模型灵活路由
+### pi 引擎与领域工作流
 
-- **多智能体引擎无缝热切换**：原生深度集成 pi 编码智能体 SDK、DeepSeek Harness (DSH) 引擎以及 Claude 官方智能体底座，支持零重启秒级切换引擎，不同标签页与会话可并发运行不同引擎。
-- **多服务商通用兼容**：支持 OpenAI、Anthropic (Claude)、Google Gemini、DeepSeek、Ollama、OpenRouter、Azure 等任意标准 API。
-- **零泄密凭据架构**：API Key 与敏感鉴权 Header 仅在服务端持久化并注入请求，绝对不下发至浏览器端。
-- **智能上下文预算与软上限**：动态注入软上限压缩阈值（Soft-Cap），配合 20 分钟死锁看门狗守护，避免会话卡死与 Token 浪费。
+- **仅 pi 引擎**：首次配置预选 Baidu One API，填写自己的 API Key，凭据保存在本机 `~/.pi/agent/auth.json`。
+- **统一任务入口**：「新任务」胶囊提供「代码验证 + 模型评审」「仅代码验证」「仅模型评审」三种验收方式。
+- **LLM loop**：适合开放式任务的 AI 自评循环；调研向导先收集需求，计划经用户确认后执行。
+- **代码 loop**：`intake → plan → run → validate` 状态落盘，支持 validator 门禁、迭代上限与断点续跑。可选 planner/reviewer 辅助制定和评审验收条件；reviewer 不能放行验证失败的任务。
+- **任务台**：查看进度、工具调用时间线、运行详情与成果，暂停、继续或停止任务。
+- **领域资源**：推理提示词模板、workflow 子代理、skills 和本地 `pi-llm-wiki` 知识库扩展，由根安装脚本配置。
+- **上下文管理**：工具按需延迟加载与上下文压缩，降低上下文开销。
 
-### 🧭 进阶代理协作模式
-
-- **硬围栏安全沙盒模式 (Sandbox Project)**：在受保护的独立副本中自由实验原型、执行破坏性命令或测试重构，一切修改绝不触碰原项目；支持从现有项目快照克隆或建立纯净空白沙盒，提供临时（用完即删）与永久双重生命周期。
-- **目标模式 2.0 (Goal Mode)**：主会话担任审查者（Reviewer），服务端自动编排后台落盘执行者（Executor）；具备执行证据注入与停滞熔断机制。
-- **审查者委派模式 (Delegate Mode)**：主会话专注规划与审查，Prompt 自动委派至常驻执行对话，写操作实施硬闸门拦截。
-- **计划模式 (Plan Mode)**：目标条一键开启「只规划」模式，硬闸门动态拦截写工具与大段代码倾倒，确认计划后一键转入实施。
-- **子代理系统 (Subagents)**：支持后台派发多角色并行子代理，内置标准化模板体系与独立会话隔离。
-
-### 🧩 插件生态与高度可扩展性
-
-- **官方插件市场与一键安装**：内置应用市场，覆盖通讯机器人（飞书/钉钉/微信/Slack/Discord）、数据库客户端、Mermaid 流程图、Office 预览等扩展。
-- **33+ 宿主 UI 扩展插槽**：提供灵活的 UI 插槽体系，支持插件注入侧边栏、顶栏、底栏、浮层及快捷工具。
-- **工具按需延迟加载 (Lazy Loading)**：保持模型 Prompt Cache 前缀硬约束的前提下，按需挂载工具能力，降低上下文开销。
-- **预设安全分享**：支持设置与环境的一键导出/导入，具备严格白名单字段净化。
+插件运行时与市场、MCP 集成、设置预设分享、Page Picker、Electron/便携桌面发行版及多引擎切换已移除。当前 Harness 配置关闭远程 SSH 工作区、Sandbox、Delegate、Plan 和子代理原生 UI 入口。
 
 ### 🎨 主题与无缝多语言
 
-- **25+ 套内置调色板与壁纸引擎联动**：内置深色、浅色、Cyberpunk、Dracula 等丰富主题，支持自定义 CSS 热重载；深度支持 **Wallpaper Engine** 动态壁纸库插件，界面透明度、毛玻璃模糊度、自动轮播与音乐频谱随心定制。
+- **内置主题**：提供深浅色主题，终端配色随主题变化。
 - **全界面国际化**：内置简体中文、繁體中文（台灣/香港/通用）、English 等语言支持，语言包自动回落。
 
 ---
 
-## 🖼️ 界面预览
+## 上游历史截图与视频
+
+以下媒体保留作上游参考，展示的是原始 pi-web-ui，包含当前已移除或关闭的桌面、多引擎、沙盒和壁纸功能，不代表当前 Harness 的功能范围。
 
 ### 🎬 演示视频
 
@@ -108,65 +93,62 @@ pi-web-ui 是基于 pi 智能体 SDK（`@earendil-works/pi-coding-agent`）与 D
 
 ## 📦 安装方式
 
-### 环境要求
+### 环境要求与推荐安装
 
-- **Node.js**：`>= 22.19.0`（便携版除外，便携版免装 Node.js 与 Git）
-- 支持系统：Linux、macOS、Windows（或 Android Termux）
+- macOS / Linux、**Node.js >= 22.19.0**、npm，可访问 npm 与 Baidu One API。
+- macOS 若需编译 `node-pty`，请先安装 Xcode Command Line Tools。
 
-### 1. npm 全局安装（推荐）
+克隆**当前 Harness 仓库**，将占位符替换为实际仓库地址：
 
 ```bash
-npm i -g pi-web-ui
+git clone <当前仓库地址> mini-harness
+cd mini-harness
+./setup.sh
 ```
 
-> **提示（npm ≥ 12）**：npm 12+ 默认阻止本地原生模块的编译脚本。`node-pty` 是终端原生模块，安装时请允许脚本执行：
->
-> ```bash
-> npm i -g --allow-scripts=node-pty,@google/genai,protobufjs pi-web-ui@latest
-> ```
+根安装脚本固定 pi 版本、构建驾驶舱并配置领域 skills、模型目录与知识库扩展；macOS 还会生成浏览器启动器。安装包与首次配置说明见[仓库指南](../README.md)。
 
-### 2. npx 免安装即时运行
+### Docker 容器部署（仅驾驶舱）
 
-无需预先安装，每次自动拉取最新版本启动：
+在当前检出的 `pi-web-ui/` 目录构建本地镜像。容器不执行根安装脚本，需要先准备 pi 配置与领域资源。以下配置挂载为只读，请先在宿主机配置好凭据。
+
+> **安全提示**：绑定 `0.0.0.0` 会把完整驾驶舱（对话、终端、文件读写）暴露给所有能访问该端口的人，部署前务必设置强口令 `PI_WEB_TOKEN`。
 
 ```bash
-npx pi-web-ui
-```
-
-### 3. 🖥️ Windows U 盘便携版（Portable Edition，开箱即用零依赖）
-
-专为随身携带（U 盘、移动硬盘）打造的完全自包含便携版：
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/xing-shuyin/pi-web-ui/main/assets/portable-edition.png" alt="Windows 便携版" width="100%" style="max-width: 800px; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.25);" />
-</p>
-
-- **[⬇️ 前往 Releases 下载 `pi-web-ui-desktop-<版本>-portable.zip`](https://github.com/xing-shuyin/pi-web-ui/releases/latest)**
-- **开箱即用 / 零开发环境依赖**：内置完整 PortableGit 与 bash/Linux 工具链，目标电脑**无需安装 Node.js、Git 或任何开发环境**。
-- **100% 数据隔离自包含**：所有配置、模型凭据（`auth.json` / `models.json`）、会话历史、插件与缓存统统存放在便携目录下的 `data/` 目录，完全不写入宿主机的注册表或用户目录，拔掉 U 盘不留任何痕迹。
-- **动态盘符自适应**：相对路径动态计算，换插不同电脑即使盘符变动也能直接运行。
-- **启动方式**：解压后双击根目录下的 **`启动Pi.bat`**（或 `PiPortable.bat`）；附带 `创建桌面快捷方式.bat` 可一键在宿主机桌面生成无黑框官方快捷方式。
-- **本地制作**：运行 `npm run desktop:portable:full` 即可在本地制作内置 Git 的完整便携版。
-
-### 4. 桌面客户端安装包（Electron 独立应用）
-
-偏好独立桌面窗口的用户可下载自动构建的安装程序：
-
-- **[⬇️ 前往 Releases 页面下载安装包](https://github.com/xing-shuyin/pi-web-ui/releases/latest)**
-- 提供 Windows 安装程序（`.exe`）、macOS（`.dmg`）及 Linux（`.AppImage`）。
-
-### 5. Docker 容器部署
-
-```bash
+docker build -t mini-harness-cockpit:local .
 docker run -d \
   --name pi-web-ui \
   -p 8787:8787 \
-  -v ~/.pi-web:/root/.pi-web \
-  -v ~/.pi/agent:/root/.pi/agent \
-  -v $(pwd):/workspace \
   -e PI_WEB_HOST=0.0.0.0 \
-  xing-shuyin/pi-web-ui:latest
+  -e PI_WEB_TOKEN=change-me \
+  -e PI_WEB_CWD=/workspace \
+  -e PI_CODING_AGENT_DIR=/pi-agent \
+  -v pi-web-data:/app/.pi-web \
+  -v ~/.pi/agent:/pi-agent:ro \
+  -v "$(pwd):/workspace" \
+  mini-harness-cockpit:local
 ```
+
+- `pi-web-data:/app/.pi-web` 持久化各客户端会话与 UI 状态（镜像已把 `PI_WEB_DATA_DIR` 设为 `/app/.pi-web`）。
+- `~/.pi/agent:/pi-agent:ro` 以只读方式挂载你的 pi 配置（`auth.json` / `models.json` / skills），经 `PI_CODING_AGENT_DIR` 指定。
+- `$(pwd):/workspace` + `PI_WEB_CWD=/workspace` 把你的项目挂载为智能体工作区。
+
+> **Compose 部署**：在 `pi-web-ui/` 自带的 `docker-compose.yml` 中设置强口令及项目/配置挂载，再运行 `docker compose up -d --build`（命名数据卷 + `restart: unless-stopped` 开机自启）。
+
+### 从源码构建
+
+完成安装后，从当前 Harness 仓库根目录执行以下命令，重新构建驾驶舱：
+
+```bash
+cd pi-web-ui
+npm ci
+npm run build
+npm start        # 启动编译产物，默认监听 http://127.0.0.1:8787
+```
+
+`npm start` 直接启动驾驶舱服务；日常使用 Harness 请使用下文的加固启动脚本。
+
+开发模式（热重载 `npm run dev`）见 [docs/development.md](docs/development.md)。
 
 ### 🐧 Linux 编译依赖说明
 
@@ -185,121 +167,35 @@ sudo pacman -S --needed base-devel python
 
 ## 🚀 启动与使用
 
-### 常用启动命令
+### 启动 Harness
+
+在仓库根目录运行：
 
 ```bash
-pi-web-ui                                 # 默认在当前目录启动，监听 http://127.0.0.1:8787
-pi-web-ui --port 9000 --cwd /path/to/repo # 指定端口与工作区目录
-pi-web-ui --no-browser                    # 启动服务但不自动弹出浏览器
+./pi-web-cockpit/start-hardened.sh
+# 可选：改用其他端口
+PI_WEB_PORT=9000 ./pi-web-cockpit/start-hardened.sh
 ```
 
-### 🌐 打开远程 SSH 服务器项目
+启动脚本默认监听 `127.0.0.1:8787`，固定使用随包 pi SDK，并启用 token 鉴权。macOS 可双击安装时生成的桌面启动器，自动携带 token 打开浏览器；命令行启动时，使用 `~/.pi-web/pi-web-token` 中的口令访问页面。
 
-可以通过两种方式直接协同远程服务器项目：
+首次打开时在配置对话框填写自己的 Baidu One API Key，默认 Base URL 为 `https://oneapi-comate.baidu-int.com/v1`。访问 K8s 时，通过集群按钮配置 kubeconfig。
 
-1. **界面操作**：在页面顶栏工作区下拉菜单中点击「切换目录」→ 切换到「远程 (SSH)」选项卡，输入服务器地址（如 `192.168.1.100`）、端口、用户名及密码/私钥，点击「连接并探测环境」，随后浏览并选定远程项目目录即可。已存配置会自动加密保存在本地配置列表中，下次一键连接。
-2. **命令行启动**：
-   ```bash
-   pi-web-ui --cwd ssh://ubuntu@192.168.1.100:22/var/www/my-project
-   ```
+### 更新与本地数据
 
-### 核心参数与环境变量
-
-| CLI 参数             | 环境变量          | 默认值      | 说明                                                                     |
-| :------------------- | :---------------- | :---------- | :----------------------------------------------------------------------- |
-| `--port <n>`         | `PI_WEB_PORT`     | `8787`      | HTTP 服务监听端口                                                        |
-| `--host <addr>`      | `PI_WEB_HOST`     | `127.0.0.1` | 监听地址（远程/局域网访问设为 `0.0.0.0`）                                |
-| `--cwd <dir>`        | `PI_WEB_CWD`      | 当前目录    | 工作区根（支持本地路径或 `ssh://user@host:port/path`）                   |
-| `--data-dir <dir>`   | `PI_WEB_DATA_DIR` | `~/.pi-web` | 数据目录（配置、插件、上传、主题等）                                     |
-| `--engine <pi\|dsh>` | `PI_WEB_ENGINE`   | `pi`        | 智能体引擎：`pi` 原生或 `dsh` (DeepSeek Harness)                         |
-| `--no-browser`       | —                 | 否          | 启动后不自动在系统浏览器中打开网页                                       |
-| _仅环境变量_         | `PI_WEB_TOKEN`    | 空          | 访问共享口令鉴权                                                         |
-| _仅环境变量_         | `PI_WEB_SDK`      | `global`    | 默认跟随祖先链上更新的 pi SDK（多份取最高）；设为 `bundled` 锁定自带副本 |
-
-### 后台守护服务管理 (`pi-web-ui server`)
-
-pi-web-ui 内置系统服务管理，免配开机自启（macOS launchd / Linux systemd / Windows 登录自启）：
-
-```bash
-pi-web-ui server install --port 9000 --cwd /path/to/project  # 安装并开机自启
-pi-web-ui server status                                    # 查看服务运行状态与连接数
-pi-web-ui server restart                                   # 重启后台服务
-pi-web-ui server stop                                      # 停止运行中的服务
-pi-web-ui server uninstall                                 # 彻底卸载系统服务
-```
-
-### 版本升级与卸载
-
-```bash
-# 升级到最新版
-npm i -g pi-web-ui@latest
-pi-web-ui server restart
-
-# 卸载程序（保留对话历史与配置数据）
-npm uninstall -g pi-web-ui
-```
+更新当前 Harness 仓库后，重新运行根目录 `./setup.sh` 并重启服务。会话与配置保存在 `~/.pi/agent/` 和 `~/.pi-web/`。安装、打包与维护说明见[仓库指南](../README.md)。
 
 ---
 
-## 🧩 插件生态与扩展
+## 文档与上游来源
 
-pi-web-ui 拥有完整的插件开发与扩展运行时：
+- [Harness 仓库指南](../README.md)：安装、首次配置、集群访问与打包。
+- [开发流程](docs/development.md)：本地开发与检查。
+- [来源记录](PROVENANCE.md)：上游版本及引入方式。
+- [上游 pi-web-ui](https://github.com/xing-shuyin/pi-web-ui)：原始项目，其产品文档描述上游功能范围。
 
-- **插件市场**：在网页端「设置」→「插件市场」一键搜索、安装与启用官方内置与社区贡献的插件。
-- **CLI 一键安装**：支持直接从 GitHub 仓库或本地目录安装插件：
-  ```bash
-  pi-web-ui install owner/repo
-  ```
-- **Page Picker 网页拾取器**：前往 [Releases](https://github.com/xing-shuyin/pi-web-ui/releases/latest) 下载 `page-picker-extension.zip`，解压后在 Chrome/Edge 的扩展程序中「加载已解压的扩展程序」即可使用。
+Harness 定制相关问题请在当前仓库反馈。
 
-### 🚀 欢迎提交第三方社区插件（全自动审核 · 秒级上线）
+## 开源许可证
 
-无论你开发了特色 AI 工具、自定义视图、第三方通讯机器人（飞书/企业微信/Telegram等）还是主题壁纸，都非常欢迎将插件提交至官方社区清单！
-
-- 📦 **社区插件清单官方仓库**：👉 [**xing-shuyin/pi-web-ui-plugins**](https://github.com/xing-shuyin/pi-web-ui-plugins)
-- 📖 **极简提交流程（支持网页端一键提交）**：
-  1. 准备你的开源插件 GitHub 仓库（包含合法的开源协议与 `manifest.json`）；
-  2. 访问并 Fork [xing-shuyin/pi-web-ui-plugins](https://github.com/xing-shuyin/pi-web-ui-plugins) 仓库；
-  3. 新建目录 `plugins/<你的插件id>/plugin.json` 并填写元数据（名称、来源、功能描述，可直接在 GitHub 网页端点击「Add file」完成）；
-  4. 发起 Pull Request 即可！
-
-#### 🌟 提交到官方社区清单的核心优势
-
-| 优势特性                               | 说明                                                                                                                                                                     |
-| :------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ⚡ **无人值守全自动合并 (Auto-Merge)** | 普通工具/视图插件（低风险）提交 PR 后，GitHub Actions 机器人即时触发全自动安全审计，**校验通过后机器人自动 Approve 并秒级自动合并**，无需等待人工排队审批。              |
-| 🌐 **全球客户端即时曝光上线**          | 本清单是 `pi-web-ui` 服务端的**出厂默认订阅源**。PR 一经合并，约 1 分钟内全球所有用户的「插件市场」便能直接搜索并一键安装你的插件，享受庞大的用户生态。                  |
-| 🛡️ **全流程安全审查与信誉背书**        | 提交以及后续的**每一次修改与更新**，CI 机器人均会自动执行严格的代码安全扫描（JSON Schema 校验、SVG 图标 XSS 过滤、敏感权限审查及原作者防冒用篡改保护），让用户放心安装。 |
-| 🧩 **独立目录架构零冲突**              | 采用 `plugins/<id>/plugin.json` 独立隔离设计，多位开发者同时提交或更新不同插件绝不产生 Git 合并冲突。                                                                    |
-
----
-
-## 📖 完整在线文档
-
-更详尽的进阶配置、部署方案与二次开发指南，请查阅官方文档中心：
-
-👉 **[前往详细文档中心 (Documentation Portal)](https://xing-shuyin.github.io/pi-web-ui-site/docs.html)**
-
-- 🌐 [官方主页与功能导览](https://xing-shuyin.github.io/pi-web-ui-site/)
-- 🌐 [远程 SSH 工作区与服务器配置指南](https://xing-shuyin.github.io/pi-web-ui-site/docs.html#remote-ssh)
-- 🖥️ [桌面便携版与定制制作手册](https://xing-shuyin.github.io/pi-web-ui-site/docs.html#portable)
-- 🛡️ [安全规范与反向代理部署 (Nginx / frp / SSL)](https://xing-shuyin.github.io/pi-web-ui-site/docs.html#reverse-proxy)
-- 🔌 [插件系统与 Plugin SDK 开发手册](https://xing-shuyin.github.io/pi-web-ui-site/docs.html#plugin-sdk)
-- ⚙️ [全量环境变量与高级参数参考表](https://xing-shuyin.github.io/pi-web-ui-site/docs.html#environment-variables)
-- 🏗️ [系统架构与实时 WebSocket 协议设计](https://xing-shuyin.github.io/pi-web-ui-site/docs.html#architecture)
-- 🐋 [Docker、Systemd 与守护进程进阶部署](https://xing-shuyin.github.io/pi-web-ui-site/docs.html#deployment)
-
----
-
-## 🤝 参与贡献与社区交流
-
-欢迎提交 Issue、功能建议或贡献代码！每一个改进与反馈都让 pi-web-ui 变得更好。
-
-- 💬 **QQ 交流群**：`1126050727`
-- 💡 **问题反馈与需求建议**：[GitHub Issues](https://github.com/xing-shuyin/pi-web-ui/issues)
-- 🗣️ **社区探讨**：[GitHub Discussions](https://github.com/xing-shuyin/pi-web-ui/discussions)
-- 🔗 **作者相关项目**：[dsh-ui-tools](https://github.com/xing-shuyin/dsh-ui-tools)（DSH 生态 UI 工具集）
-
-## 📄 开源许可证
-
-本项目采用 [MIT License](LICENSE) 开源协议。
+本项目保留 [MIT License](LICENSE) 及上游归属：Copyright (c) 2026 xing-shuyin。

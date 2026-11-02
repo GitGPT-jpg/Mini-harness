@@ -29,14 +29,9 @@ RUN npm ci --omit=dev
 FROM node:22-bookworm-slim
 WORKDIR /app
 ENV NODE_ENV=production
-# DSH engine (PI_WEB_ENGINE=dsh) needs the full @deepseek-ai/dsh runtime tree
-# (nested ~196 packages) as a subprocess — global install is the canonical way.
-# Skipped implicitly when the image never enables the dsh engine (just unused).
-# dsh 是纯 JS 包（无 install 生命周期脚本），无需编译工具链。
-RUN npm i -g @deepseek-ai/dsh@0.1.1-rc.2
 # 依赖在 deps 阶段装好/编译好后整体拷入：运行时镜像不带 python3/make/g++，也不再跑
 # npm ci —— node-pty 的 Linux 二进制已在 deps 阶段编译完，运行时没有 node-gyp 回退，
-# 也就不需要工具链（plugin 源码构建等用户操作发生在挂载进来的数据目录，与镜像无关）。
+# 也就不需要工具链。
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/web/dist ./web/dist

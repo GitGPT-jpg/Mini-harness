@@ -3,7 +3,7 @@
  * pi-web-ui CLI.
  *
  *   pi-web-ui                              启动生产服务器（前台，Ctrl+C 停止，自动打开浏览器）
- *   pi-web-ui --engine dsh --port 9000 --cwd /path    同上，覆盖引擎/端口/工作目录/数据目录
+ *   pi-web-ui --port 9000 --cwd /path       同上，覆盖端口/工作目录
  *   pi-web-ui --no-browser                 启动但不自动打开浏览器
  *   pi-web-ui --version | --help
  *   pi-web-ui server install [选项]         安装系统服务（开机自启）并启动
@@ -92,7 +92,7 @@ const HELP_ZH = `pi-web-ui v${pkg.version} — web chat for the pi coding agent
 
 用法:
   pi-web-ui                               启动服务器（前台，Ctrl+C 停止，自动打开浏览器）
-  pi-web-ui --engine dsh --port 9000 --cwd /path      启动并指定引擎 / 端口 / 工作目录 / 数据目录
+  pi-web-ui --port 9000 --cwd /path        启动并指定端口 / 工作目录
   pi-web-ui --no-browser                  启动但不自动打开浏览器
   pi-web-ui server install [选项]         安装系统服务（开机自启）并启动
   pi-web-ui server shortcut [选项]        在桌面创建「一键启动」图标（启动服务并打开浏览器）
@@ -106,7 +106,7 @@ server 选项:
   --port <n>        端口（默认 8787，或 $PI_WEB_PORT）
   --cwd <dir>       工作目录（默认 $PI_WEB_CWD 或用户主目录；前台启动默认当前目录）
   --data-dir <dir>  会话数据目录（默认 <cwd>/.pi-web）
-  --engine <pi|dsh> 智能体引擎（默认 $PI_WEB_ENGINE 或 pi）
+  --engine <pi>     智能体引擎（仅支持 pi）
   --host <addr>     监听地址（默认 $PI_WEB_HOST 或 127.0.0.1；0.0.0.0 供局域网/容器）
   --agent-dir <dir> pi 配置目录（默认 $PI_CODING_AGENT_DIR 或 ~/.pi/agent）
   --name <name>     服务名（默认 pi-web-ui；仅限字母/数字/-/_，字母或数字开头，
@@ -129,7 +129,7 @@ const HELP_EN = `pi-web-ui v${pkg.version} — web chat for the pi coding agent
 
 Usage:
   pi-web-ui                               Start server (foreground, Ctrl+C to stop, auto-opens browser)
-  pi-web-ui --engine dsh --port 9000 --cwd /path      Start with engine/port/cwd/data-dir overrides
+  pi-web-ui --port 9000 --cwd /path        Start with port/cwd overrides
   pi-web-ui --no-browser                   Start without auto-opening browser
   pi-web-ui server install [options]       Install system service (autostart on boot) and launch it
   pi-web-ui server shortcut [options]      Create desktop "one-click start" icon
@@ -143,7 +143,7 @@ Server options:
   --port <n>        Port (default 8787, or $PI_WEB_PORT)
   --cwd <dir>       Working directory (default $PI_WEB_CWD or home dir; foreground uses current dir)
   --data-dir <dir>  Session data directory (default <cwd>/.pi-web)
-  --engine <pi|dsh> Agent engine (default $PI_WEB_ENGINE or pi)
+  --engine <pi>     Agent engine (pi only)
   --host <addr>     Listen address (default $PI_WEB_HOST or 127.0.0.1; 0.0.0.0 for LAN/containers)
   --agent-dir <dir> pi config directory (default $PI_CODING_AGENT_DIR or ~/.pi/agent)
   --name <name>     Service name (default pi-web-ui; alphanumeric, "-" and "_" only,
@@ -368,11 +368,9 @@ async function startForeground(opts) {
 	if (opts.port) process.env.PI_WEB_PORT = opts.port;
 	if (opts.cwd) process.env.PI_WEB_CWD = resolve(opts.cwd);
 	if (opts.dataDir) process.env.PI_WEB_DATA_DIR = resolve(opts.dataDir);
-	if (opts.engine) {
-		if (opts.engine !== "pi" && opts.engine !== "dsh")
-			fail(ZH ? `无效引擎: ${opts.engine}（仅支持 pi / dsh）` : `Invalid engine: ${opts.engine} (pi and dsh only)`);
-		process.env.PI_WEB_ENGINE = opts.engine;
-	}
+	const engine = opts.engine ?? process.env.PI_WEB_ENGINE ?? "pi";
+	if (engine !== "pi") fail(ZH ? `无效引擎: ${engine}（仅支持 pi）` : `Invalid engine: ${engine} (pi only)`);
+	if (opts.engine) process.env.PI_WEB_ENGINE = opts.engine;
 	if (opts.host) process.env.PI_WEB_HOST = opts.host;
 	if (opts.agentDir) process.env.PI_CODING_AGENT_DIR = resolve(opts.agentDir);
 	const url = `http://localhost:${effectivePort(opts)}`;
@@ -1208,8 +1206,7 @@ function serviceOptions(opts) {
 	}
 	// 引擎/监听地址/agent 配置目录：flag 优先，环境变量后备（token 不走命令行，仅环境变量）。
 	const engine = opts.engine ?? process.env.PI_WEB_ENGINE ?? "pi";
-	if (engine !== "pi" && engine !== "dsh")
-		fail(ZH ? `无效引擎: ${engine}（仅支持 pi / dsh）` : `Invalid engine: ${engine} (pi and dsh only)`);
+	if (engine !== "pi") fail(ZH ? `无效引擎: ${engine}（仅支持 pi）` : `Invalid engine: ${engine} (pi only)`);
 	const host = opts.host ?? process.env.PI_WEB_HOST;
 	const agentDir = opts.agentDir ? resolve(opts.agentDir) : process.env.PI_CODING_AGENT_DIR;
 	return { name, port, cwd, dataDir, engine, host, agentDir };
@@ -1238,7 +1235,6 @@ function serviceEnv(port, cwd, dataDir, engine, host, agentDir, service = {}) {
 	if (!isWin && process.env.LANG) env.LANG = process.env.LANG;
 	if (!isWin && process.env.LC_ALL) env.LC_ALL = process.env.LC_ALL;
 	if (dataDir) env.PI_WEB_DATA_DIR = dataDir;
-	if (engine === "dsh") env.PI_WEB_ENGINE = "dsh"; // 仅非默认引擎才烘焙，保持服务单元简洁
 	if (host) env.PI_WEB_HOST = host;
 	if (agentDir) env.PI_CODING_AGENT_DIR = agentDir;
 	return env;

@@ -4,6 +4,8 @@
 
 > 浏览器驾驶舱 + pi 编码智能体（v1.4.0）。仅本机监听 `127.0.0.1:8787`，带 token 鉴权。
 
+当前源码版本 **1.0.1**（1.0 系列收尾版），变更与验证范围见 [CHANGELOG.md](CHANGELOG.md)。上游来源版本与本产品版本分别记录。
+
 ## 一键安装
 
 ```bash
@@ -43,13 +45,13 @@ Key 仅保存在本机 `~/.pi/agent/auth.json`，**不会提交到代码库，�
 - **只保留 pi 引擎**：前端引擎清单裁为 pi-only；底栏引擎切换器隐藏；模型服务商留给用户自填 One API。
 - **推理场景精简**：关闭沙盒 / Delegate / Plan / 子代理原生入口、多模态音视频、Page Picker、codemode 扩展；工具懒加载开启（省 token、稳 prompt cache 前缀）；仅保留 `present_files` 成果卡片。
 - **安全加固**：关 remoteSsh、封禁 `__abs__` 任意文件读、禁 `eval`/`browser_page`、关插件市场与自更新（`PI_WEB_MANAGED=1`）。
-- **品牌**：左上角为 icon1111 图标 + 「训推引擎组 Harness」；浏览器页签标题同名、favicon 为紫色 C；PWA 图标同源。
+- **品牌**：左上角为 icon1111 图标 + 「训推引擎组 Harness」；浏览器页签标题同名、图标与左上角 logo 相同；PWA 图标同源。
 - **领域身份**：覆盖组合模板的 `{{soul}}` token，注入推理服务 agent 身份、工作准则与安全红线（其余脚手架 token 不动）。
 - **提示词模板**：隐藏 25 个 pi 内置模板，灌入 8 个从 harness + Ku 沉淀、可直接用的推理模板。
 - **子代理**：保留 explore/review/implement，新增 5 个推理 workflow 子代理。
 - **知识库**：内置 `pi-llm-wiki` 扩展（已做安全审查、移除高危可选依赖子树），后台自动召回/沉淀、无感维护，纯本地不外联。
-- **薄运行时（Loop 运行时，`pi-web-ui/server/loop/`）**：任务状态机 `intake→plan→run→validate`，**以 validate.py 为唯一准入门禁**，失败自动带证据进入下一轮，达到最大轮数停止，状态落盘可断点续跑。可选 **跨家族 planner / reviewer**：planner 产出可验证的验收条件；reviewer 只能否决、不能放行（validator 通过才算完成）。配套 **watcher 任务队列**（投递 JSON 任务即可无人值守执行）。对应"公共运行时"那一块，**不依赖模型自觉**。
-- **双 Loop 入口**：输入框上沿成对居中的「LLM loop」（AI 自评，适合开放式任务；调研向导先提问、计划经你确认才开跑）+「代码 loop」（validator 门禁，自动验证 / 迭代 / 续跑）。
+- **Loop 运行时（`pi-web-ui/server/loop/`）**：服务端先创建 run 并绑定会话，再进入规划、执行与验收；可配置快速预检和完整检查命令，失败带证据迭代。启用模型评审时，检查通过但评审出错仍会停止，支持重试评审或用户明确按代码验证收下。运行详情展示日志、diff、结构化指标与最优轮次，并可沉淀经验卡片。
+- **统一任务入口**：输入框上沿单枚居中的「新任务」胶囊，按「代码验证 + 模型评审 / 仅代码验证 / 仅模型评审」分流；模型评审任务保留先提问、确认计划再开跑的调研向导。
 - **Loop 任务台**：顶栏「任务台」抽屉——当前目标的进度、执行者工具调用时间线、暂停 / 继续 / 停止，以及 LLM loop 永久目录与代码 loop 运行列表。
 - **连接集群**：输入框发送键左侧的集群图标，粘贴 kubeconfig 即用 `kubectl cluster-info` 实测（存 `~/.pi-web/kubeconfig`，权限 600）；底栏分别显示「API 已连接」「集群已连接」。
 - **One API Key 首次配置**：首次打开弹窗引导配置（见上）。
@@ -62,7 +64,7 @@ Key 仅保存在本机 `~/.pi/agent/auth.json`，**不会提交到代码库，�
 - `pi-web-cockpit/verify-cockpit.mjs` — 浏览器 E2E 验证（品牌 / 首次配置 / Loop / 任务台 / 集群 / 对话 / 终端 / Skills）
 - `pi-web-cockpit/config/models.oneapi.json` — One API 服务商与模型目录种子（无密钥）
 - `pi-web-cockpit/assets/brand-logo.png` — 左上角 logo（icon1111）
-- `pi-web-cockpit/assets/brand-favicon.png` — 页签 favicon（紫色 C）
+- `pi-web-cockpit/assets/brand-favicon.png` — 紫色 C 图标（备用；页签现用左上角 logo）
 - `pi-web-cockpit/vendor/pi-llm-wiki/` — 审查过的知识库扩展源码
 - `skills/` — 7 个领域 skill（安装到 `~/.pi/agent/skills`）
 - `assets/icon.jpg` — 桌面启动器图标源

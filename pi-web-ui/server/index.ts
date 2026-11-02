@@ -354,6 +354,9 @@ function splatParam(req: { params: unknown }): string {
 if (AUTH_TOKEN) {
 	// /api/health 保持开放：无敏感信息，容器/监控探针需要它。
 	// 但绝不能因命中 /api/health 就反射下发真实 token cookie（安全漏洞：issue #45）。
+	// 页签图标同样放行：Safari（WebKit IconLoader）取 favicon 时不带 cookie，鉴权会让它
+	// 401、页签没有图标。只放行公开品牌图；正则不允许子路径，不能借 /icons/ 前缀穿越。
+	const PUBLIC_ICON_PATH = /^\/(?:favicon\.(?:png|svg)|icon\.ico|icons\/[\w.-]+\.png)$/;
 	app.use((req, res, next) => {
 		const ok = tokenOk(req);
 		const cookie = cookieToken(req);
@@ -377,7 +380,7 @@ if (AUTH_TOKEN) {
 			// 协议不同而残留，所以两种属性组合各发一遍（HTTP 下 Secure 那条被忽略，无害）。
 			res.setHeader("Set-Cookie", [buildPiWebTokenCookie("", 0, false), buildPiWebTokenCookie("", 0, true)]);
 		}
-		if (req.path === "/api/health" || ok) {
+		if (req.path === "/api/health" || PUBLIC_ICON_PATH.test(req.path) || ok) {
 			next();
 			return;
 		}

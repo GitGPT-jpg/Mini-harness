@@ -19,13 +19,6 @@ services:
       # The container must bind ALL interfaces so the -p port mapping works —
       # the server defaults to loopback-only for security.
       PI_WEB_HOST: "0.0.0.0"
-      # DSH engine (DeepSeek Harness subprocess, see docs/dsh-engine.md).
-      # The image already bundles the runtime tree; uncomment to switch:
-      # PI_WEB_ENGINE: "dsh"
-      # DSH user patches dir override (default: <PI_WEB_DATA_DIR>/dsh-patches):
-      # PI_WEB_DSH_PATCH_DIR: /dsh-patches
-      # volumes:
-      #   - /host/path/to/dsh-patches:/dsh-patches
       # Workspace the agent operates in (read/edit/bash/write). Mount your
       # project dir and point PI_WEB_CWD at it, e.g.:
       # PI_WEB_CWD: /workspace

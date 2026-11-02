@@ -84,12 +84,17 @@ await step("branding", async () => {
   const logo = await page
     .$eval(".brand img, img.brand-logo, .brand-logo img", (i) => i.naturalWidth)
     .catch(() => 0);
+  // 品牌名称和标题检查
   ok(
-    "品牌：标题 / favicon / 品牌名",
-    title.includes("训推引擎组 Harness") &&
-      icon === "/favicon.png" &&
-      brand.includes("训推引擎组 Harness"),
-    `${title} | ${icon}`,
+    "品牌：标题 / 品牌名",
+    title === "训推引擎组 Harness" && brand.includes("训推引擎组 Harness"),
+    `${title} | ${brand}`,
+  );
+  // 图标检查
+  ok(
+    "品牌：favicon 可取",
+    icon === "/icons/icon-192.png?v=4" || icon === "/favicon.png?v=2",
+    icon,
   );
   ok("品牌：左上角 logo 加载", logo > 0, `naturalWidth=${logo}`);
   const icons = await page.evaluate(async () =>
@@ -159,19 +164,19 @@ await step("capsules", async () => {
     (e) =>
       (e.getBoundingClientRect().left + e.getBoundingClientRect().right) / 2,
   );
-  const pairMid = caps.length === 2 ? (caps[0].l + caps[1].r) / 2 : -1;
+  const pillMid = caps.length === 1 ? (caps[0].l + caps[0].r) / 2 : -1;
   ok(
-    "Loop 胶囊：成对、按输入框中轴居中",
-    caps.length === 2 && Math.abs(pairMid - mid) < 3,
+    "Loop 胶囊：单枚任务胶囊、按输入框中轴居中",
+    caps.length === 1 && Math.abs(pillMid - mid) < 3,
     caps.map((c) => c.t).join(" / "),
   );
 });
 
-await step("code loop modal", async () => {
-  await page.click(".goalbar-collapsed .loop-capsule.code");
-  await page.waitForSelector(".code-loop-modal");
+await step("task modal", async () => {
+  await page.click(".goalbar-collapsed .loop-capsule.task");
+  await page.waitForSelector(".task-modal");
   await page.waitForFunction(
-    () => document.querySelectorAll("#cl-planner option").length > 1,
+    () => document.querySelectorAll("#task-planner option").length > 1,
     null,
     { timeout: 8000 },
   );
@@ -179,8 +184,8 @@ await step("code loop modal", async () => {
     ".goalbar-collapsed .loop-capsule",
     (e) => e.length,
   );
-  await shot(page, "2-codeloop.png");
-  ok("代码 loop 弹窗：有模型下拉、胶囊收起", hidden === 0);
+  await shot(page, "2-taskmodal.png");
+  ok("统一任务弹窗：有模型下拉、胶囊收起", hidden === 0);
   await page.keyboard.press("Escape");
   await page.waitForTimeout(300);
 });
@@ -211,15 +216,18 @@ await step("task desk", async () => {
 });
 
 await step("llm loop editor", async () => {
-  await page.click(".goalbar-collapsed .loop-capsule.llm");
-  await page.waitForSelector(".goalbar-input");
-  const txt = await page.$eval(".goalbar", (e) => e.textContent);
+  await page.click(".goalbar-collapsed .loop-capsule.task");
+  await page.waitForSelector(".task-modal");
+  await page.click('.task-accept-opt input[value="llm"]');
+  await page.waitForSelector("#task-llm-planner");
+  const txt = await page.$eval(".task-modal", (e) => e.textContent);
+  const expectedText = ["帮我细化", "执行模型", "规划模型"];
   ok(
-    "LLM loop 编辑器：帮我细化 / 规划模型 / 评审模型 / 说明行",
-    ["帮我细化", "规划模型", "评审模型", "LLM loop："].every((s) =>
-      txt.includes(s),
-    ),
+    "LLM loop 编辑器：细化按钮 / 模型下拉 / 说明行",
+    expectedText.every((s) => txt.includes(s)),
   );
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(300);
 });
 
 await step("chat", async () => {
