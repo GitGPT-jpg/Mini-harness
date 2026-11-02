@@ -24,11 +24,11 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { parseLocaleMaps } from "./i18n-diff.mjs";
+import { parseLocaleMaps } from './i18n-diff.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const I18N_FILE = "web/src/i18n.tsx";
-const LOCALES_DIR = "locales";
+const LOCALES_DIR = 'locales';
 
 /* ------------------------------------------------------------------ */
 /* 标点与繁中常用词回退规则                                             */
@@ -43,36 +43,36 @@ const PUNCT_RULES = [
 
 const COMMON_S2T = [
 	["设置", "設定"],
-	["配置", "配置"],
-	["保存", "儲存"],
+	['配置', "配置"],
+	['保存', "儲存"],
 	["项目", "專案"],
 	["默认", "預設"],
 	["终端", "終端機"],
-	["服务器", "伺服器"],
-	["登录", "登入"],
-	["鼠标", "滑鼠"],
-	["插件", "外掛"],
+	['服务器', '伺服器'],
+	['登录', "登入"],
+	['鼠标', '滑鼠'],
+	['插件', "外掛"],
 	["用户", "使用者"],
-	["信息", "資訊"],
+	['信息', "資訊"],
 	["支持", "支援"],
-	["取消", "取消"],
+	['取消', "取消"],
 	["确定", "確定"],
-	["关闭", "關閉"],
-	["复制", "複製"],
-	["启用", "啟用"],
+	['关闭', "關閉"],
+	['复制', '複製'],
+	['启用', "啟用"],
 	["禁用", "停用"],
-	["创建", "建立"],
-	["删除", "刪除"],
+	['创建', '建立'],
+	['删除', "刪除"],
 	["编辑", "編輯"],
 	["连接", "連線"],
 	["刷新", "重新整理"],
 	["视图", "檢視"],
 	["搜索", "搜尋"],
 	["网络", "網路"],
-	["文件", "檔案"],
-	["对话", "對話"],
-	["历史", "歷史"],
-	["帮助", "說明"],
+	['文件', "檔案"],
+	['对话', "對話"],
+	['历史', "歷史"],
+	['帮助', "說明"],
 ];
 
 function applyRules(str, rules) {
@@ -87,37 +87,38 @@ function applyRules(str, rules) {
 /** 尝试加载 OpenCC 转换器（若未安装或不可用则回退为 null）。 */
 async function loadOpenCc(repoRoot) {
 	try {
-		const openccMod = await import(pathToFileURL(join(repoRoot, "scripts/zh-tw-locale/opencc.mjs")).href);
+		const openccMod = await import(pathToFileURL(join(repoRoot, 'scripts/zh-tw-locale/opencc.mjs')).href);
 		const OpenCC = openccMod.OpenCC;
 		if (!OpenCC?.Converter) return null;
 
-		const glossaryPath = join(repoRoot, "scripts/zh-tw-locale/glossary.mjs");
-		const manualPath = join(repoRoot, "scripts/zh-tw-locale/manual.json");
-		const twRules = existsSync(glossaryPath) ? await import(pathToFileURL(glossaryPath).href) : { pre: [], post: [] };
+		const glossaryPath = join(repoRoot, 'scripts/zh-tw-locale/glossary.mjs');
+		const manualPath = join(repoRoot, 'scripts/zh-tw-locale/manual.json');
+		const twRules = existsSync(glossaryPath)
+			? await import(pathToFileURL(glossaryPath).href) : { pre: [], post: [] };
 		const twManual = existsSync(manualPath) ? JSON.parse(readFileSync(manualPath, "utf8")) : {};
 
-		const twBase = OpenCC.Converter({ from: "cn", to: "twp" });
-		const hantBase = OpenCC.Converter({ from: "cn", to: "t" });
+		const twBase = OpenCC.Converter({ from: 'cn', to: "twp" });
+		const hantBase = OpenCC.Converter({ from: 'cn', to: 't' });
 		const hkBase = OpenCC.Converter({ from: "cn", to: "hk" });
 
 		const hkPost = [
 			[/终端(?!机)/g, "终端机"],
 			[/終端(?!機)/g, "終端機"],
 			["登录", "登入"],
-			["登錄", "登入"],
-			["鼠标", "滑鼠"],
-			["鼠標", "滑鼠"],
-			["服务器", "伺服器"],
+			['登錄', "登入"],
+			['鼠标', "滑鼠"],
+			['鼠標', "滑鼠"],
+			['服务器', "伺服器"],
 			["服務器", "伺服器"],
 			["默认", "預設"],
-			["默認", "預設"],
+			['默認', "預設"],
 		];
 
 		return {
 			tw: (text, key) => {
 				let r = applyRules(applyRules(twBase(applyRules(text, twRules.pre || [])), twRules.post || []), PUNCT_RULES);
 				const m = twManual[key];
-				if (typeof m === "string") r = m;
+				if (typeof m === "string") {r = m;}
 				else if (Array.isArray(m)) {
 					for (const [from, to] of m) {
 						if (r.includes(from)) r = r.split(from).join(to);
@@ -134,7 +135,7 @@ async function loadOpenCc(repoRoot) {
 		console.warn(
 			`[sync-locales] 警告：OpenCC 未加载（${err?.message ?? "未知错误"}），` +
 				`繁中包将回退到内置规则转换，可能有未转换的简体字残留。` +
-				`建议安装：npm i -D opencc-js`,
+				'建议安装：npm i -D opencc-js',
 		);
 		return null;
 	}
@@ -170,19 +171,23 @@ export async function syncLocales(options = {}) {
 	const extraEn = en.order.filter((k) => !zhSet.has(k));
 	if (missingEn.length > 0) {
 		warnings.push(
-			`web/src/i18n.tsx 中 en 缺少 ${missingEn.length} 个 key：${missingEn.slice(0, 5).join(", ")}${missingEn.length > 5 ? "…" : ""}`,
+			`web/src/i18n.tsx 中 en 缺少 ${missingEn.length} 个 key：${missingEn.slice(0, 5).join(', ')}${
+				missingEn.length > 5 ? "…" : ""
+			}`,
 		);
 	}
 	if (extraEn.length > 0) {
 		warnings.push(
-			`web/src/i18n.tsx 中 en 多余 ${extraEn.length} 个 key：${extraEn.slice(0, 5).join(", ")}${extraEn.length > 5 ? "…" : ""}`,
+			`web/src/i18n.tsx 中 en 多余 ${extraEn.length} 个 key：${extraEn.slice(0, 5).join(', ')}${extraEn.length > 5 ? '…' : ""}`,
 		);
 	}
 	if (missingEn.length === 0 && extraEn.length === 0) {
 		const orderMismatch = zhKeys.findIndex((k, idx) => en.order[idx] !== k);
 		if (orderMismatch !== -1) {
 			warnings.push(
-				`web/src/i18n.tsx 中 zh 与 en 键顺序在第 ${orderMismatch + 1} 项错位（zh: "${zhKeys[orderMismatch]}", en: "${en.order[orderMismatch]}"）`,
+				`web/src/i18n.tsx 中 zh 与 en 键顺序在第 ${orderMismatch + 1} 项错位（zh: "${
+					zhKeys[orderMismatch]
+				}", en: "${en.order[orderMismatch]}"）`,
 			);
 		}
 	}
@@ -200,7 +205,7 @@ export async function syncLocales(options = {}) {
 
 	for (const f of packFiles) {
 		const filePath = join(localesDirPath, f);
-		const raw = readFileSync(filePath, "utf8");
+		const raw = readFileSync(filePath, 'utf8');
 		const pack = JSON.parse(raw);
 		const originalStrings = pack.strings || {};
 		const originalKeys = Object.keys(originalStrings);
@@ -240,8 +245,9 @@ export async function syncLocales(options = {}) {
 				if (pack.code === "zh-TW") {
 					newStrings[k] = opencc ? opencc.tw(zhVal, k) : applyRules(applyRules(zhVal, COMMON_S2T), PUNCT_RULES);
 				} else if (pack.code === "zh-Hant") {
-					newStrings[k] = opencc ? opencc.hant(zhVal) : applyRules(applyRules(zhVal, COMMON_S2T), PUNCT_RULES);
-				} else if (pack.code === "zh-HK") {
+					newStrings[k] = opencc
+						? opencc.hant(zhVal) : applyRules(applyRules(zhVal, COMMON_S2T), PUNCT_RULES);
+				} else if (pack.code === 'zh-HK') {
 					newStrings[k] = opencc ? opencc.hk(zhVal) : applyRules(applyRules(zhVal, COMMON_S2T), PUNCT_RULES);
 				} else {
 					// 外语语言包：必须使用 en 的英文 fallback（严格禁止汉字残留）
@@ -252,7 +258,7 @@ export async function syncLocales(options = {}) {
 
 		totalAdded += addedKeys.length;
 		totalPruned += prunedKeys.length;
-		if (isReordered) totalReordered++;
+		if (isReordered) {totalReordered++;}
 
 		const changed = addedKeys.length > 0 || prunedKeys.length > 0 || isReordered;
 		results.push({
@@ -270,7 +276,7 @@ export async function syncLocales(options = {}) {
 			// code/nativeName/version/strings，一次 `npm run i18n:sync` 就把整块服务端译文
 			// 静默删掉（pt/ja/tr 各丢 371/164/327 条，连带 locales 相关单测全红）。
 			const newPack = { ...pack, strings: newStrings };
-			writeFileSync(filePath, JSON.stringify(newPack, null, "\t") + "\n", "utf8");
+			writeFileSync(filePath, JSON.stringify(newPack, null, '\t') + "\n", "utf8");
 		}
 	}
 
@@ -292,7 +298,7 @@ export async function syncLocales(options = {}) {
 
 async function main() {
 	const argv = process.argv.slice(2);
-	const dryRun = argv.includes("--dry-run");
+	const dryRun = argv.includes('--dry-run');
 	const checkOnly = argv.includes("--check");
 
 	if (argv.includes("-h") || argv.includes("--help")) {
@@ -312,12 +318,12 @@ async function main() {
 
 	for (const r of res.results) {
 		const statusParts = [];
-		if (r.added.length > 0) statusParts.push(`+${r.added.length} 新增`);
+		if (r.added.length > 0) {statusParts.push(`+${r.added.length} 新增`);}
 		if (r.pruned.length > 0) statusParts.push(`-${r.pruned.length} 死key`);
-		if (r.reordered) statusParts.push(`顺序重排`);
+		if (r.reordered) {statusParts.push(`顺序重排`);}
 
 		if (statusParts.length > 0) {
-			console.log(` · ${r.code.padEnd(8)}: ${statusParts.join(", ")}`);
+			console.log(` · ${r.code.padEnd(8)}: ${statusParts.join(', ')}`);
 		}
 	}
 
@@ -328,7 +334,7 @@ async function main() {
 			`\x1b[36mi [dry-run] 发现差异：共 ${res.totalAdded} 个新增 key，${res.totalPruned} 个死 key，未写入文件。\x1b[0m`,
 		);
 	} else if (checkOnly) {
-		console.error(`\x1b[31m✗ [check] 语言包存在未同步变动，请执行 npm run i18n:sync 自动对齐。\x1b[0m`);
+		console.error('\x1b[31m✗ [check] 语言包存在未同步变动，请执行 npm run i18n:sync 自动对齐。\x1b[0m');
 		process.exit(1);
 	} else {
 		console.log(

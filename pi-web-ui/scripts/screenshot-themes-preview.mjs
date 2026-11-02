@@ -4,14 +4,14 @@
 import { spawn } from "node:child_process";
 import { cpSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath } from 'node:url';
 import { chromium } from "playwright-core";
-import { CHROME_PATH } from "../tests/lib/chrome.mjs";
+import { CHROME_PATH } from '../tests/lib/chrome.mjs';
 import { freePort, portUp } from "../tests/lib/port-utils.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const PORT = 8960;
-const SCREENSHOT_DIR = join(REPO, "test-screenshots");
+const SCREENSHOT_DIR = join(REPO, 'test-screenshots');
 const DATA_DIR = join(REPO, ".tmp-verify-data");
 
 mkdirSync(SCREENSHOT_DIR, { recursive: true });
@@ -24,7 +24,7 @@ async function main() {
 	console.log("=== 启动壁纸弹窗多主题实机测试与截图 ===");
 	await freePort(PORT);
 
-	mkdirSync(join(DATA_DIR, "plugins", "wallpaper-engine"), { recursive: true });
+	mkdirSync(join(DATA_DIR, 'plugins', "wallpaper-engine"), { recursive: true });
 	cpSync(join(REPO, "plugins", "wallpaper-engine"), join(DATA_DIR, "plugins", "wallpaper-engine"), {
 		recursive: true,
 	});
@@ -37,14 +37,14 @@ async function main() {
 		PI_WEB_DATA_DIR: DATA_DIR,
 	};
 
-	const srv = spawn(process.execPath, [join(REPO, "dist", "server", "index.js")], {
+	const srv = spawn(process.execPath, [join(REPO, 'dist', "server", "index.js")], {
 		env,
 		stdio: "ignore",
 	});
 
 	let up = false;
 	for (let i = 0; i < 30; i++) {
-		if (await portUp(PORT, "127.0.0.1", 500)) {
+		if (await portUp(PORT, '127.0.0.1', 500)) {
 			up = true;
 			break;
 		}
@@ -69,7 +69,7 @@ async function main() {
 	const page = await context.newPage();
 
 	try {
-		await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: "networkidle" });
+		await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'networkidle' });
 		await page.waitForFunction(() => Boolean(window.__piWallpaperEngineRuntime), { timeout: 15000 });
 
 		// 1. 打开壁纸抽屉，截取包含专属主题选择器的抽屉面板图
@@ -84,7 +84,7 @@ async function main() {
 		console.log(`✓ 已生成抽屉主题切换器截图: ${shotDrawer}`);
 
 		// 2. 激活壁纸并注入示例对话
-		console.log("2. 激活壁纸并设置示例消息...");
+		console.log('2. 激活壁纸并设置示例消息...');
 		await page.evaluate(async () => {
 			const rt = window.__piWallpaperEngineRuntime;
 			const res = await fetch("/plugins-api/wallpaper-engine/api/wallpapers");
@@ -107,7 +107,9 @@ async function main() {
 					<div class="msg msg-assistant">
 						<div class="msg-role">Assistant</div>
 						<div class="msg-body md">
-							<p>已为你设计了<strong>极光微晶流体着色器（Aurora Micro-Crystal Shader）</strong>！我们在高分屏下启用了 <strong>1:1 原生物理像素渲染</strong> 与 <strong>MSAA 4x</strong> 抗锯齿，即使在强动态壁纸背景下，多层立体防眩光阴影也能保证文字极其清晰醒目：</p>
+							<p>已为你设计了<strong>极光微晶流体着色器（Aurora Micro-Crystal Shader）</strong>！\
+我们在高分屏下启用了 <strong>1:1 原生物理像素渲染</strong> 与 <strong>MSAA 4x</strong> 抗锯齿，\
+即使在强动态壁纸背景下，多层立体防眩光阴影也能保证文字极其清晰醒目：</p>
 							<pre><code>// 片段着色器：极光流体微光模拟
 precision highp float;
 uniform vec2 u_resolution;
@@ -125,7 +127,7 @@ void main() {
 					</div>
 				`;
 			}
-			const textarea = document.querySelector(".inputbox textarea");
+			const textarea = document.querySelector('.inputbox textarea');
 			if (textarea) {
 				textarea.value = "当前正在预览壁纸专属炫酷主题，文字与配色均已优化至最佳观感！";
 			}
@@ -136,7 +138,7 @@ void main() {
 		// 3. 切换并截取 霓虹幻紫 (Synthwave) 主题
 		console.log("3. 切换至【🔮 霓虹幻紫】主题...");
 		await page.evaluate(() => {
-			const select = document.querySelector("#pi-we-theme-select");
+			const select = document.querySelector('#pi-we-theme-select');
 			if (select) {
 				select.value = "synthwave";
 				select.dispatchEvent(new Event("change"));
@@ -150,7 +152,7 @@ void main() {
 		// 4. 切换并截取 黑曜冷月 (Obsidian) 主题
 		console.log("4. 切换至【🌑 黑曜冷月】主题...");
 		await page.evaluate(() => {
-			const select = document.querySelector("#pi-we-theme-select");
+			const select = document.querySelector('#pi-we-theme-select');
 			if (select) {
 				select.value = "obsidian";
 				select.dispatchEvent(new Event("change"));
@@ -162,11 +164,11 @@ void main() {
 		console.log(`✓ 已生成黑曜冷月主题截图: ${shotObsidian}`);
 
 		// 5. 切换并截取 极光翡翠 (Aurora) 主题
-		console.log("5. 切换至【🌲 极光翡翠】主题...");
+		console.log('5. 切换至【🌲 极光翡翠】主题...');
 		await page.evaluate(() => {
 			const select = document.querySelector("#pi-we-theme-select");
 			if (select) {
-				select.value = "aurora";
+				select.value = 'aurora';
 				select.dispatchEvent(new Event("change"));
 			}
 		});
@@ -178,7 +180,7 @@ void main() {
 		// 6. 切换并截取 晚霞琥珀 (Amber) 主题
 		console.log("6. 切换至【🌅 晚霞琥珀】主题...");
 		await page.evaluate(() => {
-			const select = document.querySelector("#pi-we-theme-select");
+			const select = document.querySelector('#pi-we-theme-select');
 			if (select) {
 				select.value = "amber";
 				select.dispatchEvent(new Event("change"));

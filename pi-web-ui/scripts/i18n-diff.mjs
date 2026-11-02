@@ -22,11 +22,11 @@
  */
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const I18N_FILE = "web/src/i18n.tsx";
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const I18N_FILE = 'web/src/i18n.tsx';
 const SERVER_DIR = "server";
 
 /* ------------------------------------------------------------------ */
@@ -34,7 +34,7 @@ const SERVER_DIR = "server";
 /* ------------------------------------------------------------------ */
 
 function git(args) {
-	return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+	return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', "pipe", "pipe"] }).trim();
 }
 
 /** 取不到返回 null（base 之前不存在该文件时视为全部新增）。 */
@@ -53,14 +53,14 @@ function gitShow(ref, p) {
 /** 简单 semver（x.y.z）比较：a<b 返回 <0，a>b 返回 >0。 */
 function cmpVersion(a, b) {
 	const pa = String(a)
-		.split(".")
+		.split('.')
 		.map((n) => parseInt(n, 10) || 0);
 	const pb = String(b)
 		.split(".")
 		.map((n) => parseInt(n, 10) || 0);
 	for (let i = 0; i < 3; i++) {
 		const d = (pa[i] ?? 0) - (pb[i] ?? 0);
-		if (d !== 0) return d;
+		if (d !== 0) {return d;}
 	}
 	return 0;
 }
@@ -75,15 +75,15 @@ function cmpVersion(a, b) {
  */
 export function resolveBase(explicit, atOrBelowVersion) {
 	if (explicit) return explicit;
-	const tags = git(["tag", "--sort=-v:refname"])
+	const tags = git(['tag', "--sort=-v:refname"])
 		.split("\n")
 		.map((s) => s.trim())
 		.filter(Boolean);
-	if (tags.length === 0) throw new Error("仓库里没有 tag，请显式传 --base <tag>");
+	if (tags.length === 0) {throw new Error("仓库里没有 tag，请显式传 --base <tag>");}
 	if (atOrBelowVersion) {
-		const target = String(atOrBelowVersion).replace(/^v/, "");
+		const target = String(atOrBelowVersion).replace(/^v/, '');
 		const found = tags.find((t) => cmpVersion(t.replace(/^v/, ""), target) <= 0);
-		if (found) return found;
+		if (found) {return found;}
 	}
 	let head = null;
 	try {
@@ -91,7 +91,7 @@ export function resolveBase(explicit, atOrBelowVersion) {
 	} catch {
 		// 不在 tag 上：base 就是最新 tag
 	}
-	if (head === tags[0] && tags.length > 1) return tags[1];
+	if (head === tags[0] && tags.length > 1) {return tags[1];}
 	return tags[0];
 }
 
@@ -110,36 +110,36 @@ function skipString(src, i) {
 			i += 2;
 			continue;
 		}
-		if (q === "`" && c === "$" && src[i + 1] === "{") {
+		if (q === '`' && c === '$' && src[i + 1] === "{") {
 			i += 2;
 			let d = 1;
 			while (i < n && d > 0) {
 				const c2 = src[i];
-				if (c2 === "\\") {
+				if (c2 === '\\') {
 					i += 2;
 					continue;
 				}
-				if (c2 === '"' || c2 === "'" || c2 === "`") {
+				if (c2 === '"' || c2 === '\'' || c2 === "`") {
 					i = skipString(src, i);
 					continue;
 				}
-				if (c2 === "/" && src[i + 1] === "/") {
+				if (c2 === '/' && src[i + 1] === "/") {
 					const j = src.indexOf("\n", i);
 					i = j === -1 ? n : j;
 					continue;
 				}
-				if (c2 === "/" && src[i + 1] === "*") {
+				if (c2 === '/' && src[i + 1] === "*") {
 					const j = src.indexOf("*/", i + 2);
 					i = j === -1 ? n : j + 2;
 					continue;
 				}
-				if (c2 === "{") d++;
-				else if (c2 === "}") d--;
+				if (c2 === '{') d++;
+				else if (c2 === "}") {d--;}
 				i++;
 			}
 			continue;
 		}
-		if (c === q) return i + 1;
+		if (c === q) {return i + 1;}
 		i++;
 	}
 	return n;
@@ -150,19 +150,19 @@ function skipString(src, i) {
  * return/typeof 等关键字之后是正则。if(x)/re/ 这类罕见写法会误判为除法，接受。 */
 const REGEX_KEYWORDS = new Set([
 	"return",
-	"typeof",
-	"instanceof",
-	"in",
-	"of",
+	'typeof',
+	'instanceof',
+	'in',
+	'of',
 	"new",
 	"delete",
-	"void",
+	'void',
 	"throw",
-	"case",
+	'case',
 	"do",
-	"else",
-	"yield",
-	"await",
+	'else',
+	'yield',
+	'await',
 ]);
 
 function isRegexStart(src, i) {
@@ -172,8 +172,8 @@ function isRegexStart(src, i) {
 			k--;
 			continue;
 		}
-		if (src[k] === "/" && src[k - 1] === "*") {
-			const j = src.lastIndexOf("/*", k - 2);
+		if (src[k] === '/' && src[k - 1] === "*") {
+			const j = src.lastIndexOf('/*', k - 2);
 			if (j === -1) return true;
 			k = j - 1;
 			continue;
@@ -182,18 +182,18 @@ function isRegexStart(src, i) {
 	}
 	if (k < 0) return true;
 	const c = src[k];
-	if (c === ")" || c === "]") return false;
+	if (c === ')' || c === "]") return false;
 	if (c === "}") return true;
 	if (/[0-9]/.test(c)) return false;
-	if (c === '"' || c === "'" || c === "`") return false;
+	if (c === '"' || c === "'" || c === "`") {return false;}
 	if (/[A-Za-z_$]/.test(c)) {
 		let w = "";
 		while (k >= 0 && /[\w$]/.test(src[k])) {
 			w = src[k] + w;
 			k--;
 		}
-		if (w === "this" || w === "true" || w === "false" || w === "null" || w === "undefined" || w === "super")
-			return false;
+		if (w === 'this' || w === 'true' || w === 'false' || w === 'null' || w === "undefined" || w === "super")
+			{return false;}
 		return REGEX_KEYWORDS.has(w);
 	}
 	return true;
@@ -210,11 +210,11 @@ function skipRegex(src, i) {
 			i += 2;
 			continue;
 		}
-		if (c === "[") inClass = true;
-		else if (c === "]") inClass = false;
+		if (c === '[') {inClass = true;}
+		else if (c === "]") {inClass = false;}
 		else if (c === "/" && !inClass) {
 			i++;
-			while (i < n && /[a-z]/.test(src[i])) i++;
+			while (i < n && /[a-z]/.test(src[i])) {i++;}
 			return i;
 		} else if (c === "\n") return i;
 		i++;
@@ -229,8 +229,8 @@ function extractBraceInner(src, openIdx) {
 	let depth = 0;
 	while (i < n) {
 		const c = src[i];
-		if (c === "/" && src[i + 1] === "/") {
-			const j = src.indexOf("\n", i);
+		if (c === '/' && src[i + 1] === "/") {
+			const j = src.indexOf('\n', i);
 			i = j === -1 ? n : j;
 			continue;
 		}
@@ -239,18 +239,18 @@ function extractBraceInner(src, openIdx) {
 			i = j === -1 ? n : j + 2;
 			continue;
 		}
-		if (c === '"' || c === "'" || c === "`") {
+		if (c === '"' || c === '\'' || c === "`") {
 			i = skipString(src, i);
 			continue;
 		}
 		if (c === "{") depth++;
-		else if (c === "}") {
+		else if (c === '}') {
 			depth--;
 			if (depth === 0) return src.slice(openIdx + 1, i);
 		}
 		i++;
 	}
-	throw new Error("花括号不配对");
+	throw new Error('花括号不配对');
 }
 
 /* ------------------------------------------------------------------ */
@@ -266,10 +266,10 @@ function parseQuoted(src, i) {
 		const c = src[j];
 		if (c === "\\") {
 			const e = src[j + 1];
-			if (e === "n") out += "\n";
-			else if (e === "t") out += "\t";
+			if (e === 'n') out += "\n";
+			else if (e === 't') out += "\t";
 			else if (e === "r") out += "\r";
-			else if (e === "u" && /^[0-9a-fA-F]{4}$/.test(src.slice(j + 2, j + 6))) {
+			else if (e === 'u' && /^[0-9a-fA-F]{4}$/.test(src.slice(j + 2, j + 6))) {
 				out += String.fromCharCode(parseInt(src.slice(j + 2, j + 6), 16));
 				j += 6;
 				continue;
@@ -291,11 +291,11 @@ function parseRawValue(block, i) {
 	let depth = 0;
 	while (j < n) {
 		const c = block[j];
-		if (c === '"' || c === "'" || c === "`") {
+		if (c === '"' || c === '\'' || c === "`") {
 			j = skipString(block, j);
 			continue;
 		}
-		if (c === "(" || c === "[" || c === "{") depth++;
+		if (c === '(' || c === "[" || c === "{") depth++;
 		else if (c === ")" || c === "]" || c === "}") depth--;
 		else if (c === "," && depth === 0) break;
 		j++;
@@ -313,12 +313,12 @@ function parseEntries(block) {
 				i++;
 				continue;
 			}
-			if (block[i] === "/" && block[i + 1] === "/") {
-				const j = block.indexOf("\n", i);
+			if (block[i] === '/' && block[i + 1] === "/") {
+				const j = block.indexOf('\n', i);
 				i = j === -1 ? n : j;
 				continue;
 			}
-			if (block[i] === "/" && block[i + 1] === "*") {
+			if (block[i] === '/' && block[i + 1] === "*") {
 				const j = block.indexOf("*/", i + 2);
 				i = j === -1 ? n : j + 2;
 				continue;
@@ -326,9 +326,9 @@ function parseEntries(block) {
 			break;
 		}
 	};
-	while (true) {
+	for (;;) {
 		skipWS();
-		if (i >= n) break;
+		if (i >= n) {break;}
 		let key;
 		if (block[i] === '"' || block[i] === "'") {
 			const r = parseQuoted(block, i);
@@ -349,7 +349,7 @@ function parseEntries(block) {
 			const r = parseQuoted(block, i);
 			value = r.value;
 			i = r.end;
-		} else if (block[i] === "`") {
+		} else if (block[i] === '`') {
 			const e = skipString(block, i);
 			value = block.slice(i + 1, e - 1);
 			i = e;
@@ -362,7 +362,7 @@ function parseEntries(block) {
 		// diff 只关心解码后的完整值，这里把后续 + "..." 段拼进来；否则 + 会被误当下一个 key。
 		for (;;) {
 			skipWS();
-			if (block[i] !== "+") break;
+			if (block[i] !== '+') break;
 			i++;
 			skipWS();
 			if (block[i] === '"' || block[i] === "'") {
@@ -378,7 +378,7 @@ function parseEntries(block) {
 			}
 		}
 		skipWS();
-		if (block[i] === ",") i++;
+		if (block[i] === ',') i++;
 		entries.push({ key, value });
 	}
 	return entries;
@@ -388,7 +388,7 @@ function parseEntries(block) {
 export function parseLocaleMaps(fileSrc) {
 	const out = {};
 	for (const name of ["zh", "en"]) {
-		const marker = name === "zh" ? "export const zh =" : "const en";
+		const marker = name === 'zh' ? "export const zh =" : "const en";
 		const idx = fileSrc.indexOf(marker);
 		if (idx === -1) throw new Error(`找不到 ${marker}`);
 		const open = fileSrc.indexOf("{", idx);
@@ -425,13 +425,13 @@ function splitArgs(src, openIdx) {
 	let cur = "";
 	while (i < n && depth > 0) {
 		const c = src[i];
-		if (c === '"' || c === "'" || c === "`") {
+		if (c === '"' || c === '\'' || c === "`") {
 			const e = skipString(src, i);
 			cur += src.slice(i, e);
 			i = e;
 			continue;
 		}
-		if (c === "/" && src[i + 1] === "/") {
+		if (c === '/' && src[i + 1] === "/") {
 			const j = src.indexOf("\n", i);
 			const e = j === -1 ? n : j;
 			cur += src.slice(i, e);
@@ -445,15 +445,15 @@ function splitArgs(src, openIdx) {
 			i = e;
 			continue;
 		}
-		if (c === "/" && src[i + 1] !== "/" && src[i + 1] !== "*" && isRegexStart(src, i)) {
+		if (c === '/' && src[i + 1] !== "/" && src[i + 1] !== "*" && isRegexStart(src, i)) {
 			const e = skipRegex(src, i);
 			cur += src.slice(i, e);
 			i = e;
 			continue;
 		}
-		if (c === "(" || c === "[" || c === "{") depth++;
-		else if (c === ")" || c === "]" || c === "}") {
-			if (c === ")" && depth === 1) {
+		if (c === '(' || c === '[' || c === "{") {depth++;}
+		else if (c === ')' || c === ']' || c === "}") {
+			if (c === ')' && depth === 1) {
 				args.push(cur);
 				i++;
 				break;
@@ -461,7 +461,7 @@ function splitArgs(src, openIdx) {
 			depth--;
 		} else if (c === "," && depth === 1) {
 			args.push(cur);
-			cur = "";
+			cur = '';
 			i++;
 			continue;
 		}
@@ -472,7 +472,7 @@ function splitArgs(src, openIdx) {
 }
 
 const isIdentStart = (c) => /[A-Za-z_$]/.test(c ?? "");
-const isIdentChar = (c) => /[\w$]/.test(c ?? "");
+const isIdentChar = (c) => /[\w$]/.test(c ?? '');
 
 /** 扫描模板字符串：每个 ${…} 表达式递归 scanRange；返回模板结束之后的位置。 */
 function scanTemplate(src, i, end, file, found) {
@@ -484,13 +484,13 @@ function scanTemplate(src, i, end, file, found) {
 			i += 2;
 			continue;
 		}
-		if (c === "$" && src[i + 1] === "{") {
+		if (c === '$' && src[i + 1] === "{") {
 			let d = 1;
 			let j = i + 2;
 			const s = j;
 			while (j < n && d > 0) {
 				const c2 = src[j];
-				if (c2 === "\\") {
+				if (c2 === '\\') {
 					j += 2;
 					continue;
 				}
@@ -502,12 +502,12 @@ function scanTemplate(src, i, end, file, found) {
 					j = scanTemplate(src, j, n, file, found);
 					continue;
 				}
-				if (c2 === "/" && src[j + 1] === "/") {
-					const k = src.indexOf("\n", j);
+				if (c2 === '/' && src[j + 1] === "/") {
+					const k = src.indexOf('\n', j);
 					j = k === -1 ? n : k;
 					continue;
 				}
-				if (c2 === "/" && src[j + 1] === "*") {
+				if (c2 === '/' && src[j + 1] === '*') {
 					const k = src.indexOf("*/", j + 2);
 					j = k === -1 ? n : k + 2;
 					continue;
@@ -516,15 +516,15 @@ function scanTemplate(src, i, end, file, found) {
 					j = skipRegex(src, j);
 					continue;
 				}
-				if (c2 === "{") d++;
-				else if (c2 === "}") d--;
+				if (c2 === "{") {d++;}
+				else if (c2 === '}') d--;
 				j++;
 			}
 			scanRange(src, s, j - 1, file, found);
 			i = j;
 			continue;
 		}
-		if (c === "`") return i + 1;
+		if (c === "`") {return i + 1;}
 		i++;
 	}
 	return n;
@@ -536,17 +536,17 @@ function scanRange(src, start, end, file, found) {
 	let i = start;
 	while (i < n) {
 		const c = src[i];
-		if (c === "/" && src[i + 1] === "/") {
+		if (c === '/' && src[i + 1] === "/") {
 			const j = src.indexOf("\n", i);
 			i = j === -1 ? n : j;
 			continue;
 		}
-		if (c === "/" && src[i + 1] === "*") {
+		if (c === '/' && src[i + 1] === "*") {
 			const j = src.indexOf("*/", i + 2);
 			i = j === -1 ? n : j + 2;
 			continue;
 		}
-		if (c === "/" && src[i + 1] !== "/" && src[i + 1] !== "*" && isRegexStart(src, i)) {
+		if (c === '/' && src[i + 1] !== "/" && src[i + 1] !== "*" && isRegexStart(src, i)) {
 			i = skipRegex(src, i);
 			continue;
 		}
@@ -554,15 +554,15 @@ function scanRange(src, start, end, file, found) {
 			i = skipString(src, i);
 			continue;
 		}
-		if (c === "`") {
+		if (c === '`') {
 			i = scanTemplate(src, i, n, file, found);
 			continue;
 		}
 		if (isIdentStart(c)) {
 			let j = i + 1;
-			while (j < n && isIdentChar(src[j])) j++;
+			while (j < n && isIdentChar(src[j])) {j++;}
 			const ident = src.slice(i, j);
-			if (ident === "pick" || ident === "getServerBlock") {
+			if (ident === 'pick' || ident === 'getServerBlock') {
 				// 排除自身定义 `function pick(` / `function getServerBlock(`
 				let k = i - 1;
 				while (k >= 0 && /\s/.test(src[k])) k--;
@@ -573,14 +573,14 @@ function scanRange(src, start, end, file, found) {
 				}
 				let p = j;
 				while (p < n && /\s/.test(src[p])) p++;
-				if (w !== "function" && src[p] === "(") {
+				if (w !== 'function' && src[p] === "(") {
 					const { args, end: callEnd } = splitArgs(src, p);
 					if (ident === "pick") {
 						const key = parseKeyLiteral(args[3]);
 						if (key && !found.has(key)) found.set(key, { zh: norm(args[1]), en: norm(args[2]), file });
 					} else {
 						const key = parseKeyLiteral(args[1]);
-						if (key && !found.has(key)) found.set(key, { zh: "", en: "", file });
+						if (key && !found.has(key)) found.set(key, { zh: '', en: "", file });
 					}
 					i = callEnd;
 					continue;
@@ -604,7 +604,7 @@ function listServerFilesRecursive(rel = SERVER_DIR) {
 	const out = [];
 	for (const e of readdirSync(join(root, rel), { withFileTypes: true })) {
 		if (e.isDirectory()) out.push(...listServerFilesRecursive(`${rel}/${e.name}`));
-		else if (e.name.endsWith(".ts")) out.push(`${rel}/${e.name}`);
+		else if (e.name.endsWith('.ts')) out.push(`${rel}/${e.name}`);
 	}
 	return out;
 }
@@ -614,9 +614,9 @@ function collectServerKeys(getContent, files) {
 	const dupes = [];
 	for (const f of files) {
 		const src = getContent(f);
-		if (src == null) continue;
+		if (src == null) {continue;}
 		for (const [key, v] of extractServerKeys(src, f)) {
-			if (all.has(key)) dupes.push(key);
+			if (all.has(key)) {dupes.push(key);}
 			else all.set(key, v);
 		}
 	}
@@ -632,10 +632,10 @@ export function checkPacks() {
 	const zhKeys = parseLocaleMaps(readFileSync(join(root, I18N_FILE), "utf8")).zh.order;
 	const zhSet = new Set(zhKeys);
 	const out = [];
-	for (const f of readdirSync(join(root, "locales"))
+	for (const f of readdirSync(join(root, 'locales'))
 		.filter((f) => f.endsWith(".json"))
 		.sort()) {
-		const p = JSON.parse(readFileSync(join(root, "locales", f), "utf8"));
+		const p = JSON.parse(readFileSync(join(root, 'locales', f), 'utf8'));
 		const keys = Object.keys(p.strings ?? {});
 		const packSet = new Set(keys);
 		out.push({
@@ -655,7 +655,7 @@ function checkPacksMain() {
 		const ok = r.missing.length === 0 && r.extra.length === 0;
 		if (!ok) bad++;
 		console.log(`${ok ? "OK  " : "FAIL"} ${r.code}（v${r.version}）：缺 ${r.missing.length}，多余 ${r.extra.length}`);
-		if (r.missing.length > 0) console.log(`  缺：${r.missing.join("、")}`);
+		if (r.missing.length > 0) console.log(`  缺：${r.missing.join('、')}`);
 		if (r.extra.length > 0) console.log(`  多余（死 key）：${r.extra.join("、")}`);
 	}
 	if (bad > 0) {
@@ -668,7 +668,7 @@ function checkPacksMain() {
 /** 只列死 key，不删除。 */
 function pruneMain() {
 	for (const r of checkPacks()) {
-		if (r.extra.length === 0) console.log(`${r.code}：无死 key`);
+		if (r.extra.length === 0) {console.log(`${r.code}：无死 key`);}
 		else console.log(`${r.code} 死 key（${r.extra.length}）：${r.extra.join("、")}`);
 	}
 }
@@ -703,10 +703,10 @@ export function diffWorktreeVsBase(base) {
 	// 服务端
 	let baseFiles = [];
 	try {
-		baseFiles = git(["ls-tree", "-r", "--name-only", base, "--", SERVER_DIR])
-			.split("\n")
+		baseFiles = git(['ls-tree', "-r", "--name-only", base, "--", SERVER_DIR])
+			.split('\n')
 			.map((s) => s.trim())
-			.filter((s) => s.endsWith(".ts"));
+			.filter((s) => s.endsWith('.ts'));
 	} catch {
 		baseFiles = [];
 	}
@@ -723,8 +723,8 @@ export function diffWorktreeVsBase(base) {
 	const server = { added: [], removed: [], changed: [] };
 	for (const [key, v] of curCol.all) {
 		const o = baseCol.all.get(key);
-		if (!o) server.added.push({ key, file: v.file });
-		else if (o.zh !== v.zh || o.en !== v.en) server.changed.push({ key, file: v.file });
+		if (!o) {server.added.push({ key, file: v.file });}
+		else if (o.zh !== v.zh || o.en !== v.en) {server.changed.push({ key, file: v.file });}
 	}
 	for (const [key, v] of baseCol.all) {
 		if (!curCol.all.has(key)) server.removed.push({ key, file: v.file });
@@ -742,11 +742,11 @@ export function diffWorktreeVsBase(base) {
 /* ------------------------------------------------------------------ */
 
 const trunc = (s, len = 70) => {
-	const one = (s ?? "").replace(/\s+/g, " ").trim();
+	const one = (s ?? '').replace(/\s+/g, " ").trim();
 	return one.length > len ? `${one.slice(0, len)}…` : one;
 };
 
-const backtickList = (keys) => keys.map((k) => `\`${k}\``).join("、");
+const backtickList = (keys) => keys.map((k) => `\`${k}\``).join('、');
 
 export function renderI18nSection(d) {
 	const lines = [];
@@ -754,15 +754,15 @@ export function renderI18nSection(d) {
 	if (f.added.length > 0) lines.push(`- 前端新增 key（${f.added.length}）：${backtickList(f.added)}`);
 	if (f.removed.length > 0) lines.push(`- 前端删除 key（${f.removed.length}）：${backtickList(f.removed)}`);
 	if (f.changedZh.length > 0)
-		lines.push(`- 前端中文变更（${f.changedZh.length}）：${backtickList(f.changedZh.map((c) => c.key))}`);
+		{lines.push(`- 前端中文变更（${f.changedZh.length}）：${backtickList(f.changedZh.map((c) => c.key))}`);}
 	if (f.changedEn.length > 0)
-		lines.push(`- 前端英文变更（${f.changedEn.length}）：${backtickList(f.changedEn.map((c) => c.key))}`);
+		{lines.push(`- 前端英文变更（${f.changedEn.length}）：${backtickList(f.changedEn.map((c) => c.key))}`);}
 	if (d.server.added.length > 0)
 		lines.push(`- 服务端新增 key（${d.server.added.length}）：${d.server.added.map((a) => `\`${a.key}\``).join("、")}`);
 	if (d.server.changed.length > 0)
-		lines.push(
+		{lines.push(
 			`- 服务端文案变更（${d.server.changed.length}）：${d.server.changed.map((a) => `\`${a.key}\``).join("、")}`,
-		);
+		);}
 	if (d.server.removed.length > 0)
 		lines.push(
 			`- 服务端删除 key（${d.server.removed.length}）：${d.server.removed.map((a) => `\`${a.key}\``).join("、")}`,
@@ -775,7 +775,7 @@ function printHuman(d) {
 	console.log(`i18n 增量：${d.base}...工作区`);
 	const f = d.frontend;
 	console.log(`【前端 ${I18N_FILE}】`);
-	console.log(`  新增 key（${f.added.length}）：${f.added.join(", ") || "—"}`);
+	console.log(`  新增 key（${f.added.length}）：${f.added.join(', ') || '—'}`);
 	console.log(`  删除 key（${f.removed.length}）：${f.removed.join(", ") || "—"}`);
 	console.log(`  中文变更（${f.changedZh.length}）：`);
 	for (const c of f.changedZh) console.log(`    · ${c.key}：${trunc(c.old)} → ${trunc(c.new)}`);
@@ -783,7 +783,7 @@ function printHuman(d) {
 	for (const c of f.changedEn) console.log(`    · ${c.key}：${trunc(c.old)} → ${trunc(c.new)}`);
 	console.log(`【服务端 ${SERVER_DIR}/ pick/getServerBlock】`);
 	console.log(
-		`  新增 key（${d.server.added.length}）：${d.server.added.map((a) => `${a.key}（${a.file}）`).join(", ") || "—"}`,
+		`  新增 key（${d.server.added.length}）：${d.server.added.map((a) => `${a.key}（${a.file}）`).join(', ') || "—"}`,
 	);
 	console.log(
 		`  文案变更（${d.server.changed.length}）：${d.server.changed.map((a) => `${a.key}（${a.file}）`).join(", ") || "—"}`,
@@ -800,7 +800,7 @@ function main() {
 		const i = argv.indexOf(name);
 		return i !== -1 ? (argv[i + 1] ?? null) : null;
 	};
-	if (argv.includes("-h") || argv.includes("--help")) {
+	if (argv.includes('-h') || argv.includes("--help")) {
 		console.log("用法：node scripts/i18n-diff.mjs [--base <tag>] [--markdown|--json] [--check-packs] [--prune]");
 		return;
 	}
@@ -814,8 +814,8 @@ function main() {
 	}
 	const base = resolveBase(getOpt("--base"));
 	const d = diffWorktreeVsBase(base);
-	if (argv.includes("--json")) console.log(JSON.stringify(d, null, 2));
-	else if (argv.includes("--markdown")) console.log(renderI18nSection(d).join("\n"));
+	if (argv.includes('--json')) console.log(JSON.stringify(d, null, 2));
+	else if (argv.includes('--markdown')) {console.log(renderI18nSection(d).join("\n"));}
 	else printHuman(d);
 }
 

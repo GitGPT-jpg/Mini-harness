@@ -17,12 +17,12 @@
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from "node:url";
 
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const typesSrc = readFileSync(join(root, "web/src/types.ts"), "utf8");
-const protocolSrc = readFileSync(join(root, "server/protocol.ts"), "utf8");
+const protocolSrc = readFileSync(join(root, 'server/protocol.ts'), "utf8");
 
 let failed = false;
 
@@ -42,7 +42,7 @@ const runtimeExports = [
 ].map((m) => m[1]);
 if (runtimeExports.length > 0) {
 	console.error(
-		`✗ server/protocol.ts 出现运行时代码导出（${[...new Set(runtimeExports)].join(", ")}）——该文件必须保持纯类型，前端要经 type-only re-export 引用它。`,
+		`✗ server/protocol.ts 出现运行时代码导出（${[...new Set(runtimeExports)].join(', ')}）——该文件必须保持纯类型，前端要经 type-only re-export 引用它。`,
 	);
 	failed = true;
 } else {
@@ -51,12 +51,12 @@ if (runtimeExports.length > 0) {
 
 // 3. 双端协议版本号一致
 const serverVerSrc = readFileSync(join(root, "server/protocol-version.ts"), "utf8");
-const webVerSrc = readFileSync(join(root, "web/src/protocol-version.ts"), "utf8");
+const webVerSrc = readFileSync(join(root, 'web/src/protocol-version.ts'), "utf8");
 const mServer = serverVerSrc.match(/PROTOCOL_VERSION\s*=\s*(\d+)/);
 const mWeb = webVerSrc.match(/PROTOCOL_VERSION\s*=\s*(\d+)/);
 if (!mServer || !mWeb || mServer[1] !== mWeb[1]) {
 	console.error(
-		`✗ 协议版本号不一致：server=${mServer?.[1] ?? "?"} web=${mWeb?.[1] ?? "?"} —— 改协议时必须同步 bump 两份 PROTOCOL_VERSION。`,
+		`✗ 协议版本号不一致：server=${mServer?.[1] ?? '?'} web=${mWeb?.[1] ?? "?"} —— 改协议时必须同步 bump 两份 PROTOCOL_VERSION。`,
 	);
 	failed = true;
 } else {
@@ -71,22 +71,22 @@ if (!mServer || !mWeb || mServer[1] !== mWeb[1]) {
 	let usable = true;
 	const diffQuiet = (range, file) => {
 		try {
-			execFileSync("git", ["diff", "--quiet", range, "--", file], { cwd: root, stdio: "pipe" });
+			execFileSync('git', ['diff', "--quiet", range, "--", file], { cwd: root, stdio: "pipe" });
 			return false;
 		} catch (err) {
-			if (err?.status === 1) return true; // 有差异
+			if (err?.status === 1) {return true;} // 有差异
 			usable = false; // git 不可用 / 浅克隆缺对象 → 放弃判定
 			return false;
 		}
 	};
 	let tag = null;
 	try {
-		tag = execFileSync("git", ["describe", "--tags", "--abbrev=0"], { cwd: root, encoding: "utf8" }).trim();
+		tag = execFileSync('git', ['describe', '--tags', "--abbrev=0"], { cwd: root, encoding: "utf8" }).trim();
 	} catch {
 		usable = false;
 	}
 	if (!usable || !tag) {
-		console.log("· 跳过协议版本 git 启发式（无可用 tag 或浅检出环境）");
+		console.log('· 跳过协议版本 git 启发式（无可用 tag 或浅检出环境）');
 	} else {
 		const protocolChanged = diffQuiet(tag, "server/protocol.ts");
 		const versionChanged =
@@ -100,10 +100,10 @@ if (!mServer || !mWeb || mServer[1] !== mWeb[1]) {
 			failed = true;
 		} else {
 			console.log(
-				`✓ 协议版本纪律（相对 ${tag}）：${protocolChanged ? "协议有改动且已 bump" : "协议相对上一 tag 无改动"}`,
+				`✓ 协议版本纪律（相对 ${tag}）：${protocolChanged ? '协议有改动且已 bump' : "协议相对上一 tag 无改动"}`,
 			);
 		}
 	}
 }
 
-if (failed) process.exit(1);
+if (failed) {process.exit(1);}

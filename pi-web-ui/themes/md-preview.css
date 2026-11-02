@@ -1,234 +1,244 @@
 /* theme-name: 紫晕 */
 /* theme-name-en: Purple Haze */
 :root {
-	color-scheme: dark;
-	--bg: #0d0e12;
-	--bg-elev: #14161c;
-	--bg-elev2: #1a1d26;
-	--border: #262a35;
-	--border-soft: #1e2230;
-	--text: #e6e8ef;
-	--text-dim: #9aa1b4;
-	--text-faint: #6b7284;
-	--accent: #8b5cf6;
-	--accent-soft: rgba(139, 92, 246, 0.14);
-	--green: #34d399;
-	--green-soft: rgba(52, 211, 153, 0.12);
-	--red: #f87171;
-	--red-soft: rgba(248, 113, 113, 0.12);
-	--amber: #fbbf24;
-	--blue: #3b82f6;
-	--blue-soft: rgba(59, 130, 246, 0.12);
-	--term-bg: #0b0d12;
-	--term-fg: #e6e8ef;
-	--term-cursor: #8b5cf6;
-	--term-cursor-accent: #0b0d12;
-	--term-selection: rgba(139, 92, 246, 0.35);
-	--term-black: #1a1d26;
-	--term-red: #f87171;
-	--term-green: #34d399;
-	--term-yellow: #fbbf24;
-	--term-blue: #60a5fa;
-	--term-magenta: #c084fc;
-	--term-cyan: #22d3ee;
-	--term-white: #e6e8ef;
-	--term-bright-black: #6b7284;
-	--term-bright-red: #f87171;
-	--term-bright-green: #34d399;
-	--term-bright-yellow: #fbbf24;
-	--term-bright-blue: #60a5fa;
-	--term-bright-magenta: #c084fc;
-	--term-bright-cyan: #22d3ee;
-	--term-bright-white: #ffffff;
-	--mono: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
-	--mermaid-font-size: 12px;
-	--tooltip-bg: #232733;
-	--code-bg: #0b0d12;
-	--code-text: #c9d1d9;
-	--code-border: var(--border-soft);
-	--code-pad: 8px 10px;
-	--card-body-pad: 4px 14px 12px;
-	--err-text: #f0a5a5;
-	--red-text: #fca5a5;
-	--amber-text: #fcd34d;
-	--info-blue: #60a5fa;
-	--link: #a78bfa;
-	--link-hover: #c4b5fd;
-	--link-soft: #ddd6fe;
-	--md-strong: #f3f4f6;
-	--skill-blue: #5eb3ff;
-	--plugin-purple: #b58cff;
-	--auth-green: #6ee7a0;
-	--scroll-thumb: #2a2f3d;
-	--scroll-thumb-hover: #3a4152;
-	--notice-err-bg: #401d23;
-	--notice-warn-bg: #38251f;
-	--notice-info-bg: #1b2544;
-	--notice-err-border: #ef4444;
-	--notice-warn-border: #f59e0b;
-	--notice-info-border: #3b82f6;
-	--send-blue: #3b82f6;
-	--send-blue-hover: #2563eb;
-	--stop-red: #ef4444;
-	--stop-red-hover: #dc2626;
-	--brand-grad-a: #8b5cf6;
-	--brand-grad-b: #6366f1;
-	--on-amber: #1a1a1a;
-	--search-active-fg: #1a1d26;
-	--switch-knob: #ffffff;
-	--bg-elev3: rgba(255, 255, 255, 0.06);
-	--sunken-bg: rgba(0, 0, 0, 0.15);
-	--glow-015: rgba(255, 255, 255, 0.015);
-	--glow-025: rgba(255, 255, 255, 0.025);
-	--glow-03: rgba(255, 255, 255, 0.03);
-	--glow-04: rgba(255, 255, 255, 0.04);
-	--glow-05: rgba(255, 255, 255, 0.05);
-	--glow-12: rgba(255, 255, 255, 0.12);
-	--glow-18: rgba(255, 255, 255, 0.18);
-	--glow-22: rgba(255, 255, 255, 0.22);
-	--glow-38: rgba(255, 255, 255, 0.38);
-	--control-fg: #9aa1b4;
-	--control-bg: #1a1d26;
-	--control-border: #262a35;
-	--bg-image: none;
-	--bg-image-dim: 0.78;
-	--bg-image-blur: 0px;
-	--wallpaper-panel-alpha: 62%;
-	--topbar-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
-	--statusbar-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
-	--panel-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
-	--card-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
-	--chip-bg: color-mix(in srgb, var(--bg-elev2) var(--wallpaper-panel-alpha, 62%), transparent);
-	--msgs-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
-	--inputbox-bg: color-mix(in srgb, var(--bg-elev2) var(--wallpaper-panel-alpha, 62%), transparent);
-	--menu-bg: var(--bg-elev2);
+    color-scheme: dark;
+
+    --bg: #0a0b10;
+    --bg-elev: #14161c;
+    --bg-elev2: #1a1d26;
+    --border: #262a35;
+    --border-soft: #1e2230;
+    --text: #e6e8ef;
+    --text-dim: #9aa1b4;
+    --text-faint: #6b7284;
+    --accent: #8b5cf6;
+    --accent-soft: rgba(139, 92, 246, 0.14);
+    --green: #34d399;
+    --green-soft: rgba(52, 211, 153, 0.12);
+    --red: #f87171;
+    --red-soft: rgba(248, 113, 113, 0.12);
+    --amber: #fbbf24;
+    --blue: #3b82f6;
+    --blue-soft: rgba(59, 130, 246, 0.12);
+    --term-bg: #0b0d12;
+    --term-fg: #e6e8ef;
+    --term-cursor: #8b5cf6;
+    --term-cursor-accent: #0b0d12;
+    --term-selection: rgba(139, 92, 246, 0.35);
+    --term-black: #1a1d26;
+    --term-red: #f87171;
+    --term-green: #34d399;
+    --term-yellow: #fbbf24;
+    --term-blue: #60a5fa;
+    --term-magenta: #c084fc;
+    --term-cyan: #22d3ee;
+    --term-white: #e6e8ef;
+    --term-bright-black: #6b7284;
+    --term-bright-red: #f87171;
+    --term-bright-green: #34d399;
+    --term-bright-yellow: #fbbf24;
+    --term-bright-blue: #60a5fa;
+    --term-bright-magenta: #c084fc;
+    --term-bright-cyan: #22d3ee;
+    --term-bright-white: #fff;
+    --mono: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+    --mermaid-font-size: 12px;
+    --tooltip-bg: #232733;
+    --code-bg: #0b0d12;
+    --code-text: #c9d1d9;
+    --code-border: var(--border-soft);
+    --code-pad: 8px 10px;
+    --card-body-pad: 4px 14px 12px;
+    --err-text: #f0a5a5;
+    --red-text: #fca5a5;
+    --amber-text: #fcd34d;
+    --info-blue: #60a5fa;
+    --link: #a78bfa;
+    --link-hover: #c4b5fd;
+    --link-soft: #ddd6fe;
+    --md-strong: #f3f4f6;
+    --skill-blue: #5eb3ff;
+    --plugin-purple: #b58cff;
+    --auth-green: #6ee7a0;
+    --scroll-thumb: #2a2f3d;
+    --scroll-thumb-hover: #3a4152;
+    --notice-err-bg: #401d23;
+    --notice-warn-bg: #38251f;
+    --notice-info-bg: #1b2544;
+    --notice-err-border: #ef4444;
+    --notice-warn-border: #f59e0b;
+    --notice-info-border: #3b82f6;
+    --send-blue: #3b82f6;
+    --send-blue-hover: #2563eb;
+    --stop-red: #ef4444;
+    --stop-red-hover: #dc2626;
+    --brand-grad-a: #8b5cf6;
+    --brand-grad-b: #6366f1;
+    --on-amber: #1a1a1a;
+    --search-active-fg: #1a1d26;
+    --switch-knob: #fff;
+    --bg-elev3: rgba(255, 255, 255, 0.06);
+    --sunken-bg: rgba(0, 0, 0, 0.15);
+    --glow-015: rgba(255, 255, 255, 0.015);
+    --glow-025: rgba(255, 255, 255, 0.025);
+    --glow-03: rgba(255, 255, 255, 0.03);
+    --glow-04: rgba(255, 255, 255, 0.04);
+    --glow-05: rgba(255, 255, 255, 0.05);
+    --glow-12: rgba(255, 255, 255, 0.12);
+    --glow-18: rgba(255, 255, 255, 0.18);
+    --glow-22: rgba(255, 255, 255, 0.22);
+    --glow-38: rgba(255, 255, 255, 0.38);
+    --control-fg: #9aa1b4;
+    --control-bg: #1a1d26;
+    --control-border: #262a35;
+    --bg-image: none;
+    --bg-image-dim: 0.78;
+    --bg-image-blur: 0px;
+    --wallpaper-panel-alpha: 62%;
+    --topbar-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+    --statusbar-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+    --panel-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+    --card-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+    --chip-bg: color-mix(in srgb, var(--bg-elev2) var(--wallpaper-panel-alpha, 62%), transparent);
+    --msgs-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+    --inputbox-bg: color-mix(in srgb, var(--bg-elev2) var(--wallpaper-panel-alpha, 62%), transparent);
+    --menu-bg: var(--bg-elev2);
 }
 
 /* ---- ambient gradient（镜像 .fp-markdown 预览底色，覆盖整个窗口）---- */
-:root {
-	--bg: #0a0b10;
-}
 body {
-	background:
-		radial-gradient(circle at 10% 0%, rgba(139, 92, 246, 0.14), transparent 38%),
-		radial-gradient(circle at 88% 100%, rgba(139, 92, 246, 0.07), transparent 44%), #0a0b10;
+    background:
+        radial-gradient(circle at 10% 0%, rgba(139, 92, 246, 0.14), transparent 38%),
+        radial-gradient(circle at 88% 100%, rgba(139, 92, 246, 0.07), transparent 44%),
+        #0a0b10;
 }
 /* 让渐变直接成为整个窗口的底色：铬件全部透明，只留边框定结构 */
 .topbar,
 .panel,
 .statusbar {
-	background: transparent;
+    background: transparent;
 }
 
 /* 底部状态栏按钮同步极简行文（基线方案 C 纯平流）：按钮只走基线形态 */
 .statusbar .bar-item,
 .statusbar .bar-item.chip,
 .statusbar .chip {
-	height: 18px;
-	min-height: 18px;
-	padding: 0 4px;
-	font-size: 11px;
-	line-height: 18px;
-	gap: 3px;
-	color: var(--text-dim);
-	background: transparent;
-	border: 1px solid transparent;
-	border-radius: 2px;
-	box-shadow: none;
-	opacity: 1;
-	filter: none;
-	text-shadow: none;
-	cursor: pointer;
-	transform: none;
+    height: 18px;
+    min-height: 18px;
+    padding: 0 4px;
+    font-size: 11px;
+    line-height: 18px;
+    gap: 3px;
+    color: var(--text-dim);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 2px;
+    box-shadow: none;
+    opacity: 1;
+    filter: none;
+    text-shadow: none;
+    cursor: pointer;
+    transform: none;
 }
+
 .statusbar .bar-item:hover,
 .statusbar .bar-item.chip:hover,
 .statusbar .chip:hover {
-	background: var(--glow-12);
-	color: var(--text);
-	border-color: transparent;
-	border-radius: 2px;
-	box-shadow: none;
-	opacity: 1;
-	filter: none;
-	text-shadow: none;
-	transform: none;
+    background: var(--glow-12);
+    color: var(--text);
+    border-color: transparent;
+    border-radius: 2px;
+    box-shadow: none;
+    opacity: 1;
+    filter: none;
+    text-shadow: none;
+    transform: none;
 }
+
 .statusbar .bar-item.active,
 .statusbar .bar-item.chip.active,
 .statusbar .chip.active {
-	background: var(--bg-elev2);
-	color: var(--text);
+    background: var(--bg-elev2);
+    color: var(--text);
 }
+
 .statusbar .bar-item-text {
-	font-size: 11px;
-	line-height: 1.2;
-	color: inherit;
-	opacity: 1;
-	text-shadow: none;
+    font-size: 11px;
+    line-height: 1.2;
+    color: inherit;
+    opacity: 1;
+    text-shadow: none;
 }
+
 .statusbar .bar-item-char {
-	font-size: 11px;
-	line-height: 1;
-	font-weight: 600;
-	color: var(--text-faint);
-	opacity: 0.85;
-	text-shadow: none;
+    font-size: 11px;
+    line-height: 1;
+    font-weight: 600;
+    color: var(--text-faint);
+    opacity: 0.85;
+    text-shadow: none;
 }
+
 .statusbar .bar-item.status-cost {
-	gap: 0;
+    gap: 0;
 }
+
 .statusbar .bar-item-icon {
-	font-size: 11px;
-	width: 11px;
-	height: 11px;
-	min-width: 11px;
-	opacity: 0.75;
-	color: inherit;
-	filter: none;
-	text-shadow: none;
+    font-size: 11px;
+    width: 11px;
+    height: 11px;
+    min-width: 11px;
+    opacity: 0.75;
+    color: inherit;
+    filter: none;
+    text-shadow: none;
 }
+
 .statusbar .bar-item:hover .bar-item-icon {
-	opacity: 1;
-	color: inherit;
-	filter: none;
+    opacity: 1;
+    color: inherit;
+    filter: none;
 }
+
 .statusbar .bar-item-icon svg,
 .statusbar .bar-item-glyph {
-	width: 11px;
-	height: 11px;
-	color: inherit;
-	stroke: currentColor;
-	filter: none;
-	text-shadow: none;
+    width: 11px;
+    height: 11px;
+    color: inherit;
+    stroke: currentColor;
+    filter: none;
+    text-shadow: none;
 }
+
 .statusbar .bar-item-badge {
-	background: none;
-	color: var(--accent);
-	font-size: 10px;
-	font-weight: 700;
-	min-width: 0;
-	height: auto;
-	padding: 0;
-	margin-left: 0;
-	border-radius: 0;
-	opacity: 1;
-	text-shadow: none;
-	box-shadow: none;
+    background: none;
+    color: var(--accent);
+    font-size: 10px;
+    font-weight: 700;
+    min-width: 0;
+    height: auto;
+    padding: 0;
+    margin-left: 0;
+    border-radius: 0;
+    opacity: 1;
+    text-shadow: none;
+    box-shadow: none;
 }
+
 .statusbar .engine-picker-btn {
-	background: transparent;
-	border: 1px solid transparent;
-	border-radius: 2px;
-	padding: 0 4px;
-	color: var(--text-dim);
-	box-shadow: none;
-	opacity: 1;
-	filter: none;
-	text-shadow: none;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 2px;
+    padding: 0 4px;
+    color: var(--text-dim);
+    box-shadow: none;
+    opacity: 1;
+    filter: none;
+    text-shadow: none;
 }
+
 .statusbar .engine-picker-btn:hover {
-	background: var(--glow-12);
-	border-color: transparent;
-	color: var(--text);
+    background: var(--glow-12);
+    border-color: transparent;
+    color: var(--text);
 }

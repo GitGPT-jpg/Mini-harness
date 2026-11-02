@@ -38,9 +38,10 @@ const PAIRS = [
 // ---------------------------------------------------------------- 颜色工具
 
 function parseHex(value: string | null | undefined): [number, number, number] | null {
-	const m = /^#([0-9a-f]{6})$/i.exec((value ?? "").trim());
+	const m = /^#([0-9a-f]{6}|[0-9a-f]{3})$/i.exec((value ?? "").trim());
 	if (!m) return null;
-	const n = parseInt(m[1]!, 16);
+	const hex = m[1]!.length === 3 ? m[1]!.replace(/./g, "$&$&") : m[1]!;
+	const n = parseInt(hex, 16);
 	return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
@@ -56,7 +57,7 @@ function contrast(a: [number, number, number], b: [number, number, number]): num
 
 /** 从 CSS 文本里取某个十六进制令牌值（同名多次声明取第一次）。 */
 function tokenValue(css: string, token: string): string | null {
-	const m = new RegExp(token.replace(/[-]/g, "\\-") + "\\s*:\\s*(#[0-9a-fA-F]{6})\\b").exec(css);
+	const m = new RegExp(token.replace(/[-]/g, "\\-") + "\\s*:\\s*(#[0-9a-fA-F]{6}|#[0-9a-fA-F]{3})\\b").exec(css);
 	return m ? m[1]! : null;
 }
 
@@ -93,6 +94,29 @@ function findViolations(text: string): string[] {
 }
 
 // ---------------------------------------------------------------- 用例
+
+describe("十六进制颜色解析", () => {
+	it("三位与六位颜色提取、RGB 和对比度等价", () => {
+		for (const [short, full, rgb] of [
+			["#fff", "#ffffff", [255, 255, 255]],
+			["#000", "#000000", [0, 0, 0]],
+			["#aBc", "#aaBBcc", [170, 187, 204]],
+		] as const) {
+			const shortRgb = parseHex(tokenValue(`:root {\n    --on-blue: ${short};\n}`, "--on-blue"));
+			const fullRgb = parseHex(tokenValue(`:root { --on-blue: ${full}; }`, "--on-blue"));
+			expect(shortRgb).toEqual(rgb);
+			expect(fullRgb).toEqual(rgb);
+			expect(contrast(shortRgb!, [26, 26, 26])).toBe(contrast(fullRgb!, [26, 26, 26]));
+		}
+	});
+
+	it("不把非三位/六位颜色截取成有效实底色", () => {
+		for (const value of ["#ff", "#ffff", "#fffff", "#fffffff", "#ffffffff", "#ggg"]) {
+			expect(parseHex(value)).toBeNull();
+			expect(tokenValue(`:root { --on-blue: ${value}; }`, "--on-blue")).toBeNull();
+		}
+	});
+});
 
 describe("语义色实底的前景对比度", () => {
 	const stylesCss = readFileSync(STYLES_PATH, "utf8");

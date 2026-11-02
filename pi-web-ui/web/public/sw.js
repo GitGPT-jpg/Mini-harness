@@ -23,8 +23,8 @@
  */
 
 const BUILD_ID = "__BUILD_ID__";
-const STATIC_CACHE = BUILD_ID.startsWith("__") ? "pi-web-ui-static-dev" : `pi-web-ui-static-${BUILD_ID}`;
-const SHELL_CACHE = "pi-web-ui-shell-v1";
+const STATIC_CACHE = BUILD_ID.startsWith('__') ? "pi-web-ui-static-dev" : `pi-web-ui-static-${BUILD_ID}`;
+const SHELL_CACHE = 'pi-web-ui-shell-v1';
 
 // App root within this origin — "/" for root deployments, "/pi/" behind an
 // nginx sub-path reverse proxy. All path checks below are relative to it, so
@@ -34,12 +34,12 @@ const SCOPE = new URL("./", self.registration.scope).pathname;
 /** Map a request pathname to an app-relative path ("/pi/ws" → "/ws"), or null
  *  when the request lies outside the registration scope (shouldn't happen). */
 function appPath(pathname) {
-	if (SCOPE === "/") return pathname;
-	if (pathname.startsWith(SCOPE)) return "/" + pathname.slice(SCOPE.length);
+	if (SCOPE === "/") {return pathname;}
+	if (pathname.startsWith(SCOPE)) {return "/" + pathname.slice(SCOPE.length);}
 	return null;
 }
 
-self.addEventListener("install", (event) => {
+self.addEventListener('install', (event) => {
 	// Take control as soon as this version activates so the current page is
 	// served by the new worker without requiring a second reload.
 	self.skipWaiting();
@@ -64,15 +64,15 @@ function isCachable(request) {
 	if (method !== "GET") return false;
 
 	const url = new URL(request.url);
-	if (url.origin !== self.location.origin) return false;
+	if (url.origin !== self.location.origin) {return false;}
 
 	// Never cache real-time, dynamic or credential/data endpoints.
 	const path = appPath(url.pathname);
 	if (
 		path === null ||
-		path.startsWith("/ws") ||
+		path.startsWith('/ws') ||
 		path.startsWith("/api") ||
-		path.startsWith("/themes") ||
+		path.startsWith('/themes') ||
 		path.startsWith("/plugins")
 	) {
 		return false;
@@ -81,14 +81,16 @@ function isCachable(request) {
 }
 
 function assetContentOk(requestUrl, response) {
-	const ct = (response.headers.get("content-type") || "").toLowerCase();
+	const ct = (response.headers.get('content-type') || '').toLowerCase();
 	const path = requestUrl.pathname.toLowerCase();
-	if (path.endsWith(".js")) return ct.includes("javascript");
+	if (path.endsWith('.js')) {return ct.includes('javascript');}
 	if (path.endsWith(".css")) return ct.includes("css");
-	if (path.endsWith(".svg")) return ct.includes("svg");
-	if (path.endsWith(".webmanifest")) return ct.includes("json");
+	if (path.endsWith('.svg')) return ct.includes("svg");
+	if (path.endsWith(".webmanifest")) {return ct.includes("json");}
 	return true;
 }
+
+const cachedOrError = (fallback) => fallback || Response.error();
 
 self.addEventListener("fetch", (event) => {
 	const { request } = event;
@@ -102,7 +104,7 @@ self.addEventListener("fetch", (event) => {
 
 	// Navigation → app shell. Network-first with cached fallback: users get the
 	// latest build when online but can still reopen the app while flaky.
-	if (request.mode === "navigate") {
+	if (request.mode === 'navigate') {
 		event.respondWith(
 			fetch(request)
 				.then((response) => {
@@ -119,8 +121,8 @@ self.addEventListener("fetch", (event) => {
 	const path = appPath(requestUrl.pathname);
 	const isStatic =
 		path !== null &&
-		(path.startsWith("/assets/") ||
-			path.startsWith("/icons/") ||
+		(path.startsWith('/assets/') ||
+			path.startsWith('/icons/') ||
 			path === "/favicon.svg" ||
 			path === "/favicon.png" ||
 			path === "/icon.ico" ||
@@ -141,7 +143,7 @@ self.addEventListener("fetch", (event) => {
 						}
 						return response;
 					})
-					.catch(() => caches.match(request).then((fallback) => fallback || Response.error()));
+					.catch(() => caches.match(request).then(cachedOrError));
 			}),
 		);
 	}
@@ -172,7 +174,7 @@ self.addEventListener("notificationclick", (event) => {
 				// focus() rejects when the browser refuses to raise the window
 				// (rare); fall back to just returning the client so the click
 				// never logs an unhandled rejection.
-				if (match) return match.focus ? match.focus().catch(() => match) : match;
+				if (match) {return match.focus ? match.focus().catch(() => match) : match;}
 				return self.clients.openWindow(target);
 			})
 			.catch(() => undefined),

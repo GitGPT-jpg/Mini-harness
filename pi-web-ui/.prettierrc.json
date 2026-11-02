@@ -1,4 +1,24 @@
 {
 	"useTabs": true,
-	"printWidth": 120
+	"printWidth": 120,
+	"overrides": [
+		{
+			"files": ["themes/**/*.css", "web/src/styles.css", "web/src/model-management.css"],
+			"options": { "useTabs": false, "tabWidth": 4 }
+		},
+		{
+			"files": [
+				"bin/pi-web-ui.mjs",
+				"make-light-theme.mjs",
+				"web/public/sw.js",
+				"scripts/check-protocol-sync.mjs",
+				"scripts/i18n-diff.mjs",
+				"scripts/release-notes.mjs",
+				"scripts/screenshot-themes-preview.mjs",
+				"scripts/sync-locales.mjs",
+				"scripts/zh-tw-locale/{build-pack,glossary,verify}.mjs"
+			],
+			"options": { "singleQuote": true }
+		}
+	]
 }

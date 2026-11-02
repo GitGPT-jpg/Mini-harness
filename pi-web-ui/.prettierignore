@@ -3,3 +3,11 @@ web/dist
 node_modules
 coverage
 *.min.js
+# iCode requires one value per line and unbroken descendant selectors here.
+# Prettier rewrites these into forms rejected by CSS1020/CSS1003/CSS1050.
+web/src/styles.css
+themes/md-preview.css
+themes/zhujian.css
+themes/zhujian-dark.css
+themes/zhupi.css
+themes/zhupi-dark.css

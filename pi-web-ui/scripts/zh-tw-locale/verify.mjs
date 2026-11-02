@@ -3,17 +3,17 @@ import { readFileSync } from "node:fs";
 import { OpenCC } from "./opencc.mjs";
 // 用法：node verify.mjs <tw.json> <zh.json>
 const [twPath, zhPath] = process.argv.slice(2);
-const zh = JSON.parse(readFileSync(zhPath, "utf8"));
+const zh = JSON.parse(readFileSync(zhPath, 'utf8'));
 const tw = JSON.parse(readFileSync(twPath, "utf8"));
 const ph = (s) => [...s.matchAll(/\$\{pwd\}|\{\{[a-z]+\}\}|\{\$?[a-zA-Z]+\}|\[\[[a-z_/-]+/g)].map((m) => m[0]).sort();
 let bad = 0;
 const report = (msg) => {
 	bad++;
-	console.log("  ✗", msg);
+	console.log('  ✗', msg);
 };
 const zk = Object.keys(zh),
 	tk = Object.keys(tw);
-if (JSON.stringify(zk) !== JSON.stringify(tk)) report("key 集合或順序與 zh 不一致");
+if (JSON.stringify(zk) !== JSON.stringify(tk)) report('key 集合或順序與 zh 不一致');
 for (const k of zk) {
 	const v = tw[k];
 	if (typeof v !== "string" || !v.length) {
@@ -21,10 +21,10 @@ for (const k of zk) {
 		continue;
 	}
 	if (JSON.stringify(ph(v)) !== JSON.stringify(ph(zh[k])))
-		report(`${k}: 佔位符不一致 ${JSON.stringify(ph(zh[k]))} → ${JSON.stringify(ph(v))}`);
+		{report(`${k}: 佔位符不一致 ${JSON.stringify(ph(zh[k]))} → ${JSON.stringify(ph(v))}`);}
 }
 // 殘留簡體：把輸出再從「簡」轉一次，凡會變動的字元即為殘留簡體字（排除 twp 會把繁體再改的詞）
-const toTrad = OpenCC.Converter({ from: "cn", to: "tw" });
+const toTrad = OpenCC.Converter({ from: 'cn', to: "tw" });
 const residual = new Map();
 for (const [k, v] of Object.entries(tw)) {
 	const t = toTrad(v);
@@ -49,26 +49,26 @@ for (const [k, v] of Object.entries(tw)) {
 }
 // 禁用／可疑詞
 const banned = [
-	"幹",
-	"當前",
+	'幹',
+	'當前',
 	"會話",
 	"沙箱",
-	"模板",
+	'模板',
 	"後臺",
 	"計劃",
 	"只讀",
 	"訪問",
 	"文本",
 	"窗口",
-	"進程",
+	'進程',
 	"打開",
 	"響應",
 	"發送",
 	"鼠標",
 	"軟件",
-	"網絡",
+	'網絡',
 	"服務器",
-	"默認",
+	'默認',
 	"設置",
 	"信息",
 ];
@@ -76,8 +76,8 @@ for (const w of banned) {
 	const ks = Object.entries(tw)
 		.filter(([, v]) => v.includes(w))
 		.map(([k]) => k);
-	if (ks.length) report(`含 "${w}" ×${ks.length}: ${ks.slice(0, 4).join(", ")}`);
+	if (ks.length) {report(`含 "${w}" ×${ks.length}: ${ks.slice(0, 4).join(", ")}`);}
 }
-console.log(bad ? `\n共 ${bad} 項問題` : "\n通過基本驗證（key／佔位符／重複詞／禁用詞）");
+console.log(bad ? `\n共 ${bad} 項問題` : '\n通過基本驗證（key／佔位符／重複詞／禁用詞）');
 // 有問題必須非零退出：CI 里 verify 一直绿会让失效的繁中包悄悄发布。
 process.exit(bad > 0 ? 1 : 0);
