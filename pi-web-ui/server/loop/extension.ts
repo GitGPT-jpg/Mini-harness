@@ -27,11 +27,15 @@ import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	collectPreflightSummary,
+	evaluateMetricGate,
 	parseHarnessMetrics,
+	parseHarnessScenario,
 	pickBetterRound,
 	resolveGitHeadSha,
 	type BestRoundRecord,
+	type HardConstraint,
 	type HarnessMetrics,
+	type MetricGateResult,
 	type MetricTarget,
 } from "./metrics.js";
 import { createWorkspaceSnapshot } from "../workspace-snapshot.js";
@@ -41,6 +45,93 @@ const CUSTOM_TYPE = "mini-harness-loop";
 const ROOT = process.env.MINI_HARNESS_RUNTIME_ROOT || path.join(os.homedir(), ".mini-harness", "runs");
 const ACTIVE_STAGES = new Set(["intake", "plan", "run", "validate"]);
 const RUN_ID_RE = /^[0-9]{8,}-[a-z0-9]{4,}$/i;
+
+// ---------- 执行取消上下文（Task 1：停止要作用于实际执行） ----------
+
+/** 每个 run 在途 validator / precheck 的取消控制器（模块级，跨会话可找到）。 */
+const runAborts = new Map<string, AbortController>();
+
+/** 为指定 run 注册一个取消控制器；返回的 controller 一旦 abort，在途子进程组被杀。 */
+function registerRunAbort(runId: string): AbortController {
+	// 同一 run 理论上同一时刻只有一个 validator 在途；防御性替换旧控制器并触发它失效。
+	const prev = runAborts.get(runId);
+	if (prev) prev.abort();
+	const ac = new AbortController();
+	runAborts.set(runId, ac);
+	return ac;
+}
+
+/** 释放指定 run 的取消控制器（validator 正常跑完时清理，不再持有引用）。 */
+function releaseRunAbort(runId: string, ac: AbortController): void {
+	if (runAborts.get(runId) === ac) runAborts.delete(runId);
+}
+
+/**
+ * 停止时真正取消该 run 的在途 validator / precheck 子进程组。
+ * 只杀属于该 run 的进程组；不影响同工作区其它任务。
+ */
+function abortRun(runId: string): void {
+	const ac = runAborts.get(runId);
+	if (ac) ac.abort();
+}
+
+/**
+ * 标记「本地执行已确认停止」：validator 子进程组因停止被 kill 后退场时调用。
+ * 只更新 stop 相关字段，绝不把终态 run 复活（不碰 status/stage/epoch）。
+ */
+function markRunStopConfirmed(runId: string): void {
+	try {
+		const fresh = loadState(runId);
+		if (!fresh || fresh.status !== "stopped") return;
+		if (!fresh.stopRequestedAt || fresh.stopConfirmedAt) return;
+		fresh.stopConfirmedAt = now();
+		saveState(fresh);
+		journal(fresh, "stop-confirmed", { runId });
+	} catch {}
+}
+
+/** 从 run 状态构建指标门禁目标（含单位/阈值/容差/场景）；旧 metricPrecision 不再参与判定。 */
+function metricTargetOf(st: LoopState): MetricTarget | null {
+	if (!st.primaryMetric || !st.metricDirection) return null;
+	return {
+		metric: st.primaryMetric,
+		direction: st.metricDirection,
+		...(st.metricUnit ? { unit: st.metricUnit } : {}),
+		...(st.metricThreshold != null && st.metricThresholdOp
+			? { threshold: { op: st.metricThresholdOp, value: st.metricThreshold } }
+			: {}),
+		...(st.metricTolerance != null ? { tolerance: st.metricTolerance } : {}),
+		...(st.metricScenario ? { scenario: st.metricScenario } : {}),
+	};
+}
+
+function isThresholdOp(v: unknown): v is "lt" | "lte" | "gt" | "gte" {
+	return v === "lt" || v === "lte" || v === "gt" || v === "gte";
+}
+
+/** 清洗硬约束入参：只保留有指标名、合法运算符、数值合法的条目。 */
+function sanitizeHardConstraints(input: unknown): HardConstraint[] | null {
+	if (!Array.isArray(input)) return null;
+	const out: HardConstraint[] = [];
+	for (const raw of input) {
+		if (!raw || typeof raw !== "object") continue;
+		const r = raw as Record<string, unknown>;
+		const name = String(r.name ?? "").trim();
+		const metric = String(r.metric ?? "").trim();
+		const op = r.op;
+		const value = Number(r.value);
+		if (!name || !metric || !isThresholdOp(op) || !Number.isFinite(value)) continue;
+		out.push({
+			name,
+			metric,
+			op,
+			value,
+			...(r.unit != null ? { unit: String(r.unit).trim() } : {}),
+			...(r.scenario != null ? { scenario: String(r.scenario).trim() } : {}),
+		});
+	}
+	return out.length > 0 ? out : null;
+}
 
 /** 工具执行的 ctx（模型注册表/会话 id 等）；SDK 类型面较宽，这里按实际使用收窄。 */
 type LoopCtx = {
@@ -83,8 +174,26 @@ export interface LoopState {
 	primaryMetric?: string | null;
 	/** 主指标优化方向。 */
 	metricDirection?: "maximize" | "minimize" | null;
-	/** 精度/硬约束（仅记录展示）。 */
+	/** @deprecated 旧「精度/硬约束」字段，已被 threshold/tolerance 拆分，仅向后兼容读取。 */
 	metricPrecision?: number | null;
+	/** 主指标声明单位（如 % / tokens/s / ms）；未声明 = 口径无法确认。 */
+	metricUnit?: string | null;
+	/** 主指标目标阈值（与 metricThresholdOp 成对使用）。 */
+	metricThreshold?: number | null;
+	/** 主指标目标阈值运算符：lt / lte / gt / gte。 */
+	metricThresholdOp?: "lt" | "lte" | "gt" | "gte" | null;
+	/** 最优轮次比较的数值容差（相对量，仅择优，不是阈值）。 */
+	metricTolerance?: number | null;
+	/** 必要场景配置（如 "ascache-on-vs-radix-off"）；声明后 validator 必须报出匹配场景。 */
+	metricScenario?: string | null;
+	/** 必要硬约束（主指标之外的证据门禁，如精度/稳定性/输入长度）。 */
+	hardConstraints?: HardConstraint[] | null;
+	/** 停止请求发出时间（区分「已发出停止请求」与「本地执行已确认停止」）。 */
+	stopRequestedAt?: string | null;
+	/** 本地执行（validator/precheck 子进程组）确认退出时间；未确认 = 仍可能在途或远端未知。 */
+	stopConfirmedAt?: string | null;
+	/** 最近一轮的指标门禁结果（命令成功 ≠ 指标达标）。 */
+	lastMetricGate?: MetricGateResult | null;
 	maxRounds: number;
 	auto: boolean;
 	mode: "code" | "llm";
@@ -119,6 +228,14 @@ export interface LoopState {
 		/** 可恢复的代码快照引用（git 快照 ref / 目录快照路径）。 */
 		snapshotRef?: string | null;
 		precheckFailed?: boolean;
+		/** 指标门禁是否通过（命令 exit 0 但缺主指标/违反硬约束时为 false）。 */
+		metricGateOk?: boolean;
+		/** 指标门禁未通过的原因（中文，便于 UI/经验卡片展示）。 */
+		metricGateReasons?: string[];
+		/** 验收期间工作区发生变化：结果不可信，不能作为有效通过或最优 Checkpoint。 */
+		workspaceChangedDuringValidation?: boolean;
+		/** 本轮是否具备可恢复快照（git 仓库且快照成功）。非 git / 快照失败 = false。 */
+		recoverable?: boolean;
 	}>;
 	/** 最近一轮提取的 HARNESS_METRIC 数值指标。 */
 	lastMetrics?: HarnessMetrics | null;
@@ -485,6 +602,16 @@ interface ValidationResult {
 	evidence: string | null;
 	output: string;
 	metrics: HarnessMetrics | null;
+	/** validator 报出的场景标记（HARNESS_SCENARIO），无则 null。 */
+	scenario: string | null;
+	/** 验收前绑定的可恢复快照 ref（真正被测试的 candidate-A）；非 git 为 null。 */
+	snapshotRef: string | null;
+	/** 验收前快照的 commit SHA（用于验收后指纹比对）。 */
+	snapshotSha: string | null;
+	/** 是否具备可恢复快照（git 仓库且快照成功）。 */
+	recoverable: boolean;
+	/** 验收前后代码身份不一致（或无法确认一致）：本轮结果不可信，不得判通过 / 选为最优。 */
+	workspaceChangedDuringValidation: boolean;
 }
 
 function resolveValidator(st: LoopState) {
@@ -503,94 +630,113 @@ function resolveValidator(st: LoopState) {
 
 async function runValidation(pi: ExtensionAPI, st: LoopState): Promise<ValidationResult> {
 	const cwd = st.workspace || process.cwd();
-	// L0 快速预检：若配置了 precheckCmd，先秒级拦截语法/导包/配置错误，不浪费集群与压测资源
-	const preCmd = String(st.precheckCmd ?? "").trim();
-	if (preCmd) {
-		let pre: { stdout?: string; stderr?: string; code?: number | null; killed?: boolean };
-		try {
-			pre = await pi.exec("bash", ["-lc", preCmd], { cwd, timeout: 5 * 60 * 1000 });
-		} catch (e) {
-			pre = { stdout: "", stderr: String((e as Error)?.message || e), code: -1, killed: false };
-		}
-		if (pre.code !== 0) {
-			const output =
-				`[L0 precheck] $ ${preCmd}\n` +
-				`exit=${pre.code}${pre.killed ? " (killed/timeout)" : ""}（快速预检未通过，已跳过 L1 完整验收）\n` +
-				`--- stdout (tail) ---\n${tail(pre.stdout, 4000)}\n` +
-				`--- stderr (tail) ---\n${tail(pre.stderr, 4000)}\n`;
-			let evidence = "";
+	const ac = registerRunAbort(st.runId);
+	const epoch = st.epoch;
+	try {
+		// 验收前绑定代码身份（Task 3）：先快照 candidate-A（真正被 validator 读取的代码）。
+		const preId = await captureAttemptIdentity(st, epoch);
+		const preCmd = String(st.precheckCmd ?? "").trim();
+
+		// L0 快速预检：若配置了 precheckCmd，先秒级拦截语法/导包/配置错误，不浪费集群与压测资源
+		if (preCmd) {
+			let pre: { stdout?: string; stderr?: string; code?: number | null; killed?: boolean };
 			try {
-				const dir = path.join(runDir(st.runId), "evidence");
-				fs.mkdirSync(dir, { recursive: true });
-				evidence = path.join(dir, `round-${st.round}-${Date.now()}.log`);
-				fs.writeFileSync(evidence, output);
-			} catch {}
-			return {
-				pass: false,
-				noValidator: false,
-				precheckFailed: true,
-				code: pre.code ?? -1,
-				evidence,
-				output,
-				metrics: null,
-			};
+				pre = await pi.exec("bash", ["-lc", preCmd], { cwd, timeout: 5 * 60 * 1000, signal: ac.signal });
+			} catch (e) {
+				pre = { stdout: "", stderr: String((e as Error)?.message || e), code: -1, killed: false };
+			}
+			if (pre.killed) {
+				markRunStopConfirmed(st.runId);
+				return { pass: false, noValidator: false, precheckFailed: false, cancelled: true, code: null, evidence: null, output: "运行已停止：L0 预检进程已被取消。", metrics: null, scenario: null, snapshotRef: preId.snapshotRef, snapshotSha: preId.snapshotSha, recoverable: preId.recoverable, workspaceChangedDuringValidation: false };
+			}
+			if (pre.code !== 0) {
+				const output =
+					"[L0 precheck] $ " + preCmd + "\n" +
+					"exit=" + pre.code + (pre.killed ? " (killed/timeout)" : "") + "（快速预检未通过，已跳过 L1 完整验收）\n" +
+					"--- stdout (tail) ---\n" + tail(pre.stdout, 4000) + "\n" +
+					"--- stderr (tail) ---\n" + tail(pre.stderr, 4000) + "\n";
+				let evidence = "";
+				try {
+					const dir = path.join(runDir(st.runId), "evidence");
+					fs.mkdirSync(dir, { recursive: true });
+					evidence = path.join(dir, "round-" + st.round + "-" + Date.now() + ".log");
+					fs.writeFileSync(evidence, output);
+				} catch {}
+				return { pass: false, noValidator: false, precheckFailed: true, code: pre.code ?? -1, evidence, output, metrics: null, scenario: null, snapshotRef: preId.snapshotRef, snapshotSha: preId.snapshotSha, recoverable: preId.recoverable, workspaceChangedDuringValidation: false };
+			}
+			// 停止/取消守卫：L0 预检期间若被停止（epoch 已递增），绝不再启动昂贵的 L1 完整验收。
+			if (!stillCurrent(st.runId, epoch)) {
+				return { pass: false, noValidator: false, precheckFailed: false, cancelled: true, code: null, evidence: null, output: "运行已停止：L0 预检期间收到停止，已跳过 L1 完整验收。", metrics: null, scenario: null, snapshotRef: preId.snapshotRef, snapshotSha: preId.snapshotSha, recoverable: preId.recoverable, workspaceChangedDuringValidation: false };
+			}
 		}
-		// 停止/取消守卫：L0 预检期间若被停止（epoch 已递增），绝不再启动昂贵的 L1 完整验收。
-		if (!stillCurrent(st.runId, st.epoch)) {
+
+		const r = resolveValidator(st);
+		if (!r) {
 			return {
 				pass: false,
-				noValidator: false,
+				noValidator: true,
 				precheckFailed: false,
-				cancelled: true,
-				code: null,
-				evidence: null,
-				output: "运行已停止：L0 预检期间收到停止，已跳过 L1 完整验收。",
-				metrics: null,
+				code: null as number | null,
+				evidence: null as string | null,
+				metrics: null as HarnessMetrics | null,
+				scenario: null,
+				snapshotRef: preId.snapshotRef,
+				snapshotSha: preId.snapshotSha,
+				recoverable: preId.recoverable,
+				workspaceChangedDuringValidation: false,
+				output:
+					"未找到 validator。请提供 validateCmd（例如 validate.py 的路径），或在 workspace 放置 validate.py，或设置 HARNESS_ROOT。",
 			};
 		}
-	}
-	const r = resolveValidator(st);
-	if (!r) {
+		let res: { stdout?: string; stderr?: string; code?: number | null; killed?: boolean };
+		try {
+			res = await pi.exec(r.cmd, r.args, { cwd, timeout: 30 * 60 * 1000, signal: ac.signal });
+		} catch (e) {
+			res = { stdout: "", stderr: String((e as Error)?.message || e), code: -1, killed: false };
+		}
+		if (res.killed) {
+			markRunStopConfirmed(st.runId);
+			return { pass: false, noValidator: false, precheckFailed: false, cancelled: true, code: res.code ?? null, evidence: null, output: "运行已停止：L1 validator 进程已被取消。", metrics: null, scenario: null, snapshotRef: preId.snapshotRef, snapshotSha: preId.snapshotSha, recoverable: preId.recoverable, workspaceChangedDuringValidation: false };
+		}
+
+		// 验收后校验代码指纹（Task 3）：工作区是否在验收期间发生变化。
+		const postSha = await createWorkspaceSnapshot(st.workspace).catch(() => null);
+		const unchanged = preId.recoverable && postSha != null && postSha === preId.snapshotSha;
+		const workspaceChangedDuringValidation = preId.recoverable && !unchanged;
+
+		const combined = (res.stdout ?? "") + "\n" + (res.stderr ?? "");
+		const metrics = parseHarnessMetrics(combined);
+		const scenario = parseHarnessScenario(combined);
+		const output =
+			(preCmd ? "[L0 precheck] $ " + preCmd + " -> PASS\n" : "") +
+			"$ " + r.label + "\n" +
+			"exit=" + res.code + (res.killed ? " (killed/timeout)" : "") + "\n" +
+			"--- stdout (tail) ---\n" + tail(res.stdout, 6000) + "\n" +
+			"--- stderr (tail) ---\n" + tail(res.stderr, 4000) + "\n";
+		let evidence = "";
+		try {
+			const dir = path.join(runDir(st.runId), "evidence");
+			fs.mkdirSync(dir, { recursive: true });
+			evidence = path.join(dir, "round-" + st.round + "-" + Date.now() + ".log");
+			fs.writeFileSync(evidence, output);
+		} catch {}
 		return {
-			pass: false,
-			noValidator: true,
+			pass: res.code === 0,
+			noValidator: false,
 			precheckFailed: false,
-			code: null as number | null,
-			evidence: null as string | null,
-			metrics: null as HarnessMetrics | null,
-			output:
-				"未找到 validator。请提供 validateCmd（例如 validate.py 的路径），或在 workspace 放置 validate.py，或设置 HARNESS_ROOT。",
+			code: res.code ?? null,
+			evidence,
+			output,
+			metrics,
+			scenario,
+			snapshotRef: preId.snapshotRef,
+			snapshotSha: preId.snapshotSha,
+			recoverable: preId.recoverable,
+			workspaceChangedDuringValidation,
 		};
+	} finally {
+		releaseRunAbort(st.runId, ac);
 	}
-	let res: { stdout?: string; stderr?: string; code?: number | null; killed?: boolean };
-	try {
-		res = await pi.exec(r.cmd, r.args, { cwd, timeout: 30 * 60 * 1000 });
-	} catch (e) {
-		res = { stdout: "", stderr: String((e as Error)?.message || e), code: -1, killed: false };
-	}
-	const output =
-		(preCmd ? `[L0 precheck] $ ${preCmd} -> PASS\n` : "") +
-		`$ ${r.label}\n` +
-		`exit=${res.code}${res.killed ? " (killed/timeout)" : ""}\n` +
-		`--- stdout (tail) ---\n${tail(res.stdout, 6000)}\n` +
-		`--- stderr (tail) ---\n${tail(res.stderr, 4000)}\n`;
-	const metrics = parseHarnessMetrics(`${res.stdout ?? ""}\n${res.stderr ?? ""}`);
-	let evidence = "";
-	try {
-		const dir = path.join(runDir(st.runId), "evidence");
-		fs.mkdirSync(dir, { recursive: true });
-		evidence = path.join(dir, `round-${st.round}-${Date.now()}.log`);
-		fs.writeFileSync(evidence, output);
-	} catch {}
-	return {
-		pass: res.code === 0,
-		noValidator: false,
-		precheckFailed: false,
-		code: res.code ?? null,
-		evidence,
-		output,
-		metrics,
-	};
 }
 
 /**
@@ -600,19 +746,31 @@ async function runValidation(pi: ExtensionAPI, st: LoopState): Promise<Validatio
  * `refs/mini-harness/checkpoints/<runId>-r<round>`，避免被 GC 回收；后续可 `git checkout` 恢复。
  * 无改动（测试的就是 HEAD）或非 git 仓库返回 null（commitSha 兜底定位）。
  */
-async function captureSnapshotRef(st: LoopState, epoch: number): Promise<string | null> {
+/**
+ * 给一轮验证绑一个「可恢复」的代码快照引用（Task 3）：在验收开始前调用，绑定真正被测的代码。
+ * 用 workspace-snapshot 的备用 index 生成提交对象（包含未跟踪文件且不触碰真实 index），再用 update-ref 固定到
+ * refs/mini-harness/checkpoints/<runId>-r<round>，避免被 GC 回收；后续可 git checkout 恢复。
+ * 无改动（测试的就是 HEAD）或非 git 仓库返回 recoverable=false（commitSha 兜底定位）。
+ */
+interface AttemptIdentity {
+	snapshotRef: string | null;
+	snapshotSha: string | null;
+	recoverable: boolean;
+}
+
+async function captureAttemptIdentity(st: LoopState, epoch: number): Promise<AttemptIdentity> {
 	try {
-		if (!stillCurrent(st.runId, epoch)) return null;
+		if (!stillCurrent(st.runId, epoch)) return { snapshotRef: null, snapshotSha: null, recoverable: false };
 		const sha = await createWorkspaceSnapshot(st.workspace);
-		if (!sha) return null;
+		if (!sha) return { snapshotRef: null, snapshotSha: null, recoverable: false };
 		// createWorkspaceSnapshot is async. A stop/delete can win while it is producing the commit;
 		// never pin a checkpoint ref for a run that is no longer current.
-		if (!stillCurrent(st.runId, epoch)) return null;
-		const ref = `refs/mini-harness/checkpoints/${st.runId}-r${st.round}`;
+		if (!stillCurrent(st.runId, epoch)) return { snapshotRef: null, snapshotSha: null, recoverable: false };
+		const ref = "refs/mini-harness/checkpoints/" + st.runId + "-r" + st.round;
 		gitSync(["-C", st.workspace, "update-ref", ref, sha], st.workspace, 15000);
-		return ref;
+		return { snapshotRef: ref, snapshotSha: sha, recoverable: true };
 	} catch {
-		return null;
+		return { snapshotRef: null, snapshotSha: null, recoverable: false };
 	}
 }
 
@@ -625,21 +783,30 @@ async function recordValidationOutcome(
 		output: string;
 		metrics?: HarnessMetrics | null;
 		precheckFailed?: boolean;
+		scenario?: string | null;
+		snapshotRef?: string | null;
+		recoverable?: boolean;
+		workspaceChangedDuringValidation?: boolean;
 	},
 	epoch: number,
 ): Promise<boolean> {
 	const at = now();
 	const verdict = v.pass ? "pass" : "fail";
 	const commitSha = resolveGitHeadSha(st.workspace || process.cwd());
-	const snapshotRef = await captureSnapshotRef(st, epoch);
 	if (!stillCurrent(st.runId, epoch)) {
-		journal(st, "late-callback-dropped", { at: "recordValidationOutcome/snapshot", epoch });
+		journal(st, "late-callback-dropped", { at: "recordValidationOutcome", epoch });
 		return false;
 	}
+	const snapshotRef = v.snapshotRef ?? null;
+	const recoverable = v.recoverable === true;
+	const workspaceChanged = v.workspaceChangedDuringValidation === true;
+	const target = metricTargetOf(st);
+	const gate = evaluateMetricGate(target, st.hardConstraints, v.metrics, v.scenario ?? null);
 	st.validatedRound = st.round;
 	st.lastVerdict = verdict;
 	st.lastCode = v.code;
 	st.lastEvidence = v.output;
+	st.lastMetricGate = gate;
 	if (v.metrics) st.lastMetrics = v.metrics;
 	st.history.push({
 		round: st.round,
@@ -651,27 +818,27 @@ async function recordValidationOutcome(
 		...(commitSha ? { commitSha } : {}),
 		...(snapshotRef ? { snapshotRef } : {}),
 		...(v.precheckFailed ? { precheckFailed: true } : {}),
+		metricGateOk: gate.ok,
+		...(gate.reasons.length ? { metricGateReasons: gate.reasons } : {}),
+		...(workspaceChanged ? { workspaceChangedDuringValidation: true } : {}),
+		recoverable,
 	});
-	const target: MetricTarget | null =
-		st.primaryMetric && st.metricDirection
-			? {
-					metric: st.primaryMetric,
-					direction: st.metricDirection,
-					...(st.metricPrecision != null ? { precision: st.metricPrecision } : {}),
-				}
-			: null;
-	st.bestRound = pickBetterRound(
-		st.bestRound,
-		{
-			round: st.round,
-			verdict,
-			commitSha,
-			...(snapshotRef ? { snapshotRef } : {}),
-			...(v.metrics ? { metrics: v.metrics } : {}),
-			at,
-		},
-		target,
-	);
+	// 可信轮：命令结果可信（验收期间工作区未变）且指标门禁通过，才允许更新最优 Checkpoint。
+	const trusted = !workspaceChanged && gate.ok;
+	if (trusted) {
+		st.bestRound = pickBetterRound(
+			st.bestRound,
+			{
+				round: st.round,
+				verdict,
+				commitSha,
+				...(snapshotRef ? { snapshotRef } : {}),
+				...(v.metrics ? { metrics: v.metrics } : {}),
+				at,
+			},
+			target,
+		);
+	}
 	return true;
 }
 
@@ -938,8 +1105,30 @@ async function handleVerdict(
 	pi: ExtensionAPI,
 	ctx: LoopCtx,
 	st: LoopState,
-	v: { pass: boolean; noValidator?: boolean; code: number | null; output: string },
+	v: { pass: boolean; noValidator?: boolean; code: number | null; output: string; workspaceChangedDuringValidation?: boolean },
 ) {
+	// Task 3：验收期间工作区发生变化 → 本轮结果不可信，不得判通过 / 不得选为最优 Checkpoint。
+	if (v.workspaceChangedDuringValidation) {
+		advanceOrStop(
+			pi,
+			st,
+			v,
+			"工作区在验收期间发生变化，本轮验证结果不可信；请先停止并发改动，再基于稳定代码重新 loop_done。",
+			"workspace-changed-during-validation",
+		);
+		return;
+	}
+	// Task 2：命令成功（exit 0）不等于指标达标。主指标缺失 / 数值非法 / 阈值或硬约束不满足 → 不判完成。
+	if (v.pass && st.lastMetricGate && !st.lastMetricGate.ok) {
+		advanceOrStop(
+			pi,
+			st,
+			v,
+			"指标门禁未通过：\n" + (st.lastMetricGate.reasons || []).join("\n"),
+			"metric-gate",
+		);
+		return;
+	}
 	if (v.pass) {
 		const epoch = st.epoch;
 		const review = await runReview(ctx, st, v, pi);
@@ -1163,8 +1352,20 @@ export interface CreateLoopRunInput {
 	primaryMetric?: string;
 	/** 主指标优化方向：maximize / minimize。 */
 	metricDirection?: "maximize" | "minimize";
-	/** 精度/硬约束（仅记录展示）。 */
+	/** @deprecated 旧「精度/硬约束」字段，仅向后兼容。 */
 	metricPrecision?: number;
+	/** 主指标声明单位。 */
+	metricUnit?: string;
+	/** 主指标目标阈值（与 metricThresholdOp 成对）。 */
+	metricThreshold?: number;
+	/** 主指标目标阈值运算符。 */
+	metricThresholdOp?: "lt" | "lte" | "gt" | "gte";
+	/** 最优轮次比较容差（相对量）。 */
+	metricTolerance?: number;
+	/** 必要场景配置。 */
+	metricScenario?: string;
+	/** 必要硬约束（主指标之外的证据门禁）。 */
+	hardConstraints?: HardConstraint[];
 	mode?: "code" | "llm";
 	maxRounds?: number;
 	useReviewer?: boolean;
@@ -1247,6 +1448,15 @@ export function createLoopRun(
 		primaryMetric: String(input.primaryMetric ?? "").trim() || null,
 		metricDirection: input.metricDirection === "minimize" ? "minimize" : input.metricDirection === "maximize" ? "maximize" : null,
 		metricPrecision: input.metricPrecision != null && Number.isFinite(Number(input.metricPrecision)) ? Number(input.metricPrecision) : null,
+		metricUnit: String(input.metricUnit ?? "").trim() || null,
+		metricThreshold: input.metricThreshold != null && Number.isFinite(Number(input.metricThreshold)) ? Number(input.metricThreshold) : null,
+		metricThresholdOp: isThresholdOp(input.metricThresholdOp) ? input.metricThresholdOp : null,
+		metricTolerance:
+			input.metricTolerance != null && Number.isFinite(Number(input.metricTolerance))
+				? Math.max(0, Number(input.metricTolerance))
+				: null,
+		metricScenario: String(input.metricScenario ?? "").trim() || null,
+		hardConstraints: sanitizeHardConstraints(input.hardConstraints),
 		maxRounds,
 		auto: input.auto !== false,
 		mode: input.mode === "llm" ? "llm" : "code",
@@ -1422,7 +1632,25 @@ export function createLoopExtension() {
 				metricDirection: Type.Optional(
 					Type.String({ description: "主指标优化方向：maximize（越大越好）或 minimize（越小越好）" }),
 				),
-				metricPrecision: Type.Optional(Type.Number({ description: "精度/硬约束（仅记录展示）" })),
+				metricPrecision: Type.Optional(Type.Number({ description: "（废弃）旧精度/硬约束字段，仅向后兼容" })),
+				metricUnit: Type.Optional(Type.String({ description: "主指标单位（如 % / tokens/s / ms）" })),
+				metricThreshold: Type.Optional(Type.Number({ description: "主指标目标阈值（与 metricThresholdOp 成对）" })),
+				metricThresholdOp: Type.Optional(Type.String({ description: "主指标目标阈值运算符：lt / lte / gt / gte" })),
+				metricTolerance: Type.Optional(Type.Number({ description: "最优轮次比较容差（相对量，仅择优用）" })),
+				metricScenario: Type.Optional(Type.String({ description: "必要场景配置；声明后 validator 必须报出匹配场景" })),
+				hardConstraints: Type.Optional(
+					Type.Array(
+						Type.Object({
+							name: Type.String({ description: "约束名（展示用）" }),
+							metric: Type.String({ description: "约束指标名（HARNESS_METRIC 的键）" }),
+							op: Type.String({ description: "运算符：lt / lte / gt / gte" }),
+							value: Type.Number({ description: "约束值" }),
+							unit: Type.Optional(Type.String({ description: "声明单位" })),
+							scenario: Type.Optional(Type.String({ description: "必要场景配置" })),
+						}),
+						{ description: "必要硬约束（主指标之外的证据门禁）" },
+					),
+				),
 				artifactRoots: Type.Optional(
 					Type.Array(Type.String(), { description: "产物根目录（可多个，workspace 之外）；reviewer 会核验这些目录" }),
 				),
@@ -1499,6 +1727,12 @@ export function createLoopExtension() {
 					primaryMetric: params.primaryMetric,
 					metricDirection: params.metricDirection === "minimize" || params.metricDirection === "maximize" ? params.metricDirection : undefined,
 					metricPrecision: params.metricPrecision,
+					metricUnit: params.metricUnit,
+					metricThreshold: params.metricThreshold,
+					metricThresholdOp: isThresholdOp(params.metricThresholdOp) ? params.metricThresholdOp : undefined,
+					metricTolerance: params.metricTolerance,
+					metricScenario: params.metricScenario,
+					hardConstraints: sanitizeHardConstraints(params.hardConstraints) ?? undefined,
 					artifactRoots: Array.isArray(params.artifactRoots) ? params.artifactRoots : [],
 					maxRounds: params.maxRounds,
 					auto: params.auto,
@@ -1710,10 +1944,12 @@ export function createLoopExtension() {
 				st.stage = "stopped";
 				st.stopReason = String(params.reason || "") || "user-stop";
 				st.epoch += 1; // 【修复②】递增代次：在途/迟到的异步回调全部失效
+				st.stopRequestedAt = now();
 				saveState(st);
 				journal(st, "stop", { reason: st.stopReason, epoch: st.epoch });
+				abortRun(st.runId); // Task 1：真正取消在途 validator / precheck 子进程组
 				return {
-					content: [{ type: "text", text: `已停止运行 ${st.runId}（epoch=${st.epoch}）。` }],
+					content: [{ type: "text", text: "已停止运行 " + st.runId + "（epoch=" + st.epoch + "）。" }],
 					details: { runId: st.runId, status: st.status, epoch: st.epoch },
 				};
 			},
@@ -1880,14 +2116,18 @@ export function createLoopExtension() {
  */
 export function stopRunExternal(runId: string, reason = "user-stop"): { ok: boolean; error?: string } {
 	const st = loadState(runId);
-	if (!st) return { ok: false, error: `run 不存在：${runId}` };
-	if (st.status !== "active") return { ok: false, error: `run 已是终态：${st.status}` };
+	if (!st) return { ok: false, error: "run 不存在：" + runId };
+	if (st.status !== "active") return { ok: false, error: "run 已是终态：" + st.status };
+	// 先使旧代次失效并取消在途执行，再落盘：迟到回调 / 在途子进程组一起作废。
 	st.status = "stopped";
 	st.stage = "stopped";
 	st.stopReason = reason;
 	st.epoch += 1;
+	st.stopRequestedAt = now();
 	saveState(st);
 	journal(st, "stop", { source: "server", reason, epoch: st.epoch });
+	// 真正取消该 run 的在途 validator / precheck 子进程（Task 1）。
+	abortRun(runId);
 	return { ok: true };
 }
 
@@ -2073,6 +2313,8 @@ export function reactivateForReview(runId: string): { ok: true; st: LoopState } 
 	st.stage = "validate";
 	st.validatedRound = 0;
 	delete st.stopReason;
+	delete st.stopRequestedAt;
+	delete st.stopConfirmedAt;
 	st.epoch += 1;
 	saveState(st);
 	journal(st, "retry-review", { epoch: st.epoch });

@@ -854,8 +854,27 @@ export type ClientMessage =
 			primaryMetric?: string;
 			/** 主指标优化方向：maximize / minimize。 */
 			metricDirection?: "maximize" | "minimize";
-			/** 精度/硬约束（仅记录展示）。 */
+			/** @deprecated 旧「精度/硬约束」字段，仅向后兼容。 */
 			metricPrecision?: number;
+			/** 主指标声明单位（如 % / tokens/s / ms）。 */
+			metricUnit?: string;
+			/** 主指标目标阈值（与 metricThresholdOp 成对）。 */
+			metricThreshold?: number;
+			/** 主指标目标阈值运算符：lt / lte / gt / gte。 */
+			metricThresholdOp?: "lt" | "lte" | "gt" | "gte";
+			/** 最优轮次比较容差（相对量，仅择优）。 */
+			metricTolerance?: number;
+			/** 必要场景配置；声明后 validator 必须报出匹配场景。 */
+			metricScenario?: string;
+			/** 必要硬约束（主指标之外的证据门禁：精度 / 稳定性 / 输入长度等）。 */
+			hardConstraints?: Array<{
+				name: string;
+				metric: string;
+				op: "lt" | "lte" | "gt" | "gte";
+				value: number;
+				unit?: string;
+				scenario?: string;
+			}>;
 			/** 能力包 id：服务端按包内默认值填充未显式提供的字段（显式字段优先）。 */
 			packId?: string;
 	  }
@@ -1465,6 +1484,38 @@ export interface LoopUiState {
 		commitSha: string | null;
 		metrics?: Record<string, number>;
 		at: string;
+	};
+	/** 停止请求发出时间（区分「已发出停止请求」与「本地执行已确认停止」）。 */
+	stopRequestedAt?: string;
+	/** 本地执行（validator/precheck 子进程组）确认退出时间；未确认 = 仍可能在途或远端未知。 */
+	stopConfirmedAt?: string;
+	/** 主指标声明单位。 */
+	metricUnit?: string;
+	/** 主指标目标阈值。 */
+	metricThreshold?: number;
+	/** 主指标目标阈值运算符。 */
+	metricThresholdOp?: "lt" | "lte" | "gt" | "gte";
+	/** 最优轮次比较容差（相对量）。 */
+	metricTolerance?: number;
+	/** 必要场景配置。 */
+	metricScenario?: string;
+	/** 必要硬约束（主指标之外的证据门禁）。 */
+	hardConstraints?: Array<{
+		name: string;
+		metric: string;
+		op: "lt" | "lte" | "gt" | "gte";
+		value: number;
+		unit?: string;
+		scenario?: string;
+	}>;
+	/** 最近一轮指标门禁结果（命令 exit 0 不等于指标达标）。 */
+	lastMetricGate?: {
+		ok: boolean;
+		missingPrimary: boolean;
+		unitUnconfirmed: boolean;
+		scenarioMismatch: boolean;
+		violations: Array<{ name: string; detail: string }>;
+		reasons: string[];
 	};
 	/** run 创建时间（ISO）；UI 据此算耗时。pending 时为请求发出时间。 */
 	createdAt: string;

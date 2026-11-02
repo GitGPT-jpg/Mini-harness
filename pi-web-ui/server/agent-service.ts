@@ -399,6 +399,15 @@ function loopUiFromState(st: LoopState): LoopUiState {
 		...(st.precheckCmd ? { precheckCmd: st.precheckCmd } : {}),
 		...(st.lastMetrics ? { lastMetrics: st.lastMetrics } : {}),
 		...(st.bestRound ? { bestRound: st.bestRound } : {}),
+		...(st.stopRequestedAt ? { stopRequestedAt: st.stopRequestedAt } : {}),
+		...(st.stopConfirmedAt ? { stopConfirmedAt: st.stopConfirmedAt } : {}),
+		...(st.metricUnit ? { metricUnit: st.metricUnit } : {}),
+		...(st.metricThreshold != null ? { metricThreshold: st.metricThreshold } : {}),
+		...(st.metricThresholdOp ? { metricThresholdOp: st.metricThresholdOp } : {}),
+		...(st.metricTolerance != null ? { metricTolerance: st.metricTolerance } : {}),
+		...(st.metricScenario ? { metricScenario: st.metricScenario } : {}),
+		...(st.hardConstraints?.length ? { hardConstraints: st.hardConstraints } : {}),
+		...(st.lastMetricGate ? { lastMetricGate: st.lastMetricGate } : {}),
 		createdAt: st.createdAt,
 	};
 }
@@ -12386,6 +12395,12 @@ export class ClientSession {
 		primaryMetric?: string;
 		metricDirection?: "maximize" | "minimize";
 		metricPrecision?: number;
+		metricUnit?: string;
+		metricThreshold?: number;
+		metricThresholdOp?: "lt" | "lte" | "gt" | "gte";
+		metricTolerance?: number;
+		metricScenario?: string;
+		hardConstraints?: Array<{ name: string; metric: string; op: "lt" | "lte" | "gt" | "gte"; value: number; unit?: string; scenario?: string }>;
 		packId?: string;
 	}): Promise<void> {
 		const conv = this.conv;
@@ -12412,6 +12427,12 @@ export class ClientSession {
 		const primaryMetric = msg.primaryMetric ?? pack?.primaryMetric;
 		const metricDirection = msg.metricDirection ?? pack?.metricDirection;
 		const metricPrecision = msg.metricPrecision;
+		const metricUnit = msg.metricUnit ?? pack?.metricUnit;
+		const metricThreshold = msg.metricThreshold ?? pack?.metricThreshold?.value;
+		const metricThresholdOp = msg.metricThresholdOp ?? pack?.metricThreshold?.op;
+		const metricTolerance = msg.metricTolerance;
+		const metricScenario = msg.metricScenario ?? pack?.metricScenario;
+		const hardConstraints = msg.hardConstraints ?? pack?.hardConstraints;
 		const useReviewer = msg.useReviewer ?? pack?.useReviewer;
 		const maxRounds = msg.maxRounds ?? pack?.maxRounds;
 		const roots = (msg.artifactRoots ?? []).map((r) => String(r).trim()).filter(Boolean);
@@ -12426,6 +12447,12 @@ export class ClientSession {
 			primaryMetric,
 			metricDirection,
 			metricPrecision,
+			metricUnit,
+			metricThreshold,
+			metricThresholdOp,
+			metricTolerance,
+			metricScenario,
+			hardConstraints,
 			mode: msg.mode,
 			maxRounds,
 			useReviewer,
@@ -12600,7 +12627,9 @@ export class ClientSession {
 			// worktree 执行者会话：续跑提示词发到绑 worktree 的子代理，主对话不跑模型
 			const executor = this.loopExecutorConv(cur);
 			if (executor && executor !== conv) {
-				executor.kickoff = executor.session.sendUserMessage(resumePrompt).catch((err) => {
+				// 修复（Task 4）：await 投递落定后再释放 loopResuming 互斥锁，
+				// 避免快速重复 resume 在投递尚未完成时再次进入、导致双投递。
+				await executor.session.sendUserMessage(resumePrompt).catch((err) => {
 					this.emit({
 						type: "notice",
 						level: "error",

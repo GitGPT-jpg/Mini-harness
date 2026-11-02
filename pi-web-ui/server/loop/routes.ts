@@ -27,7 +27,7 @@ import { basename, join } from "node:path";
 import type { Express } from "express";
 import { deleteGoalLog, listGoalLog } from "../goal-history-log.js";
 import { distillLoopRun } from "./distill.js";
-import type { BestRoundRecord, HarnessMetrics } from "./metrics.js";
+import type { BestRoundRecord, HardConstraint, HarnessMetrics, MetricGateResult } from "./metrics.js";
 import { listCapabilityPacks } from "./packs.js";
 import {
 	deleteLoopRun,
@@ -178,10 +178,24 @@ export interface LoopRunDetail {
 		at: string;
 		metrics?: HarnessMetrics;
 		commitSha?: string | null;
+		snapshotRef?: string | null;
 		precheckFailed?: boolean;
+		metricGateOk?: boolean;
+		metricGateReasons?: string[];
+		workspaceChangedDuringValidation?: boolean;
+		recoverable?: boolean;
 	}>;
 	lastMetrics?: HarnessMetrics | null;
 	bestRound?: BestRoundRecord | null;
+	stopRequestedAt?: string | null;
+	stopConfirmedAt?: string | null;
+	metricUnit?: string | null;
+	metricThreshold?: number | null;
+	metricThresholdOp?: "lt" | "lte" | "gt" | "gte" | null;
+	metricTolerance?: number | null;
+	metricScenario?: string | null;
+	hardConstraints?: HardConstraint[] | null;
+	lastMetricGate?: MetricGateResult | null;
 	rounds: LoopRoundEvidence[];
 	diff: string;
 	journal: Array<Record<string, unknown>>;
@@ -285,10 +299,24 @@ export function collectRunDetail(runId: string): LoopRunDetail | null {
 			at: h.at,
 			...(h.metrics ? { metrics: h.metrics } : {}),
 			...(h.commitSha ? { commitSha: h.commitSha } : {}),
+			...(h.snapshotRef ? { snapshotRef: h.snapshotRef } : {}),
 			...(h.precheckFailed ? { precheckFailed: true } : {}),
+			...(typeof h.metricGateOk === "boolean" ? { metricGateOk: h.metricGateOk } : {}),
+			...(h.metricGateReasons?.length ? { metricGateReasons: h.metricGateReasons } : {}),
+			...(h.workspaceChangedDuringValidation ? { workspaceChangedDuringValidation: true } : {}),
+			...(typeof h.recoverable === "boolean" ? { recoverable: h.recoverable } : {}),
 		})),
 		...(st.lastMetrics ? { lastMetrics: st.lastMetrics } : {}),
 		...(st.bestRound ? { bestRound: st.bestRound } : {}),
+		...(st.stopRequestedAt ? { stopRequestedAt: st.stopRequestedAt } : {}),
+		...(st.stopConfirmedAt ? { stopConfirmedAt: st.stopConfirmedAt } : {}),
+		...(st.metricUnit ? { metricUnit: st.metricUnit } : {}),
+		...(st.metricThreshold != null ? { metricThreshold: st.metricThreshold } : {}),
+		...(st.metricThresholdOp ? { metricThresholdOp: st.metricThresholdOp } : {}),
+		...(st.metricTolerance != null ? { metricTolerance: st.metricTolerance } : {}),
+		...(st.metricScenario ? { metricScenario: st.metricScenario } : {}),
+		...(st.hardConstraints?.length ? { hardConstraints: st.hardConstraints } : {}),
+		...(st.lastMetricGate ? { lastMetricGate: st.lastMetricGate } : {}),
 		rounds: [...byRound.values()].sort((a, b) => a.round - b.round),
 		diff: clipTail(st.lastDiff, DETAIL_DIFF_MAX),
 		journal: journal.slice(-DETAIL_JOURNAL_MAX),

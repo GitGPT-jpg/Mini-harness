@@ -1,19 +1,27 @@
 /**
- * 推理与性能任务指标提取、最优轮次 Checkpoint 与前置探测（D-12c 方向二）。
+ * 推理与性能任务指标提取、最优轮次 Checkpoint、指标门禁与前置探测（D-12c 方向二 + P1 指标门禁）。
  *
- * validator 标准输出中可携带一行或多行结构化指标：
+ * validator 标准输出中可携带结构化指标与场景标记：
  *   - JSON 格式：HARNESS_METRIC: {"ttft_ms": 118.4, "tps": 86.2, "cache_hit": 0.96}
  *   - KV 格式：  HARNESS_METRIC: ttft_ms=118.4 tps=86.2 loss_pct=14.2
+ *   - 场景标记：  HARNESS_SCENARIO: ascache-on-vs-radix-off
  *
  * 运行时自动解析数值指标落盘到 history[i].metrics 与 st.lastMetrics，
  * 并基于通过态（或指标得分）维护 st.bestRound（含轮次、commitSha、metrics），
  * 防止多轮迭代改坏已跑通或性能更优的版本。
+ *
+ * 指标门禁（evaluateMetricGate）把「命令执行成功（exit 0）」与「指标采集成功 + 硬约束满足」分开：
+ * 声明了主指标的任务，validator 即便 exit 0，只要没报出主指标 / 数值非法 / 阈值或硬约束不满足，
+ * 都不得把该轮当作指标验收通过或最优 Checkpoint。
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
 export type HarnessMetrics = Record<string, number>;
+
+export type MetricDirection = "maximize" | "minimize";
+export type ThresholdOperator = "lt" | "lte" | "gt" | "gte";
 
 export interface BestRoundRecord {
 	round: number;
@@ -25,7 +33,40 @@ export interface BestRoundRecord {
 	at: string;
 }
 
+/** 任务声明的「主指标 + 优化方向 + 单位 + 目标阈值 + 比较容差」硬约束（可选）。 */
+export interface MetricTarget {
+	/** 主指标名（如 loss_pct / tps / ttft_ms）。声明后比较与门禁只认它，不再按名字猜。 */
+	metric: string;
+	/** 优化方向：maximize（越大越好）/ minimize（越小越好）。 */
+	direction: MetricDirection;
+	/** 声明单位（如 % / tokens/s / ms）。未声明则单位口径无法确认（记录展示，不阻塞）。 */
+	unit?: string;
+	/** 目标阈值（如 { op: "lt", value: 20 } 表示 loss_pct < 20）。未声明 = 无数值目标，只要求指标在场。 */
+	threshold?: { op: ThresholdOperator; value: number };
+	/** 最优轮次比较的数值容差（相对量，如 0.01 = 1%；0 = 精确比较）。只用于择优，不是阈值。 */
+	tolerance?: number;
+	/** 必要场景配置（如 "ascache-on-vs-radix-off"）。声明后 validator 必须报出匹配场景，否则证据不足。 */
+	scenario?: string;
+	/** @deprecated 旧字段「精度/硬约束」，已被 threshold / tolerance 拆分；仅向后兼容读取，不参与判定。 */
+	precision?: number;
+}
+
+/** 必要硬约束：主指标之外的证据门禁（如「精度无退化」「稳定性通过」「输入长度 = 60k」）。 */
+export interface HardConstraint {
+	/** 约束名（展示用）。 */
+	name: string;
+	/** 约束指标名（取自 HARNESS_METRIC 的键）。 */
+	metric: string;
+	op: ThresholdOperator;
+	value: number;
+	/** 声明单位（记录展示）。 */
+	unit?: string;
+	/** 必要场景配置；声明后 validator 场景标记须匹配，否则证据不足。 */
+	scenario?: string;
+}
+
 const METRIC_LINE_RE = /^\s*HARNESS_METRIC\s*:\s*(.+)$/i;
+const SCENARIO_LINE_RE = /^\s*HARNESS_SCENARIO\s*:\s*(.+)$/i;
 const KV_TOKEN_RE = /([A-Za-z_][A-Za-z0-9_.-]*)\s*=\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)/gi;
 
 /**
@@ -64,14 +105,17 @@ export function parseHarnessMetrics(output: unknown): HarnessMetrics | null {
 	return Object.keys(out).length > 0 ? out : null;
 }
 
-/** 任务声明的「主指标 + 优化方向 + 精度」硬约束（可选）。 */
-export interface MetricTarget {
-	/** 主指标名（如 loss_pct / tps / ttft_ms）。声明后比较只认它，不再按名字猜。 */
-	metric: string;
-	/** 优化方向：maximize（越大越好）/ minimize（越小越好）。 */
-	direction: "maximize" | "minimize";
-	/** 精度/硬约束（如数值精度、目标阈值），仅记录展示，不参与择优。 */
-	precision?: number;
+/** 从 validator 输出中提取 HARNESS_SCENARIO 场景标记（字符串，非数值指标）；无则 null。 */
+export function parseHarnessScenario(output: unknown): string | null {
+	const text = String(output ?? "");
+	for (const line of text.split(/\r?\n/)) {
+		const m = SCENARIO_LINE_RE.exec(line);
+		if (m) {
+			const v = m[1]!.trim();
+			if (v) return v;
+		}
+	}
+	return null;
 }
 
 /**
@@ -98,13 +142,26 @@ function metricScore(metrics?: HarnessMetrics | null, target?: MetricTarget | nu
 	return typeof first === "number" && Number.isFinite(first) ? first : null;
 }
 
+function thresholdSatisfied(v: number, op: ThresholdOperator, value: number): boolean {
+	switch (op) {
+		case "lt":
+			return v < value;
+		case "lte":
+			return v <= value;
+		case "gt":
+			return v > value;
+		case "gte":
+			return v >= value;
+	}
+}
+
 /**
  * 决定本轮是否应更新 bestRound：
  * 1. 尚无 bestRound：未声明主指标时只要本轮 pass 或带有效指标即可记录；声明主指标时必须报出该指标；
- * 2. 已有 bestRound 为 fail 而本轮为 pass：必更新；
- * 3. 本轮为 fail 而已有 bestRound 为 pass：绝不覆盖；
- * 4. 同为 pass（或同为 fail）：若双方都有指标，得分更高（或持平但更新）时更新；无指标时取最新 pass。
- *    target 声明了主指标时，比较只认主指标与方向；否则回退旧启发。
+ * 2. 声明主指标后，候选轮缺主指标 → 永不成为最优（即便 pass 也不能压过已有的 fail 带指标轮）；
+ * 3. 同为 pass / 同为 fail / 一 pass 一 fail：都必须在主指标在场、口径一致时才可比较，数值更优者胜；
+ *    容差内视为持平，pass 优先，再取更新一轮；
+ * 4. 未声明主指标时回退旧启发：pass 永远优于 fail；同判定按指标得分；无指标取最新 pass。
  */
 export function pickBetterRound(
 	current: BestRoundRecord | null | undefined,
@@ -113,26 +170,111 @@ export function pickBetterRound(
 ): BestRoundRecord | null {
 	const hasMetrics = candidate.metrics && Object.keys(candidate.metrics).length > 0;
 	const candScore = metricScore(candidate.metrics, target);
+	const tolerance = Math.max(0, Number(target?.tolerance) || 0);
+
+	if (target?.metric) {
+		// 声明主指标：候选轮没报出主指标（或数值非法）→ 永不成为最优。
+		if (candScore === null) return current ?? null;
+		if (!current) return candidate;
+		const curScore = metricScore(current.metrics, target);
+		// 已有最优轮没主指标，候选轮有 → 候选轮补齐证据，胜出。
+		if (curScore === null) return candidate;
+		if (candScore > curScore + tolerance) return candidate;
+		if (candScore < curScore - tolerance) return current;
+		// 容差内持平：pass 优先；同判定取更新一轮。
+		const curPass = current.verdict === "pass";
+		const candPass = candidate.verdict === "pass";
+		if (candPass !== curPass) return candPass ? candidate : current;
+		return candidate;
+	}
+
 	if (!current) {
-		if (target?.metric) return candScore !== null ? candidate : null;
 		return candidate.verdict === "pass" || hasMetrics ? candidate : null;
 	}
 	const curPass = current.verdict === "pass";
 	const candPass = candidate.verdict === "pass";
-	if (candPass && !curPass) return candidate;
-	if (!candPass && curPass) return current;
+	if (candPass !== curPass) return candPass ? candidate : current;
 	const curScore = metricScore(current.metrics, target);
-	if (target?.metric) {
-		if (candScore === null) return current;
-		if (curScore === null) return candidate;
-		return candScore >= curScore ? candidate : current;
-	}
 	if (curScore !== null && candScore !== null) {
 		return candScore >= curScore ? candidate : current;
 	}
 	if (candScore !== null && curScore === null) return candidate;
 	if (candPass) return candidate;
 	return current;
+}
+
+/** 指标门禁结果：区分「命令成功」与「指标/硬约束满足」。 */
+export interface MetricGateResult {
+	/** 门禁通过：无主指标时恒 true；有主指标时要求指标在场且阈值/硬约束全部满足。 */
+	ok: boolean;
+	/** 缺少声明的主指标（含数值非法）。 */
+	missingPrimary: boolean;
+	/** 声明了主指标但未声明单位（口径无法确认，仅记录展示，不阻塞）。 */
+	unitUnconfirmed: boolean;
+	/** 场景不匹配（声明了必要场景但 validator 未报出匹配场景）。 */
+	scenarioMismatch: boolean;
+	/** 不满足的硬约束（含主指标阈值）。 */
+	violations: Array<{ name: string; detail: string }>;
+	reasons: string[];
+}
+
+/**
+ * 评估指标门禁：把「主指标在场 + 目标阈值 + 必要硬约束」统一成一道验收门禁。
+ * 无主指标且无硬约束（普通功能性任务）→ ok=true，不破坏非指标任务。
+ */
+export function evaluateMetricGate(
+	target: MetricTarget | null | undefined,
+	constraints: HardConstraint[] | null | undefined,
+	metrics: HarnessMetrics | null | undefined,
+	scenario: string | null | undefined,
+): MetricGateResult {
+	const violations: Array<{ name: string; detail: string }> = [];
+	const reasons: string[] = [];
+	let missingPrimary = false;
+	let scenarioMismatch = false;
+	const unitUnconfirmed = !!target?.metric && !target?.unit;
+
+	if (target?.metric) {
+		const v = metrics?.[target.metric];
+		if (typeof v !== "number" || !Number.isFinite(v)) {
+			missingPrimary = true;
+			reasons.push("缺少主指标 " + target.metric + "（validator 未输出或数值非法；命令 exit 0 不等于指标达标）。");
+		} else if (target.threshold && !thresholdSatisfied(v, target.threshold.op, target.threshold.value)) {
+			violations.push({
+				name: "主指标 " + target.metric,
+				detail: target.metric + "=" + v + " 不满足 " + target.threshold.op + " " + target.threshold.value,
+			});
+			reasons.push("主指标 " + target.metric + "=" + v + " 未达目标阈值（" + target.threshold.op + " " + target.threshold.value + "）。");
+		}
+		if (target.scenario) {
+			if (scenario !== target.scenario) {
+				scenarioMismatch = true;
+				reasons.push("必要场景不匹配：任务声明 " + target.scenario + "，validator 报出 " + (scenario ?? "（无）") + "。");
+			}
+		}
+	}
+	for (const c of constraints ?? []) {
+		const v = metrics?.[c.metric];
+		if (typeof v !== "number" || !Number.isFinite(v)) {
+			violations.push({ name: c.name, detail: "缺少约束指标 " + c.metric });
+			reasons.push("缺少必要约束证据：" + c.name + "（" + c.metric + " 未输出）。");
+		} else if (!thresholdSatisfied(v, c.op, c.value)) {
+			violations.push({ name: c.name, detail: c.metric + "=" + v + " 不满足 " + c.op + " " + c.value });
+			reasons.push("硬约束不满足：" + c.name + "（" + c.metric + "=" + v + " " + c.op + " " + c.value + "）。");
+		} else if (c.scenario && scenario !== c.scenario) {
+			scenarioMismatch = true;
+			violations.push({ name: c.name, detail: "场景不匹配（声明 " + c.scenario + "，实际 " + (scenario ?? "（无）") + "）" });
+			reasons.push("约束 " + c.name + " 声明的场景 " + c.scenario + " 与实际 " + (scenario ?? "（无）") + " 不一致。");
+		}
+	}
+	return {
+		ok: !missingPrimary && !scenarioMismatch && violations.length === 0,
+		missingPrimary,
+		unitUnconfirmed,
+		scenarioMismatch,
+		violations,
+		reasons,
+	};
 }
 
 /**
@@ -168,7 +310,7 @@ export function collectPreflightSummary(workspace: string): string {
 			stdio: ["ignore", "pipe", "ignore"],
 		}).trim();
 		const sha = resolveGitHeadSha(workspace);
-		if (branch) parts.push(`git=${branch}${sha ? `@${sha}` : ""}`);
+		if (branch) parts.push("git=" + branch + (sha ? "@" + sha : ""));
 	} catch {
 		parts.push("git=none");
 	}
@@ -179,7 +321,7 @@ export function collectPreflightSummary(workspace: string): string {
 			return false;
 		}
 	});
-	if (markers.length) parts.push(`files=[${markers.join(", ")}]`);
+	if (markers.length) parts.push("files=[" + markers.join(", ") + "]");
 	if (process.env.KUBECONFIG && fs.existsSync(process.env.KUBECONFIG)) {
 		parts.push("kubeconfig=ready");
 	}
