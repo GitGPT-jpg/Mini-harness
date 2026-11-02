@@ -6,8 +6,6 @@ import {
 	FiDownload,
 	FiFolder,
 	FiFolderPlus,
-	FiGitBranch,
-	FiGithub,
 	FiGlobe,
 	FiLayers,
 	FiList,
@@ -19,7 +17,7 @@ import {
 	FiSun,
 	FiTerminal,
 } from "react-icons/fi";
-import { LuFlaskConical, LuMessageSquareDashed, LuWorkflow } from "react-icons/lu";
+import { LuFlaskConical, LuMessageSquareDashed } from "react-icons/lu";
 import { REQUIRED_TOPBAR_ITEM_IDS, restoreUiItem, type UiSlotEntry, type UiSlotId } from "../ui-slots";
 import type { ChatState } from "../use-chat";
 import { useFormattedCost } from "../cost-format";

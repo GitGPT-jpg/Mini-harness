@@ -7,16 +7,13 @@ import {
 	FiCheck,
 	FiFolder,
 	FiFolderPlus,
-	FiGlobe,
 	FiHardDrive,
 	FiHome,
 	FiMonitor,
-	FiServer,
-	FiTrash2,
 	FiX,
 } from "react-icons/fi";
 import { isZhLocale, useLocale, useT } from "../i18n";
-import { appSend, useAppField, useEngineCapabilities } from "../app-globals";
+import { appSend, useAppField } from "../app-globals";
 import { TipButton } from "./HintTip.js";
 
 /** 机器根（此电脑/盘符列表）wire 字面量 —— 与 server/files-service.ts 的 MACHINE_ROOT 同值。 */
@@ -91,7 +88,6 @@ export function DirectoryBrowser({
 }: DirectoryBrowserProps) {
 	const t = useT();
 	const isZh = isZhLocale(useLocale());
-	const capabilities = useEngineCapabilities();
 	// 常用目录跳转（快照直给的绝对路径；旧服务空串则不渲染对应按钮）
 	const homeDir = useAppField("homeDir");
 	const desktopDir = useAppField("desktopDir");
@@ -276,7 +272,7 @@ export function DirectoryBrowser({
 				</div>
 
 				{/* 本地目录视图 */}
-				{(true || activeTab === "local") && (
+				{activeTab === "local" && (
 					<>
 						<div className="cwd-picker-head">
 							<span className="cwd-picker-title" title={browsePath === MACHINE_ROOT ? t("computer") : browsePath}>

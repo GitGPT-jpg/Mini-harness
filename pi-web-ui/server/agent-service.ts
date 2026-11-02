@@ -119,7 +119,6 @@ import {
 	buildRemoteWorkspacePersona,
 	createRemoteSdkOperations,
 	formatCwdForPrompt,
-	getGlobalRemoteSshService,
 	isRemoteWorkspaceUri,
 	resolveWorkspaceSessionDir,
 	restoreWorkspaceUriFromSessionDir,

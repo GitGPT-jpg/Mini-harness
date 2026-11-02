@@ -2212,7 +2212,7 @@ export function SettingsModal({
 								</div>
 
 								{/* 1. 已安装技能列表 */}
-								{(true || skillSubTab === "installed") && (
+								{skillSubTab === "installed" && (
 									<>
 										{!isDsh && piPresetFiltering && !presetShowsSkillCatalog(piPresetId ?? undefined) && (
 											<p className="set-catalog-hint warn">{t("skillsHiddenByPreset", { name: piPresetName })}</p>

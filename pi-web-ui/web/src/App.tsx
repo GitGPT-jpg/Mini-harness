@@ -86,8 +86,6 @@ import type { Notice } from "./use-chat";
 import { fileToProcessedImage, isRasterImage, type ProcessedImage } from "./image-paste";
 import { randomUuid } from "./uuid";
 import { recordModelUsage } from "./model-usage";
-import { messagePlainText } from "./copy-text";
-import { shouldSuppressNotify, currentPresence } from "./notify";
 import { useWideChat, useHideModelRow } from "./chat-width-settings";
 import { registerFilePreviewHost } from "./file-preview-bridge";
 import { projectNameFromCwd, useProjectTitle } from "./title-settings";

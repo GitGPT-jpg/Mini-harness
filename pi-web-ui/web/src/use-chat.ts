@@ -41,7 +41,6 @@ import type {
 	UiState,
 	UiMessage,
 	UiToolApproval,
-	RemoteSkillSummary,
 	DshPatchFileInfo,
 	UpdateItemKind,
 } from "./types";

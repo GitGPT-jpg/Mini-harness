@@ -332,10 +332,10 @@ export function resolveModelProtocol(api?: string, providerId?: string, modelId?
  * 精简发行版只保留 pi 引擎，支持全部协议全集。
  */
 export function isProtocolSupportedByEngine(
-	engine: string,
-	api?: string,
-	providerId?: string,
-	modelId?: string,
+	_engine: string,
+	_api?: string,
+	_providerId?: string,
+	_modelId?: string,
 ): boolean {
 	return true;
 }

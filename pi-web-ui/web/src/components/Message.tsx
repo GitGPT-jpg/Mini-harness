@@ -15,7 +15,6 @@ import {
 	FiImage,
 	FiRefreshCw,
 	FiRotateCcw,
-	FiSquare,
 	FiVolume2,
 	FiX,
 	FiZap,

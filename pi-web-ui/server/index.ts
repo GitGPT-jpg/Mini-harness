@@ -34,7 +34,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { VERSION, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { sdkCopies, sdkOriginNote } from "./sdk-origin.js";
 import { PROTOCOL_VERSION } from "./protocol-version.js";
-import { AgentService, workspacePath, QuiesceRejectedError, ClientSession } from "./agent-service.js";
+import { AgentService, workspacePath, QuiesceRejectedError } from "./agent-service.js";
 import { ClientStateStore } from "./client-state.js";
 import { WS_MAX_PAYLOAD_BYTES, isAbsoluteWirePath, wireToAbs } from "./files-service.js";
 import { httpHostAllowed } from "./host-guard.js";
@@ -84,7 +84,6 @@ import {
 	handleSettingsMessage,
 	handleInteractiveResponseMessage,
 } from "./dispatch-domain-handlers.js";
-import { isRemoteWorkspaceUri } from "./remote-ssh-service.js";
 import type {
 	ClientMessage,
 	UiApprovalRule,
