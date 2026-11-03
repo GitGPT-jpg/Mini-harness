@@ -28,12 +28,15 @@ import type { Express } from "express";
 import { deleteGoalLog, listGoalLog } from "../goal-history-log.js";
 import { distillLoopRun } from "./distill.js";
 import type { BestRoundRecord, HardConstraint, HarnessMetrics, MetricGateResult } from "./metrics.js";
-import { listCapabilityPacks } from "./packs.js";
+import { getPackKnowledge, getPackReference, listCapabilityPacks, listPackReferences } from "./packs.js";
+import { renderDiscoverySummary, resolveTaskContext } from "./discovery.js";
 import {
 	deleteLoopRun,
 	familyOf,
 	listRuns,
 	loadLoopState,
+	recoverRun,
+	recoveryInfoOf,
 	reviewBrief,
 	reviewerEnabledOf,
 	runsRoot,
@@ -66,6 +69,16 @@ export interface LoopRunBrief {
 	reviewReasons: string[];
 	reviewerEnabled: boolean;
 	createdAt: string | null;
+	/** 隔夜恢复只读信息（unit / 租约 / 环境变化 / attempt）。 */
+	recovery?: {
+		unit: string;
+		leaseHeld: boolean;
+		environmentChanged: boolean;
+		attemptId: string | null;
+		generation: number;
+		owner: string | null;
+		remoteJobId: string | null;
+	} | null;
 }
 
 export interface ToolEvent {
@@ -125,6 +138,7 @@ export function collectRuns(history: boolean, nowMs = Date.now()): LoopRunBrief[
 			reviewReasons: review?.reasons ?? [],
 			reviewerEnabled: reviewerEnabledOf(st),
 			createdAt: st.createdAt ?? null,
+			recovery: recoveryInfoOf(st.runId),
 		});
 	}
 	out.sort(
@@ -201,6 +215,13 @@ export interface LoopRunDetail {
 	journal: Array<Record<string, unknown>>;
 	createdAt: string;
 	updatedAt: string | null;
+	packId?: string | null;
+	packVersion?: string | null;
+	attemptId?: string | null;
+	generation?: number;
+	owner?: string | null;
+	remoteJobId?: string | null;
+	recovery?: ReturnType<typeof recoveryInfoOf>;
 }
 
 const DETAIL_TEXT_MAX = 4000;
@@ -322,6 +343,13 @@ export function collectRunDetail(runId: string): LoopRunDetail | null {
 		journal: journal.slice(-DETAIL_JOURNAL_MAX),
 		createdAt: st.createdAt,
 		updatedAt: st.updatedAt ?? null,
+		packId: st.packId ?? null,
+		packVersion: st.packVersion ?? null,
+		attemptId: st.attemptId ?? null,
+		generation: st.generation ?? 0,
+		owner: st.owner ?? null,
+		remoteJobId: st.remoteJobId ?? null,
+		recovery: recoveryInfoOf(st.runId),
 	};
 }
 
@@ -432,6 +460,19 @@ export function registerLoopRoutes(app: Express, opts: LoopRoutesOptions): void 
 		}
 		res.json(detail);
 	});
+	app.post("/api/mini-harness/runs/:runId/recover", (req, res) => {
+		const id = String(req.params.runId ?? "");
+		if (!RUN_ID_RE.test(id)) {
+			res.status(400).json({ error: "bad runId" });
+			return;
+		}
+		const r = recoverRun(id);
+		if (!r.ok) {
+			res.status(404).json(r);
+			return;
+		}
+		res.json(r);
+	});
 	app.post("/api/mini-harness/runs/:runId/distill", (req, res) => {
 		const id = String(req.params.runId ?? "");
 		if (!RUN_ID_RE.test(id)) {
@@ -466,6 +507,36 @@ export function registerLoopRoutes(app: Express, opts: LoopRoutesOptions): void 
 
 	app.get("/api/mini-harness/packs", (_req, res) => {
 		res.json({ packs: listCapabilityPacks() });
+	});
+	app.get("/api/mini-harness/packs/:id/knowledge", (req, res) => {
+		const k = getPackKnowledge(String(req.params.id ?? ""));
+		if (!k) {
+			res.status(404).json({ error: "unknown pack" });
+			return;
+		}
+		res.json(k);
+	});
+	app.get("/api/mini-harness/packs/:id/references", (req, res) => {
+		res.json({ references: listPackReferences(String(req.params.id ?? "")) });
+	});
+	app.get("/api/mini-harness/packs/:id/references/:refId", (req, res) => {
+		const r = getPackReference(String(req.params.id ?? ""), String(req.params.refId ?? ""));
+		if (!r) {
+			res.status(404).json({ error: "unknown reference" });
+			return;
+		}
+		res.json(r);
+	});
+	app.post("/api/mini-harness/discover", (req, res) => {
+		const packId = String(req.body?.packId ?? "");
+		const workspace = String(req.body?.workspace ?? "");
+		const inputs = req.body?.inputs && typeof req.body.inputs === "object" && !Array.isArray(req.body.inputs) ? (req.body.inputs as Record<string, string>) : {};
+		if (!packId || !workspace) {
+			res.status(400).json({ error: "packId and workspace required" });
+			return;
+		}
+		const ctx = resolveTaskContext(packId, workspace, inputs);
+		res.json({ context: ctx, summary: renderDiscoverySummary(ctx) });
 	});
 
 	// 会话文件定位缓存：sid → 路径（每 1.5s 一次的轮询不重复扫目录）。

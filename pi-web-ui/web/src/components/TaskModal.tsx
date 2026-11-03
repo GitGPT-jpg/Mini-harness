@@ -20,8 +20,8 @@ interface CapabilityPack {
 	summary: string;
 	goal: string;
 	criteria: string;
-	primaryMetric: string;
-	metricDirection: "maximize" | "minimize";
+	primaryMetric?: string | null;
+	metricDirection?: "maximize" | "minimize" | null;
 	maxRounds?: number;
 	useReviewer?: boolean;
 }
@@ -194,8 +194,8 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 		if (!p) return;
 		setGoal(p.goal);
 		setCriteria(p.criteria);
-		setPrimaryMetric(p.primaryMetric);
-		setMetricDirection(p.metricDirection);
+		setPrimaryMetric(p.primaryMetric ?? "");
+		setMetricDirection(p.metricDirection ?? "");
 		if (p.maxRounds) setRounds(p.maxRounds);
 		if (p.useReviewer != null) setAcceptance(p.useReviewer ? "code-review" : "code");
 	};

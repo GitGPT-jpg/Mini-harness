@@ -12424,8 +12424,8 @@ export class ClientSession {
 		const criteria = (msg.criteria?.trim() || pack?.criteria || "").trim();
 		const precheckCmd = msg.precheckCmd?.trim() || "";
 		const validateCmd = msg.validateCmd?.trim() || "";
-		const primaryMetric = msg.primaryMetric ?? pack?.primaryMetric;
-		const metricDirection = msg.metricDirection ?? pack?.metricDirection;
+		const primaryMetric = msg.primaryMetric ?? pack?.primaryMetric ?? undefined;
+		const metricDirection = msg.metricDirection ?? pack?.metricDirection ?? undefined;
 		const metricPrecision = msg.metricPrecision;
 		const metricUnit = msg.metricUnit ?? pack?.metricUnit;
 		const metricThreshold = msg.metricThreshold ?? pack?.metricThreshold?.value;
@@ -12461,6 +12461,8 @@ export class ClientSession {
 			worktree: msg.worktree,
 			artifactRoots: roots,
 			taskId,
+			packId: msg.packId,
+			packVersion: pack?.version,
 		});
 		if (!created.ok) {
 			// 建不出 run（goal 为空 / 同会话已有活跃 run 等）：明确失败态，不经过模型

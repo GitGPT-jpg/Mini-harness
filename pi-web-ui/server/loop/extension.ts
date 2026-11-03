@@ -39,6 +39,20 @@ import {
 	type MetricTarget,
 } from "./metrics.js";
 import { createWorkspaceSnapshot } from "../workspace-snapshot.js";
+import { writeJsonAtomicSync } from "../atomic-file.js";
+import {
+	acquireLease,
+	buildRecoverySummary,
+	classifyRecovery,
+	getLease,
+	hashEnvironment,
+	hashInputs,
+	leaseExpired,
+	newAttemptId,
+	newOwner,
+	releaseLease,
+	type EnvironmentFingerprint,
+} from "./recovery.js";
 
 const DEFAULT_MAX_ROUNDS = 5;
 const CUSTOM_TYPE = "mini-harness-loop";
@@ -256,6 +270,21 @@ export interface LoopState {
 	/** 请求的规划 / 评审模型（provider/id 或 id；缺省 = 自动挑选），模型准备时解析。 */
 	plannerSpec?: string;
 	reviewerSpec?: string;
+	/** 能力包 id / 版本（追溯本次使用的知识版本）。 */
+	packId?: string | null;
+	packVersion?: string | null;
+	/** 执行尝试 id（同一 run 内重试分配新 attempt，保留旧证据）。 */
+	attemptId: string | null;
+	/** 执行所有者（pid@host）。 */
+	owner: string | null;
+	/** 执行代次（恢复接管时 +1；与 epoch 的「迟到回调守卫」语义不同）。 */
+	generation: number;
+	/** 远端作业 / 请求标识；本地进程退出不代表远端已停止。 */
+	remoteJobId: string | null;
+	/** 环境指纹（workspace/git/pack/inputs/env），恢复时核对旧证据是否仍适用。 */
+	environmentFingerprint: EnvironmentFingerprint | null;
+	/** 恢复状态（UI 显示：running / interrupted / needs-review / unknown / cancelled）。 */
+	recoveryState: string | null;
 }
 
 // ---------- 事件上报（服务层接线用：run 状态变化 / 启动请求失败） ----------
@@ -352,13 +381,19 @@ function loadState(runId: string): LoopState | null {
 function normalizeState(st: LoopState): LoopState {
 	if (st.acceptance === undefined) st.acceptance = null;
 	if (typeof st.useReviewer !== "boolean") st.useReviewer = !!st.reviewerModel;
+	if (st.attemptId === undefined) st.attemptId = null;
+	if (st.owner === undefined) st.owner = null;
+	if (st.generation === undefined) st.generation = 1;
+	if (st.remoteJobId === undefined) st.remoteJobId = null;
+	if (st.environmentFingerprint === undefined) st.environmentFingerprint = null;
+	if (st.recoveryState === undefined) st.recoveryState = null;
 	return st;
 }
 
 function saveState(st: LoopState) {
 	st.updatedAt = now();
 	fs.mkdirSync(runDir(st.runId), { recursive: true });
-	fs.writeFileSync(statePath(st.runId), JSON.stringify(st, null, 2));
+	writeJsonAtomicSync(statePath(st.runId), st);
 	reportEvent({ type: "run-state", st });
 }
 
@@ -1375,6 +1410,9 @@ export interface CreateLoopRunInput {
 	artifactRoots?: string[];
 	taskId?: string;
 	harnessRoot?: string;
+	/** 能力包 id / 版本（追溯本次使用的知识版本）。 */
+	packId?: string;
+	packVersion?: string;
 	/** 是否自动验证并自动下一轮（loop_start 的 auto 参数，默认 true）。 */
 	auto?: boolean;
 	/** journal 里记谁建的 run：server = 界面启动（默认），tool = 模型自己调 loop_start。 */
@@ -1465,6 +1503,23 @@ export function createLoopRun(
 		status: "active",
 		epoch: 0,
 		sessionId,
+		packId: input.packId ? String(input.packId) : null,
+		packVersion: input.packVersion ? String(input.packVersion) : null,
+		attemptId: newAttemptId(),
+		owner: newOwner(),
+		generation: 1,
+		remoteJobId: null,
+		environmentFingerprint: computeEnvironmentFingerprint({
+			workspace,
+			packId: input.packId ? String(input.packId) : null,
+			packVersion: input.packVersion ? String(input.packVersion) : null,
+			goal,
+			criteria,
+			validateCmd: String(input.validateCmd ?? "").trim() || null,
+			precheckCmd: String(input.precheckCmd ?? "").trim() || null,
+			primaryMetric: String(input.primaryMetric ?? "").trim() || null,
+		}),
+		recoveryState: "running",
 		mainModel: null,
 		plannerModel: null,
 		reviewerModel: null,
@@ -1487,6 +1542,15 @@ export function createLoopRun(
 		...(reviewerSpec ? { reviewerSpec } : {}),
 	};
 	saveState(st);
+	// 隔夜恢复：run 创建即取得执行所有权（owner + generation + 心跳）。
+	acquireLease(runDir(runId), {
+		owner: st.owner!,
+		pid: process.pid,
+		generation: st.generation,
+		startedAt: st.createdAt,
+		heartbeatAt: st.createdAt,
+		remoteJobId: null,
+	});
 	journal(st, "start", {
 		source: input.source ?? "server",
 		goal,
@@ -2128,6 +2192,8 @@ export function stopRunExternal(runId: string, reason = "user-stop"): { ok: bool
 	journal(st, "stop", { source: "server", reason, epoch: st.epoch });
 	// 真正取消该 run 的在途 validator / precheck 子进程（Task 1）。
 	abortRun(runId);
+	// 释放执行所有权：停止后不再持有租约（隔夜恢复不复活已取消 run）。
+	releaseLease(runDir(runId), st.owner ?? "");
 	return { ok: true };
 }
 
@@ -2324,4 +2390,155 @@ export function reactivateForReview(runId: string): { ok: true; st: LoopState } 
 /** 服务端按 runId 读落盘状态（resume 显式绑定校验用）。 */
 export function loadLoopState(runId: string) {
 	return loadState(runId);
+}
+
+// ---------- 隔夜恢复：先核对，再接续（Task B） ----------
+
+/** 本地进程是否仍存活（0 信号探测；EPERM 视为存活）。 */
+function isPidAlive(pid: number): boolean {
+	if (!pid || pid <= 0) return false;
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (e) {
+		return (e as NodeJS.ErrnoException).code === "EPERM";
+	}
+}
+
+function computeEnvironmentFingerprint(input: {
+	workspace: string;
+	packId: string | null;
+	packVersion: string | null;
+	goal: string;
+	criteria: string;
+	validateCmd: string | null;
+	precheckCmd: string | null;
+	primaryMetric: string | null;
+}): EnvironmentFingerprint {
+	return {
+		workspace: input.workspace,
+		gitHead: resolveGitHeadSha(input.workspace || process.cwd()),
+		packId: input.packId,
+		packVersion: input.packVersion,
+		inputsHash: hashInputs({
+			goal: input.goal,
+			criteria: input.criteria,
+			validateCmd: input.validateCmd ?? "",
+			precheckCmd: input.precheckCmd ?? "",
+			primaryMetric: input.primaryMetric ?? "",
+		}),
+		envHash: hashEnvironment(),
+	};
+}
+
+/** 环境指纹是否仍一致；旧记录无指纹时视为「已变化」→ 需要核对，不盲目复用。 */
+function fingerprintMatches(a: EnvironmentFingerprint | null, b: EnvironmentFingerprint): boolean {
+	if (!a) return false;
+	return a.workspace === b.workspace && a.gitHead === b.gitHead && a.packId === b.packId &&
+		a.packVersion === b.packVersion && a.inputsHash === b.inputsHash && a.envHash === b.envHash;
+}
+
+export interface RecoverRunResult {
+	ok: boolean;
+	runId: string;
+	classification: ReturnType<typeof classifyRecovery> | null;
+	summary: string | null;
+	/** 本次调用是否真正接管了执行所有权（只有失联/过期且无人持权时）。 */
+	takeover: boolean;
+	error?: string;
+}
+
+/**
+ * 恢复入口：载入持久化记录 → 核对租约/环境/本地进程 → 分类执行单元 → 需要时接管所有权。
+ *  - 仍持权：重新跟踪，不启动第二份；
+ *  - 失联且环境未变：接管（generation+1、新 attemptId）；
+ *  - 环境/代码变化：标记旧证据失效，不盲目重放副作用；
+ *  - 已取消（stopped）：不自动复活。
+ * requesterOwner 可显式传入（测试/多实例场景）；缺省用当前进程 owner。
+ */
+export function recoverRun(runId: string, requesterOwner?: string): RecoverRunResult {
+	const st = loadState(runId);
+	if (!st) return { ok: false, runId, classification: null, summary: null, takeover: false, error: "run 不存在：" + runId };
+	const dir = runDir(runId);
+	const me = requesterOwner || newOwner();
+	const lease = getLease(dir);
+	const leaseHeld = lease != null && !leaseExpired(lease) && lease.owner === me;
+	const leaseHeldByOther = lease != null && !leaseExpired(lease) && lease.owner !== me;
+	const currentFp = computeEnvironmentFingerprint({
+		workspace: st.workspace,
+		packId: st.packId ?? null,
+		packVersion: st.packVersion ?? null,
+		goal: st.goal,
+		criteria: st.criteria ?? "",
+		validateCmd: st.validateCmd,
+		precheckCmd: st.precheckCmd ?? null,
+		primaryMetric: st.primaryMetric ?? null,
+	});
+	const environmentChanged = !fingerprintMatches(st.environmentFingerprint, currentFp);
+	const pidAlive = lease?.pid != null ? isPidAlive(lease.pid) : null;
+	const inFlight = st.status === "active" && st.round > st.validatedRound;
+	const cls = classifyRecovery(st, {
+		leaseHeld,
+		environmentChanged,
+		pidAlive,
+		lastRoundPassed: st.lastVerdict === "pass",
+		inFlight,
+	});
+	let takeover = false;
+	if (!leaseHeld && !leaseHeldByOther && st.status === "active") {
+		const nextGeneration = (st.generation ?? 0) + 1;
+		const nowIso = now();
+		const got = acquireLease(dir, {
+			owner: me,
+			pid: process.pid,
+			generation: nextGeneration,
+			startedAt: nowIso,
+			heartbeatAt: nowIso,
+			remoteJobId: st.remoteJobId ?? null,
+		});
+		if (got) {
+			takeover = true;
+			st.owner = me;
+			st.generation = nextGeneration;
+			st.attemptId = newAttemptId();
+			st.recoveryState = cls.unit;
+			saveState(st);
+			journal(st, "recovery-takeover", { owner: me, generation: nextGeneration, classification: cls.unit });
+		}
+	} else if (leaseHeldByOther && st.status === "active") {
+		// 他人仍持有有效执行权：不接管，不覆盖。
+		st.recoveryState = "running";
+	}
+	const completedRounds = st.history.filter((h) => h.verdict === "pass" && h.metricGateOk !== false && !h.workspaceChangedDuringValidation).length;
+	const summary = buildRecoverySummary({
+		runId,
+		attemptId: st.attemptId,
+		generation: st.generation ?? 0,
+		cls,
+		completedRounds,
+		bestRound: st.bestRound?.round ?? null,
+		blockedOn: null,
+	});
+	return { ok: true, runId, classification: cls, summary, takeover };
+}
+
+/** 任务台只读恢复信息（不接管、不写盘）：unit / 租约 / 环境变化 / attempt。 */
+export function recoveryInfoOf(runId: string) {
+	const st = loadState(runId);
+	if (!st) return null;
+	const lease = getLease(runDir(runId));
+	const leaseHeld = lease != null && !leaseExpired(lease) && lease.owner === (st.owner ?? newOwner());
+	const currentFp = computeEnvironmentFingerprint({
+		workspace: st.workspace,
+		packId: st.packId ?? null,
+		packVersion: st.packVersion ?? null,
+		goal: st.goal,
+		criteria: st.criteria ?? "",
+		validateCmd: st.validateCmd,
+		precheckCmd: st.precheckCmd ?? null,
+		primaryMetric: st.primaryMetric ?? null,
+	});
+	const environmentChanged = !fingerprintMatches(st.environmentFingerprint, currentFp);
+	const unit = st.status === "active" ? (leaseHeld ? "running" : environmentChanged ? "needs-review" : "interrupted") : (st.status === "stopped" ? "cancelled" : st.status);
+	return { unit, leaseHeld, environmentChanged, attemptId: st.attemptId, generation: st.generation ?? 0, owner: st.owner, remoteJobId: st.remoteJobId };
 }
