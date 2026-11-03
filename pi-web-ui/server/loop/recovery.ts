@@ -73,6 +73,17 @@ export function newOwner(): string {
 	return process.pid + "@" + os.hostname();
 }
 
+/** 本地 pid 是否存活（用于识别「孤儿租约」：服务进程已死但心跳尚未过期 → 可立即接管）。 */
+export function pidAliveLocal(pid: number | null | undefined): boolean {
+	if (!pid || pid <= 0) return false;
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (e) {
+		return (e as NodeJS.ErrnoException).code === "EPERM";
+	}
+}
+
 function leasePath(runDir: string): string {
 	return path.join(runDir, "lease.json");
 }
@@ -255,7 +266,13 @@ export function acquireLease(runDir: string, lease: Lease): boolean {
 	if (tryCreateLeaseFile(runDir, lease)) return true;
 	const next = JSON.stringify(lease, null, 2);
 	const r = compareAndSwapFile(leasePath(runDir), {
-		isExpected: (cur) => leaseExpired(parseLease(cur ?? "")), // 不存在/不可解析/已过期 → 允许接管
+		isExpected: (cur) => {
+			// 不存在/不可解析/已过期 → 允许接管；孤儿租约（owner 服务进程已死）也允许立即接管（服务可重启）。
+			const p = parseLease(cur ?? "");
+			if (!p) return true;
+			if (leaseExpired(p)) return true;
+			return p.pid != null && !pidAliveLocal(p.pid);
+		},
 		buildNext: () => next,
 	});
 	return r.ok;
@@ -383,6 +400,8 @@ export function buildRecoverySummary(input: {
 	completedRounds: number;
 	bestRound: number | null;
 	blockedOn: string | null;
+	/** 仍在运行的本地执行实体 + 已收集的输出片段（Prompt 修复④：接续不只分类，还收集）。 */
+	inFlightNote?: string | null;
 }): string {
 	const c = input.cls;
 	const parts = [
@@ -392,7 +411,8 @@ export function buildRecoverySummary(input: {
 		"已完成并有效: " + input.completedRounds + " 轮" + (input.bestRound != null ? "（best=第 " + input.bestRound + " 轮）" : ""),
 		input.blockedOn ? "当前阻塞: " + input.blockedOn : "当前阻塞: (无)",
 		"下一步: " + (c.needRecheck ? "先核对执行现场/证据，再决定" : c.canResume ? "从缺失或失效部分继续，不从第一步整段重跑" : "保持终态，不自动执行"),
-		"</mini_harness_recovery>",
 	];
+	if (input.inFlightNote) parts.push(input.inFlightNote);
+	parts.push("</mini_harness_recovery>");
 	return parts.join("\n");
 }

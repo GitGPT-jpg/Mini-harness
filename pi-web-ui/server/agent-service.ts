@@ -60,6 +60,7 @@ import {
 	createLoopRun,
 	stopRunExternal,
 	loadLoopState,
+	observeRunOperation,
 	reactivateForReview,
 	rebindLoopSession,
 	recoverRun,
@@ -12686,10 +12687,23 @@ export class ClientSession {
 			const recoveryBlock = recovery?.summary
 				? recovery.summary + "\n（不要重复已完成的步骤，不要重复启动有副作用或昂贵的操作；按上面「下一步」继续。）\n"
 				: "";
+			// 接续收集（Prompt 修复④）：仍在运行的本地执行实体 → 等退出并收集退出码/输出，注入续跑提示词。
+			let observedBlock = "";
+			if (!retryReview && recovery?.classification?.unit === "running" && recovery.inFlightOpId) {
+				const observed = await observeRunOperation(runId).catch(() => null);
+				if (observed) {
+					const so = observed.stdout.length > 3000 ? observed.stdout.slice(observed.stdout.length - 3000) : observed.stdout;
+					const se = observed.stderr.length > 1500 ? observed.stderr.slice(observed.stderr.length - 1500) : observed.stderr;
+					observedBlock =
+						`\n已接续收集在运行本地执行的最终结果：exit=${observed.code}\n--- stdout ---\n${so}\n--- stderr ---\n${se}\n` +
+						"（据此直接判定本轮验收结果并调用 loop_done，不要重新启动 validator。）\n";
+				}
+			}
 			const resumePrompt = retryReview
 				? `受控运行 ${runId} 的代码验证已通过，但上次模型评审出错，现在重新验收：` +
 						"不要修改任何代码或文件，直接调用 loop_validate；运行时会重新执行 validator 并让 reviewer 评审。不要向用户提问。"
 				: recoveryBlock +
+						observedBlock +
 						`继续执行当前受控运行（runId: ${runId}）：先查看当前状态，从上次中断处继续，` +
 						"完成后调用 loop_done(summary)。不要重复已完成的步骤，不要向用户提问。";
 			// worktree 执行者会话：续跑提示词发到绑 worktree 的子代理，主对话不跑模型

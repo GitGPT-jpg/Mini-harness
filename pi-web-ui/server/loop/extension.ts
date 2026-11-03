@@ -40,6 +40,8 @@ import {
 } from "./metrics.js";
 import { createWorkspaceSnapshot } from "../workspace-snapshot.js";
 import { writeJsonAtomicSync } from "../atomic-file.js";
+import { listOperations, observeOperation, runCommandPersistent } from "./operation.js";
+import { runCommand } from "./run-command.js";
 import {
 	acquireLease,
 	buildRecoverySummary,
@@ -58,7 +60,6 @@ import {
 	releaseLease,
 	type EnvironmentFingerprint,
 } from "./recovery.js";
-import { runCommand } from "./run-command.js";
 
 const DEFAULT_MAX_ROUNDS = 5;
 const CUSTOM_TYPE = "mini-harness-loop";
@@ -159,7 +160,16 @@ export function recordTaskPid(runId: string, pid: number | null, owner: string, 
 }
 
 /** 命令执行器：生产用 runCommand（detached 进程组 + 真实 pid）；单测注入 pi.exec mock。 */
-type LoopExecOpts = { cwd: string; timeout: number; signal?: AbortSignal; onSpawn?: (pid: number) => void };
+type LoopExecOpts = {
+	cwd: string;
+	timeout: number;
+	signal?: AbortSignal;
+	onSpawn?: (pid: number) => void;
+	/** 持久化执行上下文：提供时 stdio 落文件 + 写 operation.json，重启后可用 observeOperation 接续。 */
+	runId?: string;
+	stage?: string;
+	round?: number;
+};
 type LoopExecResult = { stdout: string; stderr: string; code: number | null; killed: boolean };
 let loopExecOverride: ((cmd: string, args: string[], opts: LoopExecOpts) => Promise<LoopExecResult>) | null = null;
 export function setLoopExecForTest(fn: typeof loopExecOverride): void {
@@ -167,6 +177,17 @@ export function setLoopExecForTest(fn: typeof loopExecOverride): void {
 }
 function loopExec(cmd: string, args: string[], opts: LoopExecOpts): Promise<LoopExecResult> {
 	if (loopExecOverride) return loopExecOverride(cmd, args, opts);
+	if (opts.runId && opts.stage) {
+		return runCommandPersistent(cmd, args, {
+			cwd: opts.cwd,
+			runId: opts.runId,
+			stage: opts.stage,
+			round: opts.round ?? 0,
+			signal: opts.signal,
+			timeout: opts.timeout,
+			onSpawn: opts.onSpawn,
+		});
+	}
 	return runCommand(cmd, args, { ...opts });
 }
 
@@ -823,6 +844,9 @@ async function runValidation(pi: ExtensionAPI, st: LoopState): Promise<Validatio
 					cwd,
 					timeout: 5 * 60 * 1000,
 					signal: ac.signal,
+					runId: st.runId,
+					stage: "precheck",
+					round: st.round,
 					onSpawn: (pid) => recordTaskPid(st.runId, pid, st.owner!, st.generation),
 				});
 			} catch (e) {
@@ -878,6 +902,9 @@ async function runValidation(pi: ExtensionAPI, st: LoopState): Promise<Validatio
 				cwd,
 				timeout: 30 * 60 * 1000,
 				signal: ac.signal,
+				runId: st.runId,
+				stage: "validate",
+				round: st.round,
 				onSpawn: (pid) => recordTaskPid(st.runId, pid, st.owner!, st.generation),
 			});
 		} catch (e) {
@@ -2629,6 +2656,16 @@ function isPidAlive(pid: number): boolean {
 	}
 }
 
+/** 读取文件尾部片段（最多 max 字符）；文件不存在/读失败返回 ""。 */
+function readFileTail(file: string, max: number): string {
+	try {
+		const s = fs.readFileSync(file, "utf8");
+		return s.length > max ? s.slice(s.length - max) : s;
+	} catch {
+		return "";
+	}
+}
+
 function computeEnvironmentFingerprint(input: {
 	workspace: string;
 	packId: string | null;
@@ -2757,6 +2794,8 @@ export interface RecoverRunResult {
 	blockedReason: string | null;
 	/** 下一步建议动作（供 UI / 模型使用）。 */
 	nextAction: string;
+	/** 仍在运行的本地执行实体 operation id（供 observeRunOperation 接续收集退出码/输出）。 */
+	inFlightOpId: string | null;
 	error?: string;
 }
 
@@ -2771,13 +2810,16 @@ export interface RecoverRunResult {
 export function recoverRun(runId: string, requesterOwner?: string): RecoverRunResult {
 	const st = loadState(runId);
 	if (!st) {
-		return { ok: false, runId, classification: null, summary: null, takeover: false, connectedEntity: false, resumeEligible: false, blockedReason: "run 不存在", nextAction: "确认 runId 是否正确", error: "run 不存在：" + runId };
+		return { ok: false, runId, classification: null, summary: null, takeover: false, connectedEntity: false, resumeEligible: false, blockedReason: "run 不存在", nextAction: "确认 runId 是否正确", inFlightOpId: null, error: "run 不存在：" + runId };
 	}
 	const dir = runDir(runId);
 	const me = requesterOwner || newOwner();
 	const lease = getLease(dir);
+	const leaseOwnerAlive = lease != null && lease.pid != null ? isPidAlive(lease.pid) : false;
 	const leaseHeld = lease != null && !leaseExpired(lease) && lease.owner === me;
-	const leaseHeldByOther = lease != null && !leaseExpired(lease) && lease.owner !== me;
+	// 他人仍持有有效执行权 = 租约未过期 + owner 不同 + 且该 owner 的服务进程仍存活。
+	// 服务已退出（孤儿租约）不算「他人持权」，可立即接管 —— 这是「服务可重启」支持范围的一部分。
+	const leaseHeldByOther = lease != null && !leaseExpired(lease) && lease.owner !== me && leaseOwnerAlive;
 	const currentFp = currentFingerprintOf(st, true); // 恢复核对必须重新探测磁盘，不走 10s 缓存
 	const environmentChanged = !fingerprintMatches(st.environmentFingerprint, currentFp);
 	// 实际执行实体 = 租约里记录的本地 validator/precheck 子进程 pid（真实执行实体），不是服务 pid。
@@ -2793,10 +2835,26 @@ export function recoverRun(runId: string, requesterOwner?: string): RecoverRunRe
 		inFlight,
 	});
 	const connectedEntity = (taskPid != null && pidAlive === true) || !!lease?.remoteJobId;
+	// 接续收集：找出仍在运行的持久化操作（Prompt 修复④：不只分类，还收集输出 + 暴露 opId 供观察退出码）。
+	const ops = listOperations(runId);
+	const latestRunning = ops.find((o) => o.status === "running" && o.pid != null && isPidAlive(o.pid));
+	let inFlightNote: string | null = null;
+	let inFlightOpId: string | null = null;
+	if (latestRunning) {
+		inFlightOpId = latestRunning.opId;
+		const so = readFileTail(latestRunning.stdoutFile, 2000);
+		const se = readFileTail(latestRunning.stderrFile, 1000);
+		inFlightNote =
+			"仍在运行的本地执行实体: " + latestRunning.stage + " (round " + latestRunning.round + ") pid=" + latestRunning.pid +
+			"\n--- 已收集 stdout 片段 ---\n" + so +
+			"\n--- 已收集 stderr 片段 ---\n" + se;
+	}
 	let takeover = false;
 	let blockedReason: string | null = null;
-	// 只有「明确失败、允许重试」才允许接管；unknown / cancelled / completed-valid / 环境变化一律不接管。
-	if (st.status === "active" && !leaseHeld && !leaseHeldByOther && cls.unit === "failed-retryable") {
+	// 只有「明确失败、允许重试」或「在途本地执行实体仍在运行」才允许接管；
+	// unknown / cancelled / completed-valid / 环境变化一律不接管。
+	// 「在途仍在跑」接管 = 原子取得执行所有权（generation+1），但不重跑：resumeLoop 会 observeRunOperation 接续收集。
+	if (st.status === "active" && !leaseHeld && !leaseHeldByOther && (cls.unit === "failed-retryable" || (cls.unit === "running" && inFlightOpId != null))) {
 		const nextGeneration = (st.generation ?? 0) + 1;
 		const nowIso = now();
 		const got = acquireLease(dir, {
@@ -2839,15 +2897,33 @@ export function recoverRun(runId: string, requesterOwner?: string): RecoverRunRe
 		completedRounds,
 		bestRound: st.bestRound?.round ?? null,
 		blockedOn: blockedReason,
+		inFlightNote,
 	});
 	let nextAction: string;
 	if (cls.unit === "cancelled") nextAction = "保持取消，不自动执行";
 	else if (cls.unit === "completed-valid") nextAction = "证据仍有效，复用结果，不重跑";
 	else if (leaseHeld) nextAction = "仍持有执行权，重新跟踪，不启动第二份";
+	else if (takeover && cls.unit === "running") nextAction = "已原子接管，观察在运行实体并收集结果，不重跑";
 	else if (takeover) nextAction = "已原子接管，从未完成部分继续";
 	else if (blockedReason) nextAction = "先核对执行现场/证据，再决定是否重试";
 	else nextAction = "先核对执行现场/证据，再决定";
-	return { ok: true, runId, classification: cls, summary, takeover, connectedEntity, resumeEligible, blockedReason, nextAction };
+	return { ok: true, runId, classification: cls, summary, takeover, connectedEntity, resumeEligible, blockedReason, nextAction, inFlightOpId };
+}
+
+/**
+ * 接续观察一个持久化操作（服务重启后调用）：等待仍在运行的本地执行实体退出，
+ * 收集退出码与输出。用于「分类=running」时真正拿到最终结果，而不是只给一个分类标签。
+ */
+export async function observeRunOperation(runId: string, timeoutMs = 30 * 60 * 1000): Promise<{ code: number | null; stdout: string; stderr: string; pidAlive: boolean; status: string } | null> {
+	const ops = listOperations(runId);
+	const running = ops.find((o) => o.status === "running" && o.pid != null && isPidAlive(o.pid));
+	if (!running) {
+		// 没有在运行的实体，但可能有已退出未收集的操作（status=running 但 pid 已死）。
+		const stale = ops.find((o) => o.status === "running");
+		if (stale) return observeOperation(runId, stale.opId, { timeoutMs: 0, maxBuffer: 16 * 1024 * 1024 });
+		return null;
+	}
+	return observeOperation(runId, running.opId, { timeoutMs, maxBuffer: 16 * 1024 * 1024 });
 }
 
 /** 任务台只读恢复信息（不接管、不写盘）：unit / 租约 / 环境变化 / attempt。 */
