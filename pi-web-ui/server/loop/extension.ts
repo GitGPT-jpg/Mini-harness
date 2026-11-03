@@ -44,6 +44,7 @@ import {
 	acquireLease,
 	buildRecoverySummary,
 	classifyRecovery,
+	compareAndSwapFile,
 	getLease,
 	hashEnvironment,
 	hashInputs,
@@ -51,11 +52,11 @@ import {
 	heartbeat,
 	LEASE_HEARTBEAT_MS,
 	leaseExpired,
+	mutateLease,
 	newAttemptId,
 	newOwner,
 	releaseLease,
 	type EnvironmentFingerprint,
-	type Lease,
 } from "./recovery.js";
 import { runCommand } from "./run-command.js";
 
@@ -147,15 +148,13 @@ function stopAllHeartbeats(): void {
 }
 process.once("exit", stopAllHeartbeats);
 
-/** 把本地实际执行实体 pid（validator/precheck 子进程组）写进租约，供恢复核对。 */
-export function recordTaskPid(runId: string, pid: number | null): void {
+/**
+ * 把本地实际执行实体 pid（validator/precheck 子进程组）写进租约，供恢复核对。
+ * 走 CAS：仅当仍是当前 owner+generation 才写，旧代次/被接管者不得替新执行者写入或清空 PID。
+ */
+export function recordTaskPid(runId: string, pid: number | null, owner: string, generation: number): void {
 	try {
-		const cur = getLease(runDir(runId));
-		if (!cur) return;
-		const next: Lease = { ...cur, taskPid: pid };
-		const tmp = path.join(runDir(runId), "lease.json.hb." + process.pid + "." + crypto.randomBytes(4).toString("hex"));
-		fs.writeFileSync(tmp, JSON.stringify(next, null, 2));
-		fs.renameSync(tmp, path.join(runDir(runId), "lease.json"));
+		mutateLease(runDir(runId), { owner, generation }, (cur) => ({ ...cur, taskPid: pid }));
 	} catch {}
 }
 
@@ -503,16 +502,42 @@ function normalizeState(st: LoopState): LoopState {
 	return st;
 }
 
-function saveState(st: LoopState) {
+/**
+ * 落盘运行状态。可选 token：当异步回调持有一个执行身份 token 时，用 CAS 条件写——
+ * 只有磁盘态仍是 token 对应的 owner+generation+epoch 才写，否则丢弃（旧代次不得覆盖新代次）。
+ * 无 token（同步权威路径：create/stop/takeover/setup-error 等）无条件写。
+ */
+function saveState(st: LoopState, token?: ExecToken): boolean {
 	st.updatedAt = now();
 	fs.mkdirSync(runDir(st.runId), { recursive: true });
-	writeJsonAtomicSync(statePath(st.runId), st);
+	let wrote = true;
+	if (token) {
+		wrote = compareAndSwapFile(statePath(st.runId), {
+			isExpected: (cur) => {
+				if (cur == null) return false;
+				try {
+					const p = JSON.parse(cur) as LoopState;
+					return p.owner === token.owner && p.generation === token.generation && p.epoch === token.epoch;
+				} catch {
+					return false;
+				}
+			},
+			buildNext: () => JSON.stringify(st, null, 2) + "\n",
+		}).ok;
+	} else {
+		writeJsonAtomicSync(statePath(st.runId), st);
+	}
+	if (!wrote) {
+		journal(st, "stale-write-dropped", { token });
+		return false;
+	}
 	// 终态收尾：停止心跳、释放执行所有权（只有仍是当前 owner 才删，不误删后继接管者的租约）。
 	if (st.status !== "active") {
 		stopLeaseHeartbeat(st.runId);
 		if (st.owner) releaseLease(runDir(st.runId), st.owner);
 	}
 	reportEvent({ type: "run-state", st });
+	return true;
 }
 
 function journal(st: LoopState, event: string, extra: Record<string, unknown> = {}) {
@@ -784,10 +809,10 @@ function resolveValidator(st: LoopState) {
 async function runValidation(pi: ExtensionAPI, st: LoopState): Promise<ValidationResult> {
 	const cwd = st.workspace || process.cwd();
 	const ac = registerRunAbort(st.runId);
-	const epoch = st.epoch;
+	const token = tokenOf(st);
 	try {
 		// 验收前绑定代码身份（Task 3）：先快照 candidate-A（真正被 validator 读取的代码）。
-		const preId = await captureAttemptIdentity(st, epoch);
+		const preId = await captureAttemptIdentity(st, token);
 		const preCmd = String(st.precheckCmd ?? "").trim();
 
 		// L0 快速预检：若配置了 precheckCmd，先秒级拦截语法/导包/配置错误，不浪费集群与压测资源
@@ -798,12 +823,12 @@ async function runValidation(pi: ExtensionAPI, st: LoopState): Promise<Validatio
 					cwd,
 					timeout: 5 * 60 * 1000,
 					signal: ac.signal,
-					onSpawn: (pid) => recordTaskPid(st.runId, pid),
+					onSpawn: (pid) => recordTaskPid(st.runId, pid, st.owner!, st.generation),
 				});
 			} catch (e) {
 				pre = { stdout: "", stderr: String((e as Error)?.message || e), code: -1, killed: false };
 			}
-			recordTaskPid(st.runId, null);
+			recordTaskPid(st.runId, null, st.owner!, st.generation);
 			if (pre.killed) {
 				markRunStopConfirmed(st.runId);
 				return { pass: false, noValidator: false, precheckFailed: false, cancelled: true, code: null, evidence: null, output: "运行已停止：L0 预检进程已被取消。", metrics: null, scenario: null, snapshotRef: preId.snapshotRef, snapshotSha: preId.snapshotSha, recoverable: preId.recoverable, workspaceChangedDuringValidation: false };
@@ -824,7 +849,7 @@ async function runValidation(pi: ExtensionAPI, st: LoopState): Promise<Validatio
 				return { pass: false, noValidator: false, precheckFailed: true, code: pre.code ?? -1, evidence, output, metrics: null, scenario: null, snapshotRef: preId.snapshotRef, snapshotSha: preId.snapshotSha, recoverable: preId.recoverable, workspaceChangedDuringValidation: false };
 			}
 			// 停止/取消守卫：L0 预检期间若被停止（epoch 已递增），绝不再启动昂贵的 L1 完整验收。
-			if (!stillCurrent(st.runId, epoch)) {
+			if (!stillCurrent(token)) {
 				return { pass: false, noValidator: false, precheckFailed: false, cancelled: true, code: null, evidence: null, output: "运行已停止：L0 预检期间收到停止，已跳过 L1 完整验收。", metrics: null, scenario: null, snapshotRef: preId.snapshotRef, snapshotSha: preId.snapshotSha, recoverable: preId.recoverable, workspaceChangedDuringValidation: false };
 			}
 		}
@@ -853,12 +878,12 @@ async function runValidation(pi: ExtensionAPI, st: LoopState): Promise<Validatio
 				cwd,
 				timeout: 30 * 60 * 1000,
 				signal: ac.signal,
-				onSpawn: (pid) => recordTaskPid(st.runId, pid),
+				onSpawn: (pid) => recordTaskPid(st.runId, pid, st.owner!, st.generation),
 			});
 		} catch (e) {
 			res = { stdout: "", stderr: String((e as Error)?.message || e), code: -1, killed: false };
 		}
-		recordTaskPid(st.runId, null);
+		recordTaskPid(st.runId, null, st.owner!, st.generation);
 		if (res.killed) {
 			markRunStopConfirmed(st.runId);
 			return { pass: false, noValidator: false, precheckFailed: false, cancelled: true, code: res.code ?? null, evidence: null, output: "运行已停止：L1 validator 进程已被取消。", metrics: null, scenario: null, snapshotRef: preId.snapshotRef, snapshotSha: preId.snapshotSha, recoverable: preId.recoverable, workspaceChangedDuringValidation: false };
@@ -923,14 +948,14 @@ interface AttemptIdentity {
 	recoverable: boolean;
 }
 
-async function captureAttemptIdentity(st: LoopState, epoch: number): Promise<AttemptIdentity> {
+async function captureAttemptIdentity(st: LoopState, token: ExecToken): Promise<AttemptIdentity> {
 	try {
-		if (!stillCurrent(st.runId, epoch)) return { snapshotRef: null, snapshotSha: null, recoverable: false };
+		if (!stillCurrent(token)) return { snapshotRef: null, snapshotSha: null, recoverable: false };
 		const sha = await createWorkspaceSnapshot(st.workspace);
 		if (!sha) return { snapshotRef: null, snapshotSha: null, recoverable: false };
-		// createWorkspaceSnapshot is async. A stop/delete can win while it is producing the commit;
+		// createWorkspaceSnapshot is async. A stop/takeover can win while it is producing the commit;
 		// never pin a checkpoint ref for a run that is no longer current.
-		if (!stillCurrent(st.runId, epoch)) return { snapshotRef: null, snapshotSha: null, recoverable: false };
+		if (!stillCurrent(token)) return { snapshotRef: null, snapshotSha: null, recoverable: false };
 		const ref = "refs/mini-harness/checkpoints/" + st.runId + "-r" + st.round;
 		gitSync(["-C", st.workspace, "update-ref", ref, sha], st.workspace, 15000);
 		return { snapshotRef: ref, snapshotSha: sha, recoverable: true };
@@ -953,13 +978,13 @@ async function recordValidationOutcome(
 		recoverable?: boolean;
 		workspaceChangedDuringValidation?: boolean;
 	},
-	epoch: number,
+	token: ExecToken,
 ): Promise<boolean> {
 	const at = now();
 	const verdict = v.pass ? "pass" : "fail";
 	const commitSha = resolveGitHeadSha(st.workspace || process.cwd());
-	if (!stillCurrent(st.runId, epoch)) {
-		journal(st, "late-callback-dropped", { at: "recordValidationOutcome", epoch });
+	if (!stillCurrent(token)) {
+		journal(st, "late-callback-dropped", { at: "recordValidationOutcome", epoch: token.epoch });
 		return false;
 	}
 	const snapshotRef = v.snapshotRef ?? null;
@@ -1236,19 +1261,45 @@ async function runReview(ctx: LoopCtx, st: LoopState, v: { code?: number | null;
 // ---------- 判定处理 ----------
 
 /**
- * 【修复②】await 前记录代次，await 后核对：停止过的 run 不再被迟到回调推进。
- * 必须重读磁盘：stop 走的是另一次 loadState（不同对象引用），内存里的 st
- * 不会随之更新——只比内存对象会误判「仍然有效」，把 stopped 覆盖成 done。
+ * 统一执行身份 token：异步操作在 await 前捕获 {runId, owner, generation, epoch}，
+ * await 后（写盘前）必须三者全部一致才允许推进。
+ *  - epoch：当前执行流程的取消/失效身份（停止会递增 epoch）；
+ *  - generation：所有权代次（恢复接管会递增 generation；旧 owner 的迟到回调必须被拒）。
+ * 两者语义不同、不能互相绕过：旧代次的回调即使 epoch 碰巧没变，也会因 generation 不符被拒。
  */
-function stillCurrent(runId: string, epoch: number) {
-	const fresh = loadState(runId);
-	return !!fresh && fresh.status === "active" && fresh.epoch === epoch;
+interface ExecToken {
+	runId: string;
+	owner: string;
+	generation: number;
+	epoch: number;
 }
 
-/** 完成后的收尾（提交 worktree）只核代次：此时 status 已是 done，不能再要求 active。 */
-function sameEpoch(runId: string, epoch: number) {
-	const fresh = loadState(runId);
-	return !!fresh && fresh.epoch === epoch;
+function tokenOf(st: LoopState): ExecToken {
+	return { runId: st.runId, owner: st.owner ?? "", generation: st.generation ?? 0, epoch: st.epoch };
+}
+
+function matchesToken(fresh: LoopState | null, token: ExecToken): boolean {
+	return (
+		!!fresh &&
+		fresh.owner === token.owner &&
+		fresh.generation === token.generation &&
+		fresh.epoch === token.epoch
+	);
+}
+
+/**
+ * 【修复②】await 前记录执行身份，await 后核对：停止/被接管的 run 不再被迟到回调推进。
+ * 必须重读磁盘：stop / takeover 走的是另一次 loadState（不同对象引用），内存里的 st
+ * 不会随之更新——只比内存对象会误判「仍然有效」，把 stopped / 新代次覆盖成旧代次。
+ */
+function stillCurrent(token: ExecToken) {
+	const fresh = loadState(token.runId);
+	return !!fresh && fresh.status === "active" && matchesToken(fresh, token);
+}
+
+/** 完成后的收尾（提交 worktree）只核执行身份：此时 status 已是 done，不能再要求 active。 */
+function sameEpoch(token: ExecToken) {
+	return matchesToken(loadState(token.runId), token);
 }
 
 function advanceOrStop(
@@ -1257,6 +1308,7 @@ function advanceOrStop(
 	v: { code?: number | null; output?: string } | null,
 	feedback: string,
 	event: string,
+	token?: ExecToken,
 ) {
 	writeRoundReview(st, v, null, "");
 	if (st.round < st.maxRounds) {
@@ -1264,7 +1316,7 @@ function advanceOrStop(
 		st.round += 1;
 		st.stage = "run";
 		st.validatedRound = 0;
-		saveState(st);
+		saveState(st, token);
 		journal(st, event, { code: v?.code ?? null, failedRound, nextRound: st.round });
 		pi.sendUserMessage(nextRoundPrompt(st, v, feedback), { deliverAs: "followUp" });
 	} else {
@@ -1272,7 +1324,7 @@ function advanceOrStop(
 		st.status = "stopped";
 		st.stopReason = event;
 		st.epoch += 1;
-		saveState(st);
+		saveState(st, token);
 		journal(st, event, { code: v?.code ?? null, maxRounds: st.maxRounds });
 		pi.sendUserMessage(
 			`【mini-harness】已达最大轮数 ${st.maxRounds}，停止。` +
@@ -1291,6 +1343,7 @@ async function handleVerdict(
 	st: LoopState,
 	v: { pass: boolean; noValidator?: boolean; code: number | null; output: string; workspaceChangedDuringValidation?: boolean },
 ) {
+	const token = tokenOf(st);
 	// Task 3：验收期间工作区发生变化 → 本轮结果不可信，不得判通过 / 不得选为最优 Checkpoint。
 	if (v.workspaceChangedDuringValidation) {
 		advanceOrStop(
@@ -1299,6 +1352,7 @@ async function handleVerdict(
 			v,
 			"工作区在验收期间发生变化，本轮验证结果不可信；请先停止并发改动，再基于稳定代码重新 loop_done。",
 			"workspace-changed-during-validation",
+			token,
 		);
 		return;
 	}
@@ -1310,24 +1364,24 @@ async function handleVerdict(
 			v,
 			"指标门禁未通过：\n" + (st.lastMetricGate.reasons || []).join("\n"),
 			"metric-gate",
+			token,
 		);
 		return;
 	}
 	if (v.pass) {
-		const epoch = st.epoch;
 		const review = await runReview(ctx, st, v, pi);
-		if (!stillCurrent(st.runId, epoch)) {
-			journal(st, "late-callback-dropped", { at: "handleVerdict/review", epoch });
+		if (!stillCurrent(token)) {
+			journal(st, "late-callback-dropped", { at: "handleVerdict/review", epoch: token.epoch });
 			return;
 		}
 		st.lastReview = review;
 		st.lastDiff = review.diff || "";
-		saveState(st);
+		saveState(st, token);
 		journal(st, "review", { verdict: review.verdict, reasons: review.reasons });
 		writeRoundReview(st, v, review, review.diff);
 		if (review.verdict === "block") {
 			notify(ctx, `⚠️ mini-harness：validator 通过，但 reviewer 否决（第 ${st.round} 轮）。`, "warning");
-			advanceOrStop(pi, st, v, `reviewer 否决：\n${review.reasons.join("\n")}`, "reviewer-block");
+			advanceOrStop(pi, st, v, `reviewer 否决：\n${review.reasons.join("\n")}`, "reviewer-block", token);
 			return;
 		}
 		if (review.verdict === "error") {
@@ -1338,7 +1392,7 @@ async function handleVerdict(
 			st.status = "stopped";
 			st.stopReason = "reviewer-error";
 			st.epoch += 1;
-			saveState(st);
+			saveState(st, token);
 			journal(st, "reviewer-error", { mode: "code", code: v.code, reasons: review.reasons, epoch: st.epoch });
 			notify(
 				ctx,
@@ -1357,7 +1411,7 @@ async function handleVerdict(
 		st.stage = "done";
 		st.status = "done";
 		st.acceptance = review.verdict === "pass" ? "passed" : "passed-validator-only";
-		saveState(st);
+		saveState(st, token);
 		journal(st, "validate-pass", { code: v.code, review: review.verdict, acceptance: st.acceptance });
 		if (st.worktreeDir && st.worktreeBranch && !st.worktreeCommitted) {
 			try {
@@ -1372,12 +1426,12 @@ async function handleVerdict(
 						timeout: 60000,
 					});
 				}
-				if (!sameEpoch(st.runId, epoch)) {
-					journal(st, "late-callback-dropped", { at: "handleVerdict/worktree", epoch });
+				if (!sameEpoch(token)) {
+					journal(st, "late-callback-dropped", { at: "handleVerdict/worktree", epoch: token.epoch });
 					return;
 				}
 				st.worktreeCommitted = true;
-				saveState(st);
+				saveState(st, token);
 				journal(st, "worktree-commit", { branch: st.worktreeBranch, dir: st.worktreeDir });
 			} catch (e) {
 				journal(st, "worktree-commit-error", { error: String((e as Error)?.message || e) });
@@ -1411,24 +1465,24 @@ async function handleLlmVerdict(pi: ExtensionAPI, ctx: LoopCtx, st: LoopState) {
 		code: null as number | null,
 		output: "（LLM loop：无代码 validator，由 reviewer 判定）",
 	};
-	const epoch = st.epoch;
+	const token = tokenOf(st);
 	const review = await runReview(ctx, st, syntheticV, pi);
-	if (!stillCurrent(st.runId, epoch)) {
-		journal(st, "late-callback-dropped", { at: "handleLlmVerdict/review", epoch });
+	if (!stillCurrent(token)) {
+		journal(st, "late-callback-dropped", { at: "handleLlmVerdict/review", epoch: token.epoch });
 		return;
 	}
 	st.lastReview = review;
 	st.lastDiff = review.diff || "";
 	st.lastVerdict = review.verdict === "pass" ? "pass" : review.verdict === "block" ? "fail" : review.verdict;
 	st.lastCode = null;
-	saveState(st);
+	saveState(st, token);
 	journal(st, "llm-review", { verdict: review.verdict, reasons: review.reasons });
 	writeRoundReview(st, syntheticV, review, review.diff);
 	if (review.verdict === "pass") {
 		st.stage = "done";
 		st.status = "done";
 		st.acceptance = "passed";
-		saveState(st);
+		saveState(st, token);
 		journal(st, "validate-pass", { mode: "llm", review: review.verdict, acceptance: st.acceptance });
 		notify(ctx, "✅ mini-harness（LLM loop）：reviewer 判定达成。", "info");
 	} else if (review.verdict === "block") {
@@ -1437,7 +1491,7 @@ async function handleLlmVerdict(pi: ExtensionAPI, ctx: LoopCtx, st: LoopState) {
 			st.round += 1;
 			st.stage = "run";
 			st.validatedRound = 0;
-			saveState(st);
+			saveState(st, token);
 			journal(st, "llm-block", { reasons: review.reasons, failedRound, nextRound: st.round });
 			pi.sendUserMessage(
 				`【mini-harness · LLM loop 第 ${st.round} 轮】reviewer 否决：\n${review.reasons.join("\n")}\n` +
@@ -1449,7 +1503,7 @@ async function handleLlmVerdict(pi: ExtensionAPI, ctx: LoopCtx, st: LoopState) {
 			st.status = "stopped";
 			st.stopReason = "max-rounds";
 			st.epoch += 1;
-			saveState(st);
+			saveState(st, token);
 			journal(st, "llm-max-rounds");
 			notify(ctx, `⚠️ mini-harness（LLM loop）：已达最大轮数 ${st.maxRounds}，停止。`, "warning");
 		}
@@ -1792,8 +1846,8 @@ async function setupRun(
 	journal(st, "setup", { main: st.mainModel, planner: st.plannerModel, reviewer: st.reviewerModel });
 
 	let plannerNote = "";
+	const setupToken = tokenOf(st);
 	if (models.planner) {
-		const epoch = st.epoch;
 		let plan = "";
 		let error = "";
 		try {
@@ -1806,8 +1860,8 @@ async function setupRun(
 		} catch (e) {
 			error = String((e as Error)?.message || e);
 		}
-		if (!stillCurrent(st.runId, epoch)) {
-			journal(st, "late-callback-dropped", { at: "setupRun/planner", epoch });
+		if (!stillCurrent(setupToken)) {
+			journal(st, "late-callback-dropped", { at: "setupRun/planner", epoch: setupToken.epoch });
 			return { ok: false, error: "模型准备期间运行已被停止" };
 		}
 		if (error) {
@@ -1821,7 +1875,7 @@ async function setupRun(
 	}
 	st.setupPending = false;
 	st.stage = "plan";
-	saveState(st);
+	saveState(st, setupToken);
 	return { ok: true, plannerNote };
 }
 
@@ -2095,18 +2149,18 @@ export function createLoopExtension() {
 						details: { runId: st.runId, mode: "llm", review: st.lastReview?.verdict },
 					};
 				}
-				const epoch = st.epoch;
+				const token = tokenOf(st);
 				const v = await runValidation(pi, st);
-				// 停止/取消守卫：手动验收期间被停止（epoch 已递增）时，不得把旧状态写回 active，
-				// 也不得继续跑 reviewer 或推进下一轮（回归：停止后手动验收的迟到结果复活任务）。
-				if (v.cancelled || !stillCurrent(st.runId, epoch)) {
-					journal(st, "late-callback-dropped", { at: "loop_validate", epoch });
+				// 停止/接管守卫：手动验收期间被停止（epoch 已递增）或被接管（generation 已变）时，
+				// 不得把旧状态写回 active，也不得继续跑 reviewer 或推进下一轮（回归：停止后手动验收的迟到结果复活任务）。
+				if (v.cancelled || !stillCurrent(token)) {
+					journal(st, "late-callback-dropped", { at: "loop_validate", epoch: token.epoch });
 					return {
 						content: [{ type: "text", text: "运行已停止，本次手动验证结果已丢弃，不再推进。" }],
 						details: { runId: st.runId, cancelled: true },
 					};
 				}
-				if (!(await recordValidationOutcome(st, v, epoch))) {
+				if (!(await recordValidationOutcome(st, v, token))) {
 					return {
 						content: [{ type: "text", text: "运行已停止，本次手动验证结果已丢弃，不再推进。" }],
 						details: { runId: st.runId, cancelled: true },
@@ -2289,7 +2343,7 @@ export function createLoopExtension() {
 				return;
 			}
 			busy.add(st.runId);
-			const epoch = st.epoch;
+			const token = tokenOf(st);
 			try {
 				if (st.mode === "llm") {
 					await handleLlmVerdict(pi, c, st);
@@ -2313,25 +2367,25 @@ export function createLoopExtension() {
 						};
 					} else {
 						v = await runValidation(pi, st);
-						if (v.cancelled || !stillCurrent(st.runId, epoch)) {
-							journal(st, "late-callback-dropped", { at: "agent_end/runValidation", epoch });
+						if (v.cancelled || !stillCurrent(token)) {
+							journal(st, "late-callback-dropped", { at: "agent_end/runValidation", epoch: token.epoch });
 							return;
 						}
-						if (!(await recordValidationOutcome(st, v, epoch))) return;
+						if (!(await recordValidationOutcome(st, v, token))) return;
 					}
 					await handleVerdict(pi, c, st, v);
 				}
 			} catch (e) {
 				journal(st, "runtime-error", { error: String((e as Error)?.message || e) });
 				// 执行异常必须可见：不吞错，标记中断态（不伪装成完成）。
-				// 用磁盘态 + 捕获的代次判定，避免把用户「停止」后的旧内存态重新落盘（epoch 回退会让迟到回调复活）。
+				// 用磁盘态 + 捕获的执行身份判定，避免把用户「停止」/「接管」后的旧内存态重新落盘。
 				const fresh = loadState(st.runId);
-				if (fresh && fresh.status === "active" && fresh.epoch === epoch) {
+				if (fresh && fresh.status === "active" && matchesToken(fresh, token)) {
 					fresh.status = "stopped";
 					fresh.stage = "stopped";
 					fresh.stopReason = "runtime-error";
 					fresh.epoch += 1;
-					saveState(fresh);
+					saveState(fresh, token);
 					journal(fresh, "runtime-error-stop", { epoch: fresh.epoch });
 					notify(c, `⚠️ mini-harness：运行时异常，已停止（${String((e as Error)?.message || e)}）。`, "warning");
 				}
@@ -2747,11 +2801,14 @@ export function recoverRun(runId: string, requesterOwner?: string): RecoverRunRe
 		});
 		if (got) {
 			takeover = true;
+			// 捕获接管前的执行身份：CAS 写 state 时要求磁盘仍是旧身份（旧 owner/gen/epoch），
+			// 防止旧 owner 的迟到回调在「接管 lease 之后、写 state 之前」这个窗口里抢先写回旧状态。
+			const preToken = tokenOf(st);
 			st.owner = me;
 			st.generation = nextGeneration;
 			st.attemptId = newAttemptId();
 			st.recoveryState = cls.unit;
-			saveState(st);
+			saveState(st, preToken);
 			startLeaseHeartbeat(runId, me, nextGeneration);
 			journal(st, "recovery-takeover", { owner: me, generation: nextGeneration, classification: cls.unit });
 		} else {

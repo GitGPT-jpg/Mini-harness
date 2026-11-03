@@ -79,8 +79,16 @@ function leasePath(runDir: string): string {
 
 function readLease(runDir: string): Lease | null {
 	try {
-		const raw = JSON.parse(fs.readFileSync(leasePath(runDir), "utf8")) as Lease;
-		if (raw && typeof raw.owner === "string" && typeof raw.generation === "number") return raw;
+		return parseLease(fs.readFileSync(leasePath(runDir), "utf8"));
+	} catch {
+		return null;
+	}
+}
+
+function parseLease(raw: string): Lease | null {
+	try {
+		const parsed = JSON.parse(raw) as Lease;
+		if (parsed && typeof parsed.owner === "string" && typeof parsed.generation === "number") return parsed;
 		return null;
 	} catch {
 		return null;
@@ -95,10 +103,122 @@ export function leaseExpired(lease: Lease | null, nowMs = Date.now()): boolean {
 }
 
 /**
- * 用 O_CREAT|O_EXCL 原子创建租约文件：文件系统保证同一路径只有一个创建者成功。
- * 成功写入并 fsync 后返回 true；EEXIST（他人已建）返回 false；写入失败时清理半成品并返回 false。
- * 这是「同宿主多进程 + 单机多页面」互斥的原子原语：不是「写后读回」，而是内核级独占创建。
+ * 单文件原子「读 → 校验 → 写回 / 删除」CAS（compare-and-swap）。
+ *
+ * 协议（所有写者都必须走这条协议，否则并发下不成立）：
+ *  1. rename 原子认领：把目标文件移到唯一的 claim 路径（同一时刻只有一个进程能认领成功；
+ *     认领失败 ENOENT 说明文件当前不存在）。
+ *  2. 读认领到的旧内容，用 isExpected 校验是否允许改写。
+ *  3. 允许 → 用 buildNext 生成新内容；null 表示删除；否则写临时文件后 link 放回
+ *     （link 是原子且不覆盖：若并发者已重建目标，link 抛 EEXIST，则本次放弃）。
+ *  4. 不允许 → 放弃：用 link 把认领的原文件放回（同样不覆盖并发者重建的新文件）。
+ *
+ * 为什么不用「rename 放回」：rename 会无条件覆盖目标；一旦并发者在认领窗口内重建了目标，
+ * rename 会把它的新文件覆盖掉（即「旧写者覆盖新代次」）。link+unlink 天然具备「仅当目标不存在」语义。
+ * 支持范围：单主机、持久本地文件系统（POSIX rename/link + O_EXCL）；不承诺 NFS/跨主机强一致。
  */
+export function compareAndSwapFile(
+	filePath: string,
+	opts: {
+		isExpected: (currentText: string | null) => boolean;
+		buildNext: (currentText: string | null) => string | null;
+	},
+): { ok: boolean; current: string | null } {
+	fs.mkdirSync(path.dirname(filePath), { recursive: true });
+	const claim = filePath + ".cas." + process.pid + "." + crypto.randomBytes(4).toString("hex");
+	let current: string | null = null;
+	let claimed = false;
+	try {
+		try {
+			fs.renameSync(filePath, claim);
+			claimed = true;
+		} catch {
+			claimed = false; // ENOENT：目标不存在
+		}
+		if (claimed) {
+			try {
+				current = fs.readFileSync(claim, "utf8");
+			} catch {
+				current = null;
+			}
+		}
+		if (!opts.isExpected(current)) {
+			restoreClaim(claim, claimed, filePath);
+			return { ok: false, current };
+		}
+		casTestBarrier();
+		const next = opts.buildNext(current);
+		if (next === null) {
+			if (claimed) {
+				try {
+					fs.rmSync(claim, { force: true });
+				} catch {}
+			}
+			return { ok: true, current };
+		}
+		const tmp = filePath + ".new." + process.pid + "." + crypto.randomBytes(4).toString("hex");
+		fs.writeFileSync(tmp, next);
+		try {
+			fs.linkSync(tmp, filePath);
+			try {
+				fs.rmSync(tmp, { force: true });
+			} catch {}
+			if (claimed) {
+				try {
+					fs.rmSync(claim, { force: true });
+				} catch {}
+			}
+			return { ok: true, current };
+		} catch {
+			// 并发者已重建目标（link EEXIST）：放弃本次写，把认领的原文件放回（同样不覆盖）。
+			try {
+				fs.rmSync(tmp, { force: true });
+			} catch {}
+			restoreClaim(claim, claimed, filePath);
+			return { ok: false, current };
+		}
+	} catch {
+		try {
+			fs.rmSync(claim, { force: true });
+		} catch {}
+		return { ok: false, current };
+	}
+}
+
+function restoreClaim(claim: string, claimed: boolean, filePath: string): void {
+	if (!claimed) return;
+	try {
+		fs.linkSync(claim, filePath);
+	} catch {
+		// 并发者已重建目标：保留其新文件，认领的旧内容随 claim 一起清理。
+	}
+	try {
+		fs.rmSync(claim, { force: true });
+	} catch {}
+}
+
+/**
+ * 测试专用竞争屏障（默认关闭，生产恒为 no-op）：仅当环境变量 MINI_HARNESS_CAS_BARRIER_DIR
+ * 指向一个目录时启用。在 CAS 判定「允许改写」之后、真正 link 放置之前暂停，写 ready.<pid>
+ * 并等待 <dir>/go 出现（上限 10s 后放行），用于确定性复现「A 已判定过期、B 先接管、A 再继续」的交错。
+ * 普通用户任务输入无法启用（只能通过服务进程环境变量），不构成生产绕过口。
+ */
+function casTestBarrier(): void {
+	const dir = process.env.MINI_HARNESS_CAS_BARRIER_DIR;
+	if (!dir) return;
+	try {
+		fs.writeFileSync(path.join(dir, "ready." + process.pid), String(process.pid));
+	} catch {}
+	const go = path.join(dir, "go");
+	const t0 = Date.now();
+	while (Date.now() - t0 < 10_000) {
+		try {
+			if (fs.existsSync(go)) return;
+		} catch {}
+	}
+}
+
+/** 用 O_CREAT|O_EXCL 原子创建租约文件：同一路径只有一个创建者成功；用于「空目录首次取得」。 */
 function tryCreateLeaseFile(runDir: string, lease: Lease): boolean {
 	let fd: number | null = null;
 	try {
@@ -118,7 +238,6 @@ function tryCreateLeaseFile(runDir: string, lease: Lease): boolean {
 				fs.closeSync(fd);
 			} catch {}
 		}
-		// 创建成功后写入失败：清掉半成品，避免留下无法解析的锁文件。
 		if ((e as NodeJS.ErrnoException).code !== "EEXIST") {
 			try {
 				fs.rmSync(leasePath(runDir), { force: true });
@@ -129,35 +248,17 @@ function tryCreateLeaseFile(runDir: string, lease: Lease): boolean {
 }
 
 /**
- * 原子取得执行所有权。两个实例 / 两个页面同时请求时只有一个赢家：
- * 1. 先用 O_EXCL 独占创建——文件系统保证只有一个赢家；
- * 2. 已存在且未过期 → 他人仍持权，返回 false；
- * 3. 已存在但已过期（失联/崩溃/休眠）→ 原子 rename 移走旧文件再独占创建：
- *    rename 是原子移动，两个竞争者的 rename 只有一个成功，另一个得到 ENOENT 后回到独占创建，
- *    最终仍只有一个进程创建成功（真正的赢家），其余进程创建 EEXIST 或读回新租约后判负。
- *
- * 支持拓扑：单机多进程 / 多页面、同一本地（或具备 POSIX rename + O_EXCL 语义的共享）文件系统。
- * 跨主机 NFS/对象存储不保证强一致，明确标注为不支持。
+ * 原子取得执行所有权：空目录首次取得用 O_EXCL；已存在则用 CAS 判「已过期才可接管」。
+ * 两个进程竞争同一过期租约时只有一个成功（CAS 的 claim+link 保证），旧进程不会覆盖新代次。
  */
 export function acquireLease(runDir: string, lease: Lease): boolean {
-	try {
-		if (tryCreateLeaseFile(runDir, lease)) return true;
-		const cur = readLease(runDir);
-		if (cur && !leaseExpired(cur)) return false;
-		// 过期 / 无法解析 → 尝试接管：原子移走旧文件，再独占创建。
-		const stale = leasePath(runDir) + ".stale." + process.pid + "." + crypto.randomBytes(4).toString("hex");
-		try {
-			fs.renameSync(leasePath(runDir), stale);
-		} catch {
-			// ENOENT：他人已移走旧文件并可能已重建。落到下面的独占创建，赢则赢、输则输。
-		}
-		try {
-			fs.rmSync(stale, { force: true });
-		} catch {}
-		return tryCreateLeaseFile(runDir, lease);
-	} catch {
-		return false;
-	}
+	if (tryCreateLeaseFile(runDir, lease)) return true;
+	const next = JSON.stringify(lease, null, 2);
+	const r = compareAndSwapFile(leasePath(runDir), {
+		isExpected: (cur) => leaseExpired(parseLease(cur ?? "")), // 不存在/不可解析/已过期 → 允许接管
+		buildNext: () => next,
+	});
+	return r.ok;
 }
 
 /** 读取当前租约（供恢复核对 / 展示用）。 */
@@ -165,40 +266,52 @@ export function getLease(runDir: string): Lease | null {
 	return readLease(runDir);
 }
 
-/** 续租：仍是当前 owner+generation 才更新心跳；否则返回 false（已被他人接管）。 */
+/** 续租：仍是当前 owner+generation 才 CAS 更新心跳；否则返回 false（已被他人接管）。 */
 export function heartbeat(runDir: string, owner: string, generation: number): boolean {
-	try {
-		const cur = readLease(runDir);
-		if (!cur || cur.owner !== owner || cur.generation !== generation) return false;
-		const next = { ...cur, heartbeatAt: new Date().toISOString() };
-		const tmp = leasePath(runDir) + ".hb." + process.pid + "." + crypto.randomBytes(4).toString("hex");
-		fs.writeFileSync(tmp, JSON.stringify(next, null, 2));
-		// rename 到同一路径是原子的；但必须确认当前 owner 仍是自己（rename 会覆盖他人文件）。
-		// 因此 rename 前再读一次校验 owner+generation，随后立即 rename，窗口极小且只能自己覆盖自己。
-		const before = readLease(runDir);
-		if (!before || before.owner !== owner || before.generation !== generation) {
-			fs.rmSync(tmp, { force: true });
-			return false;
-		}
-		fs.renameSync(tmp, leasePath(runDir));
-		return true;
-	} catch {
-		return false;
-	}
+	const r = compareAndSwapFile(leasePath(runDir), {
+		isExpected: (cur) => {
+			const p = parseLease(cur ?? "");
+			return !!p && p.owner === owner && p.generation === generation;
+		},
+		buildNext: (cur) => {
+			const p = parseLease(cur ?? "");
+			if (!p) return null;
+			return JSON.stringify({ ...p, heartbeatAt: new Date().toISOString() }, null, 2);
+		},
+	});
+	return r.ok;
 }
 
-/** 释放所有权：仅当仍是 owner 时移除；已被接管则不删。 */
+/** 条件更新租约（如 recordTaskPid）：仅当仍是当前 owner+generation 才应用 mutator，否则不写。 */
+export function mutateLease(
+	runDir: string,
+	expect: { owner: string; generation: number },
+	mutator: (cur: Lease) => Lease,
+): boolean {
+	const r = compareAndSwapFile(leasePath(runDir), {
+		isExpected: (cur) => {
+			const p = parseLease(cur ?? "");
+			return !!p && p.owner === expect.owner && p.generation === expect.generation;
+		},
+		buildNext: (cur) => {
+			const p = parseLease(cur ?? "");
+			if (!p) return null;
+			return JSON.stringify(mutator(p), null, 2);
+		},
+	});
+	return r.ok;
+}
+
+/** 释放所有权：仅当仍是 owner 时 CAS 删除；已被接管则不删（旧代次不得删除新租约）。 */
 export function releaseLease(runDir: string, owner: string): boolean {
-	try {
-		const cur = readLease(runDir);
-		if (cur && cur.owner === owner) {
-			fs.rmSync(leasePath(runDir), { force: true });
-			return true;
-		}
-		return false;
-	} catch {
-		return false;
-	}
+	const r = compareAndSwapFile(leasePath(runDir), {
+		isExpected: (cur) => {
+			const p = parseLease(cur ?? "");
+			return !!p && p.owner === owner;
+		},
+		buildNext: () => null,
+	});
+	return r.ok;
 }
 
 // ---------- 恢复分类与摘要 ----------
