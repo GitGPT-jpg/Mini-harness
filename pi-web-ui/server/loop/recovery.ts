@@ -261,17 +261,19 @@ function tryCreateLeaseFile(runDir: string, lease: Lease): boolean {
 /**
  * 原子取得执行所有权：空目录首次取得用 O_EXCL；已存在则用 CAS 判「已过期才可接管」。
  * 两个进程竞争同一过期租约时只有一个成功（CAS 的 claim+link 保证），旧进程不会覆盖新代次。
+ * 孤儿租约（owner 服务进程已死但心跳未过期）只在 opts.allowOrphan 时允许接管 —— 该语义属于
+ * 服务级恢复（recoverRun），不属于裸 acquireLease 竞争者原语，避免短命竞争者退出后被误判「孤儿」。
  */
-export function acquireLease(runDir: string, lease: Lease): boolean {
+export function acquireLease(runDir: string, lease: Lease, opts?: { allowOrphan?: boolean }): boolean {
 	if (tryCreateLeaseFile(runDir, lease)) return true;
 	const next = JSON.stringify(lease, null, 2);
 	const r = compareAndSwapFile(leasePath(runDir), {
 		isExpected: (cur) => {
-			// 不存在/不可解析/已过期 → 允许接管；孤儿租约（owner 服务进程已死）也允许立即接管（服务可重启）。
+			// 不存在/不可解析/已过期 → 允许接管；仅服务级恢复（allowOrphan）才把「owner 服务进程已死」当孤儿。
 			const p = parseLease(cur ?? "");
 			if (!p) return true;
 			if (leaseExpired(p)) return true;
-			return p.pid != null && !pidAliveLocal(p.pid);
+			return opts?.allowOrphan === true && p.pid != null && !pidAliveLocal(p.pid);
 		},
 		buildNext: () => next,
 	});

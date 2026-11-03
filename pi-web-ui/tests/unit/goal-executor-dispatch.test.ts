@@ -216,6 +216,32 @@ describe("ClientSession.startLoop", () => {
 		expect(cs.emitNotice).toHaveBeenCalledWith("warning", "Loop 启动失败：未知能力模板 does-not-exist");
 		expect(cs.flushSnapshot).toHaveBeenCalledTimes(1);
 	});
+
+	it("缺少必要输入时阻止启动（暴露缺失项与候选），不创建 run", async () => {
+		const ws = mkdtempSync(join(tmpdir(), "loop-start-missing-"));
+		const conv: any = { session: { sessionId: "s-missing" }, runtime: { cwd: ws }, cwd: ws };
+		const cs = Object.create(ClientSession.prototype) as any;
+		cs.convs = new Map([["c1", conv]]);
+		cs.activeId = "c1";
+		cs.emitNotice = vi.fn();
+		cs.flushSnapshot = vi.fn();
+
+		await ClientSession.prototype.startLoop.call(cs, {
+			goal: "测缺失",
+			taskId: "missing-block-test",
+			packId: "cache-loss",
+			workspace: ws,
+		});
+
+		expect(conv.loop).toMatchObject({
+			kind: "request-failed",
+			taskId: "missing-block-test",
+			goal: "测缺失",
+		});
+		expect(conv.loop.reason).toContain("缺少必要输入");
+		expect(conv.loop.reason).toContain("validateCmd");
+		rmSync(ws, { recursive: true, force: true });
+	});
 });
 
 describe("worktree Loop executor kickoff", () => {

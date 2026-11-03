@@ -2857,14 +2857,18 @@ export function recoverRun(runId: string, requesterOwner?: string): RecoverRunRe
 	if (st.status === "active" && !leaseHeld && !leaseHeldByOther && (cls.unit === "failed-retryable" || (cls.unit === "running" && inFlightOpId != null))) {
 		const nextGeneration = (st.generation ?? 0) + 1;
 		const nowIso = now();
-		const got = acquireLease(dir, {
-			owner: me,
-			pid: process.pid,
-			generation: nextGeneration,
-			startedAt: nowIso,
-			heartbeatAt: nowIso,
-			remoteJobId: st.remoteJobId ?? null,
-		});
+		const got = acquireLease(
+			dir,
+			{
+				owner: me,
+				pid: process.pid,
+				generation: nextGeneration,
+				startedAt: nowIso,
+				heartbeatAt: nowIso,
+				remoteJobId: st.remoteJobId ?? null,
+			},
+			{ allowOrphan: true }, // 服务级恢复：owner 服务进程已死（孤儿租约）可立即接管，不等 TTL
+		);
 		if (got) {
 			takeover = true;
 			// 捕获接管前的执行身份：CAS 写 state 时要求磁盘仍是旧身份（旧 owner/gen/epoch），

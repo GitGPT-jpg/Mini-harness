@@ -12430,7 +12430,7 @@ export class ClientSession {
 		const goal = (msg.goal?.trim() || pack?.goal || "").trim();
 		const criteria = (msg.criteria?.trim() || pack?.criteria || "").trim();
 		const precheckCmd = msg.precheckCmd?.trim() || "";
-		const validateCmd = msg.validateCmd?.trim() || "";
+		let validateCmd = msg.validateCmd?.trim() || "";
 		const primaryMetric = msg.primaryMetric ?? pack?.primaryMetric ?? undefined;
 		const metricDirection = msg.metricDirection ?? pack?.metricDirection ?? undefined;
 		const metricPrecision = msg.metricPrecision;
@@ -12445,6 +12445,9 @@ export class ClientSession {
 		const roots = (msg.artifactRoots ?? []).map((r) => String(r).trim()).filter(Boolean);
 		// 项目位置：用户显式填写优先；缺省用会话 cwd（与扩展 ctx.cwd 同源）。
 		const workspace = String(msg.workspace ?? "").trim() || conv.runtime?.cwd || conv.cwd || this.cwd;
+		// 显式项目位置与会话目录不同：模型工具必须落在 workspace，否则「模型改会话目录、验收查 workspace」不一致。
+		const sessionCwd = conv.runtime?.cwd || conv.cwd || this.cwd;
+		const workspaceDiffers = !!workspace && !!sessionCwd && resolve(workspace) !== resolve(sessionCwd);
 		// 上下文发现：只读整理已确认/缺失/冲突，不执行工作区命令；结果注入执行提示词（含 worktree 执行者）。
 		let discoveryLines: string[] = [];
 		if (pack) {
@@ -12455,6 +12458,21 @@ export class ClientSession {
 				this.flushSnapshot();
 				return;
 			}
+			// 缺必要输入 → 可靠阻止启动：不建 run、不静默带过，把缺失项与候选一并暴露给发起者确认。
+			if (ctx.missing.length > 0) {
+				const miss = ctx.missing.map((m) => m.id + "(" + (m.hint ?? m.label) + ")").join("; ");
+				const cand = ctx.candidates.length
+					? "；候选(需确认): " + ctx.candidates.map((c) => c.inputId + "=" + c.value).join("; ")
+					: "";
+				const reason = "缺少必要输入：" + miss + cand;
+				conv.loop = { kind: "request-failed", taskId, goal, reason, createdAt: new Date().toISOString() };
+				this.emitNotice("warning", `Loop 启动失败：${reason}`);
+				this.flushSnapshot();
+				return;
+			}
+			// 已确认的输入（用户显式 + 探测确认）并入启动契约：validator 与发现/补缺用同一份有效契约。
+			const merged = (id: string) => ctx.inputs.find((i) => i.id === id && i.value != null)?.value ?? "";
+			validateCmd = validateCmd || merged("validateCmd");
 			discoveryLines.push("<mini_harness_discovery>");
 			discoveryLines.push(renderDiscoverySummary(ctx));
 			discoveryLines.push("</mini_harness_discovery>");
@@ -12541,6 +12559,16 @@ export class ClientSession {
 		if (st.worktreeBranch && st.worktreeDir) {
 			// worktree 执行者会话：模型工具/终端/validator/reviewer 全落独立 worktree，不污染 base 工作区
 			await this.startWorktreeExecutor(conv, st, lines.join("\n"));
+		} else if (workspaceDiffers) {
+			// 显式项目位置 ≠ 会话目录：也起绑定 workspace 的执行者，保证「模型工具/验收」同一工作区。
+			await this.startExecutorInWorkspace(
+				conv,
+				st,
+				lines.join("\n"),
+				`工作目录：${st.workspace}（显式项目位置，与当前会话目录不同）。你的 shell/终端/文件工具默认就在这个目录，所有修改都直接做在这里。`,
+				"执行环境绑定失败",
+				"workspace-executor-error",
+			);
 		} else {
 			await this.prompt(lines.join("\n"));
 		}
@@ -12549,6 +12577,26 @@ export class ClientSession {
 	/** worktree 模式：起一个绑定在 st.workspace 的执行者子代理跑 loop，模型工具/终端都落 worktree。
 	 *  失败显式报错并停 run，绝不静默回退到 base 工作区（否则「模型改原目录、验收查 worktree」不一致）。 */
 	private async startWorktreeExecutor(conv: Conversation, st: LoopState, prompt: string): Promise<void> {
+		return this.startExecutorInWorkspace(
+			conv,
+			st,
+			prompt,
+			`工作目录：${st.workspace}（独立 git worktree，分支 ${st.worktreeBranch}）。你的 shell/终端/文件工具默认就在这个目录，所有修改都直接做在这里。`,
+			"worktree 执行环境绑定失败",
+			"worktree-executor-error",
+		);
+	}
+
+	/** 起一个绑定在 st.workspace 的执行者子代理跑 loop：模型工具/终端/validator 全落 st.workspace。
+	 *  用于 worktree 模式与「显式项目位置 ≠ 会话目录」两种情形，保证同一工作区。 */
+	private async startExecutorInWorkspace(
+		conv: Conversation,
+		st: LoopState,
+		prompt: string,
+		workspaceNote: string,
+		errorLabel: string,
+		stopReason: string,
+	): Promise<void> {
 		try {
 			// deferKickoff：先建会话、重绑 run.sessionId，再触发首回合 —— 否则首回合的
 			// before_agent_start 按旧 sessionId 找不到 run。
@@ -12567,12 +12615,11 @@ export class ClientSession {
 			if (!execConv?.session) throw new Error("执行者会话创建失败");
 			const re = rebindLoopSession(st.runId, execConv.session.sessionId);
 			if (!re.ok) throw new Error(re.error || "run 会话重绑失败");
-			// 执行者会话 cwd 就是 worktree：工具/终端天然落 worktree，提示词不再需要「先 cd」兜底。
-			// 与 spawnSubagentConversation 同一 fire-and-forget 通道，不阻塞 loop_start_request 返回。
-			const kickPrompt = `${prompt}\n工作目录：${st.workspace}（独立 git worktree，分支 ${st.worktreeBranch}）。你的 shell/终端/文件工具默认就在这个目录，所有修改都直接做在这里。`;
+			// 执行者会话 cwd 就是 workspace：工具/终端天然落 workspace，提示词不再需要「先 cd」兜底。
+			const kickPrompt = `${prompt}\n${workspaceNote}`;
 			execConv.kickoff = execConv.session.sendUserMessage(kickPrompt).catch((err) => {
-				const reason = `worktree 执行者会话启动失败：${err instanceof Error ? err.message : String(err)}`;
-				stopRunExternal(st.runId, "worktree-executor-error");
+				const reason = `${errorLabel}：${err instanceof Error ? err.message : String(err)}`;
+				stopRunExternal(st.runId, stopReason);
 				conv.loop = {
 					kind: "request-failed",
 					taskId: st.taskId ?? `loop-${st.runId}`,
@@ -12584,15 +12631,15 @@ export class ClientSession {
 				this.flushSnapshot();
 			});
 		} catch (err) {
-			stopRunExternal(st.runId, "worktree-executor-error");
+			stopRunExternal(st.runId, stopReason);
 			conv.loop = {
 				kind: "request-failed",
 				taskId: st.taskId ?? `loop-${st.runId}`,
 				goal: st.goal,
-				reason: `worktree 执行环境绑定失败：${(err as Error)?.message || err}`,
+				reason: `${errorLabel}：${(err as Error)?.message || err}`,
 				createdAt: new Date().toISOString(),
 			};
-			this.emitNotice("warning", `worktree 执行环境绑定失败：${(err as Error)?.message || err}`);
+			this.emitNotice("warning", `${errorLabel}：${(err as Error)?.message || err}`);
 			this.flushSnapshot();
 		}
 	}

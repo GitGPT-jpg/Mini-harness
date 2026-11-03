@@ -44,6 +44,14 @@ export interface ResolvedInput extends CapabilityPackInput {
 	source: "user" | "discovery" | "project-config" | "pack-default" | "history";
 	value: string | null;
 	sourceOf: string;
+	/** 探测候选（如裸 validate.py/run.py）：value 只是建议，须发起者确认后才算有效输入，不得自动当作已确认。 */
+	confirmed?: boolean;
+}
+
+export interface InputCandidate {
+	inputId: string;
+	value: string;
+	sourceOf: string;
 }
 
 export interface TaskContext {
@@ -52,6 +60,8 @@ export interface TaskContext {
 	probe: WorkspaceProbe;
 	inputs: ResolvedInput[];
 	missing: ResolvedInput[];
+	/** 探测得到的候选值（只建议、不确认），供发起者选择；未选择时对应输入仍算缺失。 */
+	candidates: InputCandidate[];
 	conflicts: Array<{ inputId: string; defaultValue: string; resolvedValue: string; source: string }>;
 	packVersion: string | null;
 	provenance: Array<{ repo: string; path: string; version: string }>;
@@ -109,13 +119,14 @@ export function resolveTaskContext(packId: string, workspace: string, userInputs
 	const probe = probeWorkspace(workspace);
 	const inputs: ResolvedInput[] = [];
 	const missing: ResolvedInput[] = [];
+	const candidates: InputCandidate[] = [];
 	const conflicts: TaskContext["conflicts"] = [];
 	if (!pack) {
 		// 未知能力包：明确错误，不返回「没有缺口」的空成功结果。
-		return { packId, workspace: probe.workspace, probe, inputs, missing, conflicts, packVersion: null, provenance: [], error: "未知能力包：" + packId };
+		return { packId, workspace: probe.workspace, probe, inputs, missing, candidates, conflicts, packVersion: null, provenance: [], error: "未知能力包：" + packId };
 	}
 	if (!probe.exists) {
-		return { packId, workspace: probe.workspace, probe, inputs, missing, conflicts, packVersion: pack.version, provenance: [], error: "工作区不存在：" + probe.workspace };
+		return { packId, workspace: probe.workspace, probe, inputs, missing, candidates, conflicts, packVersion: pack.version, provenance: [], error: "工作区不存在：" + probe.workspace };
 	}
 	const configHints: Record<string, string | null> = {};
 	for (const f of CONFIG_FILES) { const h = readConfigHint(probe.workspace, f); if (h) configHints[f] = h; }
@@ -123,6 +134,14 @@ export function resolveTaskContext(packId: string, workspace: string, userInputs
 		const userValue = (userInputs[decl.id] || "").trim() || null;
 		if (userValue) { inputs.push({ ...decl, source: "user", value: userValue, sourceOf: "用户输入" }); continue; }
 		const discovered = discoverInputValue(decl.id, probe, configHints);
+		if (discovered && discovered.confirmed === false) {
+			// 探测候选：只建议、不确认。归入 candidates，输入仍算缺失（发起者确认后才算有效）。
+			candidates.push({ inputId: decl.id, value: discovered.value!, sourceOf: discovered.sourceOf });
+			const resolved: ResolvedInput = { ...decl, source: "discovery", value: null, sourceOf: discovered.sourceOf };
+			inputs.push(resolved);
+			if (decl.required) missing.push(resolved);
+			continue;
+		}
 		if (discovered) {
 			inputs.push(discovered);
 			if (decl.source === "pack-default" && decl.defaultValue && discovered.value !== decl.defaultValue) {
@@ -135,7 +154,7 @@ export function resolveTaskContext(packId: string, workspace: string, userInputs
 		inputs.push(resolved);
 		if (decl.required) missing.push(resolved);
 	}
-	return { packId, workspace: probe.workspace, probe, inputs, missing, conflicts, packVersion: pack.version, provenance: pack.provenance.map((p) => ({ repo: p.repo, path: p.path, version: p.version })) };
+	return { packId, workspace: probe.workspace, probe, inputs, missing, candidates, conflicts, packVersion: pack.version, provenance: pack.provenance.map((p) => ({ repo: p.repo, path: p.path, version: p.version })) };
 }
 
 /** 从部署 manifest 内容解析 namespace（只读，支持 metadata.namespace / 顶层 namespace:）。 */
@@ -149,8 +168,10 @@ function discoverInputValue(inputId: string, probe: WorkspaceProbe, configHints:
 	const has = (m: string) => probe.markers.includes(m) || probe.dirs.includes(m);
 	switch (inputId) {
 		case "validateCmd":
-			if (has("validate.py")) return { id: "validateCmd", label: "验收命令", required: true, source: "discovery", value: "validate.py", sourceOf: "发现 validate.py，验收命令可指向它（发起者确认）" };
-			if (has("run.py")) return { id: "validateCmd", label: "验收命令", source: "discovery", value: "run.py", sourceOf: "发现 run.py（执行入口）；验收命令仍需真实 --validate 入口" };
+			// 裸文件名只是探测候选，不是已确认的验收命令：validate.py 可能不是唯一入口，run.py 更只是执行入口。
+			// 标记 confirmed=false，交给 resolveTaskContext 归入 candidates，发起者确认前该输入仍算缺失。
+			if (has("validate.py")) return { id: "validateCmd", label: "验收命令", required: true, source: "discovery", value: "validate.py", sourceOf: "发现 validate.py（候选，须发起者确认）", confirmed: false };
+			if (has("run.py")) return { id: "validateCmd", label: "验收命令", source: "discovery", value: "run.py", sourceOf: "发现 run.py（执行入口，验收命令仍需真实 --validate 入口；候选）", confirmed: false };
 			return null;
 		case "deploy_yaml":
 			for (const m of probe.deployManifests) {
@@ -201,6 +222,9 @@ export function renderDiscoverySummary(ctx: TaskContext): string {
 	}
 	if (ctx.conflicts.length) {
 		lines.push("conflicts: " + ctx.conflicts.map((c) => c.inputId + " 默认=" + c.defaultValue + " 实际=" + c.resolvedValue + "(" + c.source + ")").join("; "));
+	}
+	if (ctx.candidates.length) {
+		lines.push("candidates(需发起者确认，未确认前视为缺失): " + ctx.candidates.map((c) => c.inputId + "=" + c.value + "（" + c.sourceOf + "）").join("; "));
 	}
 	if (ctx.missing.length) {
 		lines.push("missing(只问这些): " + ctx.missing.map((m) => m.id + ": " + (m.hint ?? m.label)).join("; "));
