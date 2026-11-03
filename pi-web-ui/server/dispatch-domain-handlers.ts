@@ -439,7 +439,15 @@ export function handlePlanAndGoalMessage(msg: ClientMessage, cs: DispatchSession
 				primaryMetric: msg.primaryMetric,
 				metricDirection: msg.metricDirection,
 				metricPrecision: msg.metricPrecision,
+				metricUnit: msg.metricUnit,
+				metricThreshold: msg.metricThreshold,
+				metricThresholdOp: msg.metricThresholdOp,
+				metricTolerance: msg.metricTolerance,
+				metricScenario: msg.metricScenario,
+				hardConstraints: msg.hardConstraints,
 				packId: msg.packId,
+				workspace: msg.workspace,
+				inputs: msg.inputs,
 			});
 			return true;
 		case "loop_stop":

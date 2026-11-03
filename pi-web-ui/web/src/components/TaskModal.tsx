@@ -3,7 +3,7 @@ import { FiPlus } from "react-icons/fi";
 import type { GoalStatus } from "../types";
 import { useT } from "../i18n";
 import { appSend } from "../app-globals";
-import { closeTaskModal, mhGet, openTaskModal, useCockpit, type TaskAcceptance } from "../loop-cockpit";
+import { closeTaskModal, mhGet, mhPost, openTaskModal, useCockpit, type TaskAcceptance } from "../loop-cockpit";
 import { Modal } from "./Modal";
 
 /** 模型下拉项（GET /api/mini-harness/models：只有 provider/id/family）。下拉值一律 "provider/id"。 */
@@ -24,6 +24,26 @@ interface CapabilityPack {
 	metricDirection?: "maximize" | "minimize" | null;
 	maxRounds?: number;
 	useReviewer?: boolean;
+}
+
+/** POST /api/mini-harness/discover 的响应（只读上下文发现）。 */
+interface DiscoveryInput {
+	id: string;
+	label: string;
+	required?: boolean;
+	source: string;
+	value: string | null;
+	sourceOf: string;
+}
+interface DiscoveryResult {
+	summary: string;
+	context?: {
+		packVersion?: string | null;
+		error?: string | null;
+		inputs?: DiscoveryInput[];
+		missing?: DiscoveryInput[];
+		conflicts?: Array<{ inputId: string; defaultValue: string; resolvedValue: string; source: string }>;
+	} | null;
 }
 
 /** 模板：领域里最常见的三类任务（做什么 + 可检查的完成条件）。 */
@@ -101,6 +121,11 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 	const [packs, setPacks] = useState<CapabilityPack[] | null>(null);
 	const [packId, setPackId] = useState("");
 	const [worktree, setWorktree] = useState(true);
+	// 上下文发现（A 链路）：项目位置 + 能力模板 → 只读发现 → 只问缺口。
+	const [workspace, setWorkspace] = useState("");
+	const [discovery, setDiscovery] = useState<DiscoveryResult | null>(null);
+	const [discovering, setDiscovering] = useState(false);
+	const [extraInputs, setExtraInputs] = useState<Record<string, string>>({});
 	// LLM loop（GoalService 偏好；空 = 使用主模型，轮数 0 = 不限）
 	const [llmPlanner, setLlmPlanner] = useState("");
 	const [execModel, setExecModel] = useState("");
@@ -152,6 +177,26 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 		for (const x of models ?? []) m.set(`${x.provider}/${x.id}`, x.family);
 		return m;
 	}, [models]);
+
+	// 只读上下文发现：包 + 项目位置 → 服务端返回「已确认 / 缺失 / 冲突」，只问缺口。
+	// 注意：hooks 必须落在 `if (!open) return null` 之前，否则挂载/重渲染的 hook 数不一致。
+	useEffect(() => {
+		if (!packId || !workspace.trim()) {
+			setDiscovery(null);
+			return;
+		}
+		const id = setTimeout(() => {
+			void mhPost<DiscoveryResult>("discover", { packId, workspace: workspace.trim(), inputs: extraInputs }).then(
+				(r) => {
+					setDiscovering(false);
+					setDiscovery(r?.data ?? null);
+				},
+			);
+		}, 300);
+		setDiscovering(true);
+		return () => clearTimeout(id);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [packId, workspace]);
 
 	if (!open) return null;
 
@@ -238,6 +283,10 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 				...(metricDirection ? { metricDirection } : {}),
 				...(metricPrecision.trim() ? { metricPrecision: Number(metricPrecision) } : {}),
 				...(packId ? { packId } : {}),
+				...(workspace.trim() ? { workspace: workspace.trim() } : {}),
+				...(Object.keys(extraInputs).filter((k) => extraInputs[k]?.trim()).length
+					? { inputs: Object.fromEntries(Object.entries(extraInputs).filter(([, v]) => v?.trim())) }
+					: {}),
 				worktree,
 			});
 		}
@@ -302,6 +351,41 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 								</option>
 							))}
 						</select>
+						<label className="cockpit-label" htmlFor="task-workspace">
+							{t("taskWorkspaceLabel")}
+						</label>
+						<input
+							id="task-workspace"
+							className="cockpit-input"
+							value={workspace}
+							placeholder={t("taskWorkspacePh")}
+							onChange={(e) => setWorkspace(e.target.value)}
+						/>
+						{discovering && <div className="cockpit-hint">{t("taskDiscovering")}</div>}
+						{!discovering && discovery?.summary && (
+							<div className="cockpit-hint task-discovery" title={discovery.summary}>
+								{discovery.summary}
+							</div>
+						)}
+						{!discovering &&
+							discovery?.context?.missing &&
+							discovery.context.missing.length > 0 && (
+								<div className="task-discovery-missing">
+									{discovery.context.missing.map((m) => (
+										<label key={m.id} className="cockpit-label">
+											{m.label || m.id}
+											<input
+												className="cockpit-input"
+												value={extraInputs[m.id] ?? ""}
+												placeholder={m.sourceOf || m.id}
+												onChange={(e) =>
+													setExtraInputs((prev) => ({ ...prev, [m.id]: e.target.value }))
+												}
+											/>
+										</label>
+									))}
+								</div>
+							)}
 					</>
 				)}
 				<label className="cockpit-label" htmlFor="task-goal">

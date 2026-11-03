@@ -1,10 +1,23 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 describe("Force-Reset Session Hijack Prevention & Ephemeral Capacity (#335)", () => {
+	// 隔离 SDK agent-dir：否则 SessionManager 会写到真实 ~/.pi/agent/sessions（沙箱拒绝，EPERM）。
+	let agentDir: string;
+	beforeEach(() => {
+		agentDir = mkdtempSync(join(tmpdir(), "pi-agent-iso-"));
+		process.env.PI_CODING_AGENT_DIR = agentDir;
+	});
+	afterEach(() => {
+		delete process.env.PI_CODING_AGENT_DIR;
+		try {
+			rmSync(agentDir, { recursive: true, force: true });
+		} catch {}
+	});
+
 	it("does not fallback to continueRecent when ownFile does not exist", async () => {
 		const tempCwd = mkdtempSync(join(tmpdir(), "pi-force-reset-test-"));
 		try {

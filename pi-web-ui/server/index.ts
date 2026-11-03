@@ -1234,7 +1234,15 @@ export interface DispatchSession {
 		primaryMetric?: string;
 		metricDirection?: "maximize" | "minimize";
 		metricPrecision?: number;
+		metricUnit?: string;
+		metricThreshold?: number;
+		metricThresholdOp?: "lt" | "lte" | "gt" | "gte";
+		metricTolerance?: number;
+		metricScenario?: string;
+		hardConstraints?: Array<{ name: string; metric: string; op: "lt" | "lte" | "gt" | "gte"; value: number; unit?: string; scenario?: string }>;
 		packId?: string;
+		workspace?: string;
+		inputs?: Record<string, string>;
 	}): Promise<void>;
 	stopLoop?(runId?: string): Promise<void>;
 	resumeLoop?(runId: string): Promise<void>;

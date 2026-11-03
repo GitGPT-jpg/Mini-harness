@@ -86,7 +86,7 @@ describe("L0 precheck 短路与经验卡片沉淀（方向二）", () => {
 	it("L0 precheck 失败时立即短路，不执行昂贵的 L1 validateCmd 与模型评审", async () => {
 		const runsDir = mkdtempSync(join(tmpdir(), "loop-d12c-runs-"));
 		process.env.MINI_HARNESS_RUNTIME_ROOT = runsDir;
-		const { createLoopExtension, createLoopRun, loadLoopState } = await import("../../server/loop/extension.js");
+		const { createLoopExtension, createLoopRun, loadLoopState, setLoopExecForTest } = await import("../../server/loop/extension.js");
 
 		const execCmds: string[] = [];
 		const tools = new Map<string, any>();
@@ -106,6 +106,11 @@ describe("L0 precheck 短路与经验卡片沉淀（方向二）", () => {
 			sendUserMessage: () => {},
 		};
 		createLoopExtension()(pi);
+		// validator/precheck 走同一个 mock exec，避免 extension 用真实 runCommand 离开测试工作区。
+		setLoopExecForTest(async (cmd: string, args: string[], opts?: { cwd?: string }) => {
+			const r = await pi.exec(cmd, args, opts);
+			return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.code ?? null, killed: false };
+		});
 		const sid = "sess-precheck-" + Date.now();
 		const created = createLoopRun({
 			sessionId: sid,

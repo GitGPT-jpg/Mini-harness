@@ -47,12 +47,17 @@ import {
 	getLease,
 	hashEnvironment,
 	hashInputs,
+	hashString,
+	heartbeat,
+	LEASE_HEARTBEAT_MS,
 	leaseExpired,
 	newAttemptId,
 	newOwner,
 	releaseLease,
 	type EnvironmentFingerprint,
+	type Lease,
 } from "./recovery.js";
+import { runCommand } from "./run-command.js";
 
 const DEFAULT_MAX_ROUNDS = 5;
 const CUSTOM_TYPE = "mini-harness-loop";
@@ -104,6 +109,68 @@ function markRunStopConfirmed(runId: string): void {
 	} catch {}
 }
 
+// ---------- 租约心跳生命周期（Task B：心跳接入真实服务生命周期） ----------
+
+/** 每个活跃 run 的心跳定时器（模块级，跨会话共享；run 终态时清理）。 */
+const runHeartbeats = new Map<string, ReturnType<typeof setInterval>>();
+
+/**
+ * 启动心跳：持有者进程周期续租。只有「仍是当前 owner+generation」时续租成功；
+ * 失去所有权（被他人接管）时停止调度并记录一次丢失，避免旧实例继续推进新代次。
+ */
+export function startLeaseHeartbeat(runId: string, owner: string, generation: number): void {
+	stopLeaseHeartbeat(runId);
+	const t = setInterval(() => {
+		const ok = heartbeat(runDir(runId), owner, generation);
+		if (!ok) {
+			// 续租失败：失去所有权或被删除。停表，不再调度新操作。
+			stopLeaseHeartbeat(runId);
+			journal(loadState(runId) ?? ({ runId, round: 0 } as LoopState), "heartbeat-lost", { owner, generation });
+		}
+	}, LEASE_HEARTBEAT_MS);
+	t.unref?.();
+	runHeartbeats.set(runId, t);
+}
+
+/** 停止并清除心跳定时器。 */
+export function stopLeaseHeartbeat(runId: string): void {
+	const t = runHeartbeats.get(runId);
+	if (t) {
+		clearInterval(t);
+		runHeartbeats.delete(runId);
+	}
+}
+
+/** 进程退出 / 关闭时清理所有心跳定时器（定时器不引用 event loop，unref 已足够；此处兜底）。 */
+function stopAllHeartbeats(): void {
+	for (const runId of runHeartbeats.keys()) stopLeaseHeartbeat(runId);
+}
+process.once("exit", stopAllHeartbeats);
+
+/** 把本地实际执行实体 pid（validator/precheck 子进程组）写进租约，供恢复核对。 */
+export function recordTaskPid(runId: string, pid: number | null): void {
+	try {
+		const cur = getLease(runDir(runId));
+		if (!cur) return;
+		const next: Lease = { ...cur, taskPid: pid };
+		const tmp = path.join(runDir(runId), "lease.json.hb." + process.pid + "." + crypto.randomBytes(4).toString("hex"));
+		fs.writeFileSync(tmp, JSON.stringify(next, null, 2));
+		fs.renameSync(tmp, path.join(runDir(runId), "lease.json"));
+	} catch {}
+}
+
+/** 命令执行器：生产用 runCommand（detached 进程组 + 真实 pid）；单测注入 pi.exec mock。 */
+type LoopExecOpts = { cwd: string; timeout: number; signal?: AbortSignal; onSpawn?: (pid: number) => void };
+type LoopExecResult = { stdout: string; stderr: string; code: number | null; killed: boolean };
+let loopExecOverride: ((cmd: string, args: string[], opts: LoopExecOpts) => Promise<LoopExecResult>) | null = null;
+export function setLoopExecForTest(fn: typeof loopExecOverride): void {
+	loopExecOverride = fn;
+}
+function loopExec(cmd: string, args: string[], opts: LoopExecOpts): Promise<LoopExecResult> {
+	if (loopExecOverride) return loopExecOverride(cmd, args, opts);
+	return runCommand(cmd, args, { ...opts });
+}
+
 /** 从 run 状态构建指标门禁目标（含单位/阈值/容差/场景）；旧 metricPrecision 不再参与判定。 */
 function metricTargetOf(st: LoopState): MetricTarget | null {
 	if (!st.primaryMetric || !st.metricDirection) return null;
@@ -145,6 +212,49 @@ function sanitizeHardConstraints(input: unknown): HardConstraint[] | null {
 		});
 	}
 	return out.length > 0 ? out : null;
+}
+
+/**
+ * 校验 Loop 入参中用户声明的硬约束/阈值/类型是否合法。
+ * 返回字段级错误列表；非空时启动必须拒绝，绝不静默删除条目后继续（那会削弱验收要求）。
+ */
+function validateLoopInputs(input: CreateLoopRunInput): string[] {
+	const errors: string[] = [];
+	// 主指标阈值成对校验：给了值必须给运算符，给了运算符必须给值，值必须有限。
+	const th = input.metricThreshold;
+	const thOp = input.metricThresholdOp;
+	if ((th != null && thOp == null) || (th == null && thOp != null)) {
+		errors.push("metricThreshold 与 metricThresholdOp 必须成对提供");
+	}
+	if (th != null && !Number.isFinite(Number(th))) {
+		errors.push("metricThreshold 必须是有限数值（收到：" + JSON.stringify(th) + "）");
+	}
+	if (thOp != null && !isThresholdOp(thOp)) {
+		errors.push("metricThresholdOp 必须是 lt/lte/gt/gte 之一（收到：" + JSON.stringify(thOp) + "）");
+	}
+	if (input.metricDirection != null && input.metricDirection !== "maximize" && input.metricDirection !== "minimize") {
+		errors.push("metricDirection 必须是 maximize/minimize（收到：" + JSON.stringify(input.metricDirection) + "）");
+	}
+	if (input.metricTolerance != null && !Number.isFinite(Number(input.metricTolerance))) {
+		errors.push("metricTolerance 必须是有限数值（收到：" + JSON.stringify(input.metricTolerance) + "）");
+	}
+	// 硬约束逐条校验：非法条目必须报出字段名，不能静默丢弃。
+	if (input.hardConstraints != null) {
+		if (!Array.isArray(input.hardConstraints)) {
+			errors.push("hardConstraints 必须是数组");
+		} else {
+			input.hardConstraints.forEach((c, i) => {
+				const name = String(c?.name ?? "").trim();
+				const metric = String(c?.metric ?? "").trim();
+				const value = Number(c?.value);
+				if (!name) errors.push(`hardConstraints[${i}].name 不能为空`);
+				if (!metric) errors.push(`hardConstraints[${i}].metric 不能为空`);
+				if (!isThresholdOp(c?.op)) errors.push(`hardConstraints[${i}].op 必须是 lt/lte/gt/gte 之一`);
+				if (!Number.isFinite(value)) errors.push(`hardConstraints[${i}].value 必须是有限数值`);
+			});
+		}
+	}
+	return errors;
 }
 
 /** 工具执行的 ctx（模型注册表/会话 id 等）；SDK 类型面较宽，这里按实际使用收窄。 */
@@ -255,6 +365,8 @@ export interface LoopState {
 	lastMetrics?: HarnessMetrics | null;
 	/** 最优轮次 Checkpoint（防止后续轮次退化）。 */
 	bestRound?: BestRoundRecord | null;
+	/** 指标最好、但未通过必要验收资格（精度/稳定性/必要评审）的观察候选；与 bestRound 明确区分。 */
+	observedBest?: BestRoundRecord | null;
 	/** 工作区前置环境摘要（分支、HEAD SHA、关键文件）。 */
 	preflightSummary?: string;
 	/** 完成态可信度（见 LoopAcceptance）；未完成 = null。旧 state.json 没有该字段，读入按 null。 */
@@ -387,6 +499,7 @@ function normalizeState(st: LoopState): LoopState {
 	if (st.remoteJobId === undefined) st.remoteJobId = null;
 	if (st.environmentFingerprint === undefined) st.environmentFingerprint = null;
 	if (st.recoveryState === undefined) st.recoveryState = null;
+	if (st.observedBest === undefined) st.observedBest = null;
 	return st;
 }
 
@@ -394,6 +507,11 @@ function saveState(st: LoopState) {
 	st.updatedAt = now();
 	fs.mkdirSync(runDir(st.runId), { recursive: true });
 	writeJsonAtomicSync(statePath(st.runId), st);
+	// 终态收尾：停止心跳、释放执行所有权（只有仍是当前 owner 才删，不误删后继接管者的租约）。
+	if (st.status !== "active") {
+		stopLeaseHeartbeat(st.runId);
+		if (st.owner) releaseLease(runDir(st.runId), st.owner);
+	}
 	reportEvent({ type: "run-state", st });
 }
 
@@ -676,10 +794,16 @@ async function runValidation(pi: ExtensionAPI, st: LoopState): Promise<Validatio
 		if (preCmd) {
 			let pre: { stdout?: string; stderr?: string; code?: number | null; killed?: boolean };
 			try {
-				pre = await pi.exec("bash", ["-lc", preCmd], { cwd, timeout: 5 * 60 * 1000, signal: ac.signal });
+				pre = await loopExec("bash", ["-lc", preCmd], {
+					cwd,
+					timeout: 5 * 60 * 1000,
+					signal: ac.signal,
+					onSpawn: (pid) => recordTaskPid(st.runId, pid),
+				});
 			} catch (e) {
 				pre = { stdout: "", stderr: String((e as Error)?.message || e), code: -1, killed: false };
 			}
+			recordTaskPid(st.runId, null);
 			if (pre.killed) {
 				markRunStopConfirmed(st.runId);
 				return { pass: false, noValidator: false, precheckFailed: false, cancelled: true, code: null, evidence: null, output: "运行已停止：L0 预检进程已被取消。", metrics: null, scenario: null, snapshotRef: preId.snapshotRef, snapshotSha: preId.snapshotSha, recoverable: preId.recoverable, workspaceChangedDuringValidation: false };
@@ -725,10 +849,16 @@ async function runValidation(pi: ExtensionAPI, st: LoopState): Promise<Validatio
 		}
 		let res: { stdout?: string; stderr?: string; code?: number | null; killed?: boolean };
 		try {
-			res = await pi.exec(r.cmd, r.args, { cwd, timeout: 30 * 60 * 1000, signal: ac.signal });
+			res = await loopExec(r.cmd, r.args, {
+				cwd,
+				timeout: 30 * 60 * 1000,
+				signal: ac.signal,
+				onSpawn: (pid) => recordTaskPid(st.runId, pid),
+			});
 		} catch (e) {
 			res = { stdout: "", stderr: String((e as Error)?.message || e), code: -1, killed: false };
 		}
+		recordTaskPid(st.runId, null);
 		if (res.killed) {
 			markRunStopConfirmed(st.runId);
 			return { pass: false, noValidator: false, precheckFailed: false, cancelled: true, code: res.code ?? null, evidence: null, output: "运行已停止：L1 validator 进程已被取消。", metrics: null, scenario: null, snapshotRef: preId.snapshotRef, snapshotSha: preId.snapshotSha, recoverable: preId.recoverable, workspaceChangedDuringValidation: false };
@@ -858,23 +988,39 @@ async function recordValidationOutcome(
 		...(workspaceChanged ? { workspaceChangedDuringValidation: true } : {}),
 		recoverable,
 	});
-	// 可信轮：命令结果可信（验收期间工作区未变）且指标门禁通过，才允许更新最优 Checkpoint。
+	// 可信轮：命令结果可信（验收期间工作区未变）且指标门禁通过。
 	const trusted = !workspaceChanged && gate.ok;
+	const candidate: BestRoundRecord = {
+		round: st.round,
+		verdict,
+		commitSha,
+		...(snapshotRef ? { snapshotRef } : {}),
+		...(v.metrics ? { metrics: v.metrics } : {}),
+		at,
+	};
 	if (trusted) {
-		st.bestRound = pickBetterRound(
-			st.bestRound,
-			{
-				round: st.round,
-				verdict,
-				commitSha,
-				...(snapshotRef ? { snapshotRef } : {}),
-				...(v.metrics ? { metrics: v.metrics } : {}),
-				at,
-			},
-			target,
-		);
+		// 观察候选：指标层面最好的方案（不管是否通过必要评审），仅作观察，不算有效版本。
+		st.observedBest = pickBetterRound(st.observedBest, candidate, target);
+		// 必要验收资格：validator pass + 指标门禁过 + 工作区未变；开启评审时还需 reviewer 通过（在 handleVerdict 里升级）。
+		if (verdict === "pass" && !reviewerEnabledOf(st)) {
+			st.bestRound = pickBetterRound(st.bestRound, candidate, target);
+		}
 	}
 	return true;
+}
+
+/** 从当前轮最新历史记录构建最优轮候选（reviewer 通过后升级 bestRound 用）。 */
+function currentRoundCandidate(st: LoopState): BestRoundRecord | null {
+	const h = st.history[st.history.length - 1];
+	if (!h || h.round !== st.round) return null;
+	return {
+		round: h.round,
+		verdict: h.verdict,
+		commitSha: h.commitSha ?? null,
+		...(h.snapshotRef ? { snapshotRef: h.snapshotRef } : {}),
+		...(h.metrics ? { metrics: h.metrics } : {}),
+		at: h.at,
+	};
 }
 
 // ---------- 提示词 ----------
@@ -897,6 +1043,9 @@ function stateBlock(st: LoopState) {
 		st.lastMetrics ? `last_metrics: ${JSON.stringify(st.lastMetrics)}` : "",
 		st.bestRound
 			? `best_checkpoint: round ${st.bestRound.round} (${st.bestRound.verdict}${st.bestRound.commitSha ? `@${st.bestRound.commitSha}` : ""}${st.bestRound.metrics ? ` ${JSON.stringify(st.bestRound.metrics)}` : ""})`
+			: "",
+		st.observedBest
+			? `observed_best(指标最好但未通过必要评审/资格，仅观察): round ${st.observedBest.round}${st.observedBest.metrics ? ` ${JSON.stringify(st.observedBest.metrics)}` : ""}`
 			: "",
 		st.lastReview
 			? `last_review: ${st.lastReview.verdict} — ${tail((st.lastReview.reasons || []).join("; "), 600)}`
@@ -1199,7 +1348,12 @@ async function handleVerdict(
 			);
 			return;
 		}
-		// pass = 代码验证 + 模型评审都过；skip = 没开评审 / 没有可用评审模型，只有代码验证
+		// pass = 代码验证 + 模型评审都过；skip = 没开评审 / 没有可用评审模型，只有代码验证。
+		// 必要评审通过后，才把本轮升级为「最佳有效版本」（否则只保留在 observedBest 观察候选里）。
+		const cand = currentRoundCandidate(st);
+		if (cand && review.verdict !== "block" && review.verdict !== "error") {
+			st.bestRound = pickBetterRound(st.bestRound, cand, metricTargetOf(st));
+		}
 		st.stage = "done";
 		st.status = "done";
 		st.acceptance = review.verdict === "pass" ? "passed" : "passed-validator-only";
@@ -1436,6 +1590,11 @@ export function createLoopRun(
 	if (!goal) return { ok: false, error: "goal 不能为空" };
 	const sessionId = String(input.sessionId ?? "").trim();
 	if (!sessionId) return { ok: false, error: "缺少 sessionId，run 无法绑定会话" };
+	// 用户声明的硬约束/阈值/类型不合法：拒绝启动并指出字段，绝不静默删除条目削弱验收要求。
+	const inputErrors = validateLoopInputs(input);
+	if (inputErrors.length) {
+		return { ok: false, error: "验收约束不合法：" + inputErrors.join("；") };
+	}
 	const existing = activeRunOf(sessionId);
 	if (existing) return { ok: false, error: `当前会话已有运行中的任务 ${existing.runId}` };
 
@@ -1518,6 +1677,12 @@ export function createLoopRun(
 			validateCmd: String(input.validateCmd ?? "").trim() || null,
 			precheckCmd: String(input.precheckCmd ?? "").trim() || null,
 			primaryMetric: String(input.primaryMetric ?? "").trim() || null,
+			metricDirection: input.metricDirection ?? null,
+			metricUnit: String(input.metricUnit ?? "").trim() || null,
+			metricThreshold: input.metricThreshold != null && Number.isFinite(Number(input.metricThreshold)) ? Number(input.metricThreshold) : null,
+			metricThresholdOp: isThresholdOp(input.metricThresholdOp) ? input.metricThresholdOp : null,
+			metricScenario: String(input.metricScenario ?? "").trim() || null,
+			hardConstraints: sanitizeHardConstraints(input.hardConstraints),
 		}),
 		recoveryState: "running",
 		mainModel: null,
@@ -1543,7 +1708,7 @@ export function createLoopRun(
 	};
 	saveState(st);
 	// 隔夜恢复：run 创建即取得执行所有权（owner + generation + 心跳）。
-	acquireLease(runDir(runId), {
+	const leaseAcquired = acquireLease(runDir(runId), {
 		owner: st.owner!,
 		pid: process.pid,
 		generation: st.generation,
@@ -1551,6 +1716,12 @@ export function createLoopRun(
 		heartbeatAt: st.createdAt,
 		remoteJobId: null,
 	});
+	if (!leaseAcquired) {
+		// 取租约失败 = 无法证明独占执行权：任务创建必须明确失败，不能忽略后继续执行。
+		return { ok: false, error: `无法取得执行所有权（租约被占用）：${runId}` };
+	}
+	// 心跳接入真实生命周期：活跃期间周期续租，终态时停止。
+	startLeaseHeartbeat(runId, st.owner!, st.generation);
 	journal(st, "start", {
 		source: input.source ?? "server",
 		goal,
@@ -2192,8 +2363,7 @@ export function stopRunExternal(runId: string, reason = "user-stop"): { ok: bool
 	journal(st, "stop", { source: "server", reason, epoch: st.epoch });
 	// 真正取消该 run 的在途 validator / precheck 子进程（Task 1）。
 	abortRun(runId);
-	// 释放执行所有权：停止后不再持有租约（隔夜恢复不复活已取消 run）。
-	releaseLease(runDir(runId), st.owner ?? "");
+	// 执行所有权在 saveState 的终态收尾里已释放（status=stopped → stopLeaseHeartbeat + releaseLease）。
 	return { ok: true };
 }
 
@@ -2414,57 +2584,85 @@ function computeEnvironmentFingerprint(input: {
 	validateCmd: string | null;
 	precheckCmd: string | null;
 	primaryMetric: string | null;
+	metricDirection?: string | null;
+	metricUnit?: string | null;
+	metricThreshold?: number | null;
+	metricThresholdOp?: string | null;
+	metricScenario?: string | null;
+	hardConstraints?: HardConstraint[] | null;
 }): EnvironmentFingerprint {
+	const ws = input.workspace || process.cwd();
+	const sig = workspaceSignature(ws);
 	return {
 		workspace: input.workspace,
-		gitHead: resolveGitHeadSha(input.workspace || process.cwd()),
+		gitHead: sig.gitHead,
+		contentHash: sig.contentHash,
 		packId: input.packId,
 		packVersion: input.packVersion,
+		// 完整验收契约进入指纹：主指标/方向/单位/阈值/场景/硬约束任一变化都使旧证据失效。
 		inputsHash: hashInputs({
 			goal: input.goal,
 			criteria: input.criteria,
 			validateCmd: input.validateCmd ?? "",
 			precheckCmd: input.precheckCmd ?? "",
 			primaryMetric: input.primaryMetric ?? "",
+			metricDirection: input.metricDirection ?? "",
+			metricUnit: input.metricUnit ?? "",
+			metricThreshold: input.metricThreshold != null ? String(input.metricThreshold) : "",
+			metricThresholdOp: input.metricThresholdOp ?? "",
+			metricScenario: input.metricScenario ?? "",
+			hardConstraints: JSON.stringify((input.hardConstraints ?? []).map((c) => [c.name, c.metric, c.op, c.value, c.scenario ?? ""])),
 		}),
 		envHash: hashEnvironment(),
 	};
 }
 
+/** 工作区内容签名缓存（避免列表轮询对每个 run 反复 git 探测）。 */
+const wsSigCache = new Map<string, { at: number; gitHead: string | null; contentHash: string | null }>();
+const WS_SIG_TTL_MS = 10_000;
+
+/** git HEAD + 未提交改动摘要；非 git 仓库退化为目录 mtime/关键文件摘要。结果按 workspace 缓存。 */
+function workspaceSignature(ws: string): { gitHead: string | null; contentHash: string | null } {
+	const nowMs = Date.now();
+	const hit = wsSigCache.get(ws);
+	if (hit && nowMs - hit.at < WS_SIG_TTL_MS) return hit;
+	const gitHead = resolveGitHeadSha(ws);
+	let contentHash: string | null = null;
+	try {
+		const script = "git rev-parse --is-inside-work-tree >/dev/null 2>&1 && { git status --porcelain; git diff; } 2>/dev/null";
+		const out = execFileSync("bash", ["-lc", script], { cwd: ws, timeout: 8000, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+		contentHash = hashString(gitHead ?? "" + "|" + out);
+	} catch {
+		// 非 git 仓库：用关键文件存在性 + 最近修改时间做弱摘要（不覆盖 git 的强指纹）。
+		try {
+			const markers = ["validate.py", "run.py", "task.yaml", "pyproject.toml", "package.json", "deploy.yaml", "deployment.yaml", "decode.yaml"];
+			const parts: string[] = [];
+			for (const m of markers) {
+				try {
+					const st = fs.statSync(path.join(ws, m));
+					parts.push(m + ":" + st.mtimeMs);
+				} catch {}
+			}
+			contentHash = hashString(parts.join("|"));
+		} catch {
+			contentHash = null;
+		}
+	}
+	const result = { gitHead, contentHash };
+	wsSigCache.set(ws, { at: nowMs, ...result });
+	return result;
+}
+
 /** 环境指纹是否仍一致；旧记录无指纹时视为「已变化」→ 需要核对，不盲目复用。 */
 function fingerprintMatches(a: EnvironmentFingerprint | null, b: EnvironmentFingerprint): boolean {
 	if (!a) return false;
-	return a.workspace === b.workspace && a.gitHead === b.gitHead && a.packId === b.packId &&
-		a.packVersion === b.packVersion && a.inputsHash === b.inputsHash && a.envHash === b.envHash;
+	return a.workspace === b.workspace && a.gitHead === b.gitHead && a.contentHash === b.contentHash &&
+		a.packId === b.packId && a.packVersion === b.packVersion && a.inputsHash === b.inputsHash && a.envHash === b.envHash;
 }
 
-export interface RecoverRunResult {
-	ok: boolean;
-	runId: string;
-	classification: ReturnType<typeof classifyRecovery> | null;
-	summary: string | null;
-	/** 本次调用是否真正接管了执行所有权（只有失联/过期且无人持权时）。 */
-	takeover: boolean;
-	error?: string;
-}
-
-/**
- * 恢复入口：载入持久化记录 → 核对租约/环境/本地进程 → 分类执行单元 → 需要时接管所有权。
- *  - 仍持权：重新跟踪，不启动第二份；
- *  - 失联且环境未变：接管（generation+1、新 attemptId）；
- *  - 环境/代码变化：标记旧证据失效，不盲目重放副作用；
- *  - 已取消（stopped）：不自动复活。
- * requesterOwner 可显式传入（测试/多实例场景）；缺省用当前进程 owner。
- */
-export function recoverRun(runId: string, requesterOwner?: string): RecoverRunResult {
-	const st = loadState(runId);
-	if (!st) return { ok: false, runId, classification: null, summary: null, takeover: false, error: "run 不存在：" + runId };
-	const dir = runDir(runId);
-	const me = requesterOwner || newOwner();
-	const lease = getLease(dir);
-	const leaseHeld = lease != null && !leaseExpired(lease) && lease.owner === me;
-	const leaseHeldByOther = lease != null && !leaseExpired(lease) && lease.owner !== me;
-	const currentFp = computeEnvironmentFingerprint({
+/** 从 run 状态构建当前环境指纹（恢复/展示共用，避免三处字段映射漂移）。 */
+function currentFingerprintOf(st: LoopState): EnvironmentFingerprint {
+	return computeEnvironmentFingerprint({
 		workspace: st.workspace,
 		packId: st.packId ?? null,
 		packVersion: st.packVersion ?? null,
@@ -2473,10 +2671,58 @@ export function recoverRun(runId: string, requesterOwner?: string): RecoverRunRe
 		validateCmd: st.validateCmd,
 		precheckCmd: st.precheckCmd ?? null,
 		primaryMetric: st.primaryMetric ?? null,
+		metricDirection: st.metricDirection ?? null,
+		metricUnit: st.metricUnit ?? null,
+		metricThreshold: st.metricThreshold ?? null,
+		metricThresholdOp: st.metricThresholdOp ?? null,
+		metricScenario: st.metricScenario ?? null,
+		hardConstraints: st.hardConstraints ?? null,
 	});
+}
+
+export interface RecoverRunResult {
+	ok: boolean;
+	runId: string;
+	classification: ReturnType<typeof classifyRecovery> | null;
+	summary: string | null;
+	/** 本次调用是否真正接管了执行所有权（只有失联/过期、分类允许重试、且无人持权时）。 */
+	takeover: boolean;
+	/** 是否已连接/确认实际执行实体（本地 taskPid 存活，或远端 jobId 仍在）。 */
+	connectedEntity: boolean;
+	/** 是否允许继续执行（resumeLoop 可据此投递续跑提示词）。 */
+	resumeEligible: boolean;
+	/** 不能继续时的阻塞原因。 */
+	blockedReason: string | null;
+	/** 下一步建议动作（供 UI / 模型使用）。 */
+	nextAction: string;
+	error?: string;
+}
+
+/**
+ * 恢复入口：载入持久化记录 → 核对租约/环境/本地进程 → 分类执行单元 → 需要时原子接管所有权。
+ *  - 仍持权：重新跟踪，不启动第二份；
+ *  - 明确失败、允许重试且失联：接管（generation+1、新 attemptId）；
+ *  - 环境/代码变化 或 结果未知：不接管、不盲目重放副作用（保持受阻，先核对证据）；
+ *  - 已取消（stopped）：不自动复活。
+ * requesterOwner 可显式传入（测试/多实例场景）；缺省用当前进程 owner。
+ */
+export function recoverRun(runId: string, requesterOwner?: string): RecoverRunResult {
+	const st = loadState(runId);
+	if (!st) {
+		return { ok: false, runId, classification: null, summary: null, takeover: false, connectedEntity: false, resumeEligible: false, blockedReason: "run 不存在", nextAction: "确认 runId 是否正确", error: "run 不存在：" + runId };
+	}
+	const dir = runDir(runId);
+	const me = requesterOwner || newOwner();
+	const lease = getLease(dir);
+	const leaseHeld = lease != null && !leaseExpired(lease) && lease.owner === me;
+	const leaseHeldByOther = lease != null && !leaseExpired(lease) && lease.owner !== me;
+	const currentFp = currentFingerprintOf(st);
 	const environmentChanged = !fingerprintMatches(st.environmentFingerprint, currentFp);
-	const pidAlive = lease?.pid != null ? isPidAlive(lease.pid) : null;
-	const inFlight = st.status === "active" && st.round > st.validatedRound;
+	// 实际执行实体 = 租约里记录的本地 validator/precheck 子进程 pid（真实执行实体），不是服务 pid。
+	const taskPid = lease?.taskPid ?? null;
+	const pidAlive = taskPid != null ? isPidAlive(taskPid) : null;
+	// 在途 = 曾记录过本地执行实体（validator/precheck 已启动但尚未落定）。
+	const inFlight = taskPid != null;
 	const cls = classifyRecovery(st, {
 		leaseHeld,
 		environmentChanged,
@@ -2484,8 +2730,11 @@ export function recoverRun(runId: string, requesterOwner?: string): RecoverRunRe
 		lastRoundPassed: st.lastVerdict === "pass",
 		inFlight,
 	});
+	const connectedEntity = (taskPid != null && pidAlive === true) || !!lease?.remoteJobId;
 	let takeover = false;
-	if (!leaseHeld && !leaseHeldByOther && st.status === "active") {
+	let blockedReason: string | null = null;
+	// 只有「明确失败、允许重试」才允许接管；unknown / cancelled / completed-valid / 环境变化一律不接管。
+	if (st.status === "active" && !leaseHeld && !leaseHeldByOther && cls.unit === "failed-retryable") {
 		const nextGeneration = (st.generation ?? 0) + 1;
 		const nowIso = now();
 		const got = acquireLease(dir, {
@@ -2503,12 +2752,19 @@ export function recoverRun(runId: string, requesterOwner?: string): RecoverRunRe
 			st.attemptId = newAttemptId();
 			st.recoveryState = cls.unit;
 			saveState(st);
+			startLeaseHeartbeat(runId, me, nextGeneration);
 			journal(st, "recovery-takeover", { owner: me, generation: nextGeneration, classification: cls.unit });
+		} else {
+			blockedReason = "接管失败：并发竞争者已取得执行所有权";
 		}
+	} else if (st.status === "active" && (cls.needRecheck || cls.unit === "unknown" || environmentChanged)) {
+		blockedReason = "环境/代码已变化或结果未知，需先核对证据，不盲目重试";
 	} else if (leaseHeldByOther && st.status === "active") {
 		// 他人仍持有有效执行权：不接管，不覆盖。
-		st.recoveryState = "running";
+		blockedReason = "其他执行者仍持有有效执行权";
 	}
+	const resumeEligible =
+		!blockedReason && st.status === "active" && (leaseHeld || takeover);
 	const completedRounds = st.history.filter((h) => h.verdict === "pass" && h.metricGateOk !== false && !h.workspaceChangedDuringValidation).length;
 	const summary = buildRecoverySummary({
 		runId,
@@ -2517,9 +2773,16 @@ export function recoverRun(runId: string, requesterOwner?: string): RecoverRunRe
 		cls,
 		completedRounds,
 		bestRound: st.bestRound?.round ?? null,
-		blockedOn: null,
+		blockedOn: blockedReason,
 	});
-	return { ok: true, runId, classification: cls, summary, takeover };
+	let nextAction: string;
+	if (cls.unit === "cancelled") nextAction = "保持取消，不自动执行";
+	else if (cls.unit === "completed-valid") nextAction = "证据仍有效，复用结果，不重跑";
+	else if (leaseHeld) nextAction = "仍持有执行权，重新跟踪，不启动第二份";
+	else if (takeover) nextAction = "已原子接管，从未完成部分继续";
+	else if (blockedReason) nextAction = "先核对执行现场/证据，再决定是否重试";
+	else nextAction = "先核对执行现场/证据，再决定";
+	return { ok: true, runId, classification: cls, summary, takeover, connectedEntity, resumeEligible, blockedReason, nextAction };
 }
 
 /** 任务台只读恢复信息（不接管、不写盘）：unit / 租约 / 环境变化 / attempt。 */
@@ -2528,16 +2791,7 @@ export function recoveryInfoOf(runId: string) {
 	if (!st) return null;
 	const lease = getLease(runDir(runId));
 	const leaseHeld = lease != null && !leaseExpired(lease) && lease.owner === (st.owner ?? newOwner());
-	const currentFp = computeEnvironmentFingerprint({
-		workspace: st.workspace,
-		packId: st.packId ?? null,
-		packVersion: st.packVersion ?? null,
-		goal: st.goal,
-		criteria: st.criteria ?? "",
-		validateCmd: st.validateCmd,
-		precheckCmd: st.precheckCmd ?? null,
-		primaryMetric: st.primaryMetric ?? null,
-	});
+	const currentFp = currentFingerprintOf(st);
 	const environmentChanged = !fingerprintMatches(st.environmentFingerprint, currentFp);
 	const unit = st.status === "active" ? (leaseHeld ? "running" : environmentChanged ? "needs-review" : "interrupted") : (st.status === "stopped" ? "cancelled" : st.status);
 	return { unit, leaseHeld, environmentChanged, attemptId: st.attemptId, generation: st.generation ?? 0, owner: st.owner, remoteJobId: st.remoteJobId };

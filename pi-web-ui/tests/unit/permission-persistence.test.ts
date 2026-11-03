@@ -7,14 +7,24 @@ import { readPermissionFromSession } from "../../server/permission-preset.js";
 
 describe("Conversation Permission Persistence", () => {
 	let tempDir: string;
+	let agentDir: string;
 
 	beforeEach(() => {
 		tempDir = mkdtempSync(join(tmpdir(), "perm-test-"));
+		// 隔离 SDK agent-dir：否则 SessionManager 会写到真实 ~/.pi/agent/sessions（沙箱拒绝，EPERM）。
+		agentDir = mkdtempSync(join(tmpdir(), "perm-agent-"));
+		process.env.PI_CODING_AGENT_DIR = agentDir;
 	});
 
 	afterEach(() => {
+		delete process.env.PI_CODING_AGENT_DIR;
 		try {
 			rmSync(tempDir, { recursive: true, force: true });
+		} catch (_err) {
+			// ignore cleanup error
+		}
+		try {
+			rmSync(agentDir, { recursive: true, force: true });
 		} catch (_err) {
 			// ignore cleanup error
 		}

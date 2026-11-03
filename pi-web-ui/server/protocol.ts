@@ -877,6 +877,10 @@ export type ClientMessage =
 			}>;
 			/** 能力包 id：服务端按包内默认值填充未显式提供的字段（显式字段优先）。 */
 			packId?: string;
+			/** 用户填写的项目/工作区位置（缺省用会话 cwd）。 */
+			workspace?: string;
+			/** 用户已补全的必要输入（与上下文发现结果合并）。 */
+			inputs?: Record<string, string>;
 	  }
 	/** 停止当前会话的活跃 Loop（不传 runId = 快照 loop 里的当前 run）。停止
 	 *  即递增 epoch：在途/迟到回调全部失效，不得把 stopped 翻成 done。 */

@@ -6,14 +6,13 @@
  *
  * 本模块只提供纯函数与文件级租约原语，不包含任何领域/集群命令。
  *  - attempt：run 内的一次执行代次；重试分配新 attempt，保留旧 attempt 证据；
- *  - lease： 文件级执行所有权（owner + pid + generation + heartbeat），跨进程互斥，读回校验保证只有一个赢家；
+ *  - lease： 文件级执行所有权（owner + pid + generation + heartbeat），跨进程互斥，O_EXCL 独占创建保证只有一个赢家；
  *  - fingerprint：workspace + git HEAD + 能力包版本 + 规范化输入 + 环境变量摘要，判定旧证据是否仍适用。
  */
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { writeAtomicSync } from "../atomic-file.js";
 
 /** 租约最长有效时间：超过则认为持有者已失联（进程崩溃 / 休眠 / 网络断开）。 */
 export const LEASE_TTL_MS = 30_000;
@@ -27,11 +26,15 @@ export interface Lease {
 	heartbeatAt: string;
 	/** 远端作业 / 请求标识（kubectl job id / 压测 task id 等）；本地进程退出不代表远端已停止。 */
 	remoteJobId: string | null;
+	/** 本地实际执行实体（validator/precheck 子进程 pid，而非服务进程 pid）。 */
+	taskPid?: number | null;
 }
 
 export interface EnvironmentFingerprint {
 	workspace: string;
 	gitHead: string | null;
+	/** 工作区内容指纹（git HEAD + 未提交改动摘要）；非 git 仓库时退化为目录关键文件摘要。 */
+	contentHash: string | null;
 	packId: string | null;
 	packVersion: string | null;
 	inputsHash: string;
@@ -46,6 +49,11 @@ function sha256(s: string): string {
 export function hashInputs(inputs: Record<string, string | null | undefined>): string {
 	const canon = JSON.stringify(Object.keys(inputs).sort().map((k) => [k, String(inputs[k] ?? "")]));
 	return sha256(canon);
+}
+
+/** 任意内容的稳定摘要（用于未提交 diff 等；只取内容指纹，不落地原文）。 */
+export function hashString(s: string): string {
+	return sha256(s);
 }
 
 /** 环境变量摘要：只取身份相关项，绝不把密钥/Token 写入摘要或状态。 */
@@ -87,15 +95,66 @@ export function leaseExpired(lease: Lease | null, nowMs = Date.now()): boolean {
 }
 
 /**
- * 原子取得执行所有权。两个实例/两个页面同时请求时只有一个赢家：
- * 写入后读回校验 owner+generation 是否为本次写入；被他人覆盖则视为失败（最后一个赢，赢者读回一致）。
+ * 用 O_CREAT|O_EXCL 原子创建租约文件：文件系统保证同一路径只有一个创建者成功。
+ * 成功写入并 fsync 后返回 true；EEXIST（他人已建）返回 false；写入失败时清理半成品并返回 false。
+ * 这是「同宿主多进程 + 单机多页面」互斥的原子原语：不是「写后读回」，而是内核级独占创建。
+ */
+function tryCreateLeaseFile(runDir: string, lease: Lease): boolean {
+	let fd: number | null = null;
+	try {
+		fs.mkdirSync(runDir, { recursive: true });
+		fd = fs.openSync(leasePath(runDir), "wx", 0o600);
+		try {
+			fs.writeFileSync(fd, JSON.stringify(lease, null, 2));
+			fs.fsyncSync(fd);
+		} finally {
+			fs.closeSync(fd);
+			fd = null;
+		}
+		return true;
+	} catch (e) {
+		if (fd != null) {
+			try {
+				fs.closeSync(fd);
+			} catch {}
+		}
+		// 创建成功后写入失败：清掉半成品，避免留下无法解析的锁文件。
+		if ((e as NodeJS.ErrnoException).code !== "EEXIST") {
+			try {
+				fs.rmSync(leasePath(runDir), { force: true });
+			} catch {}
+		}
+		return false;
+	}
+}
+
+/**
+ * 原子取得执行所有权。两个实例 / 两个页面同时请求时只有一个赢家：
+ * 1. 先用 O_EXCL 独占创建——文件系统保证只有一个赢家；
+ * 2. 已存在且未过期 → 他人仍持权，返回 false；
+ * 3. 已存在但已过期（失联/崩溃/休眠）→ 原子 rename 移走旧文件再独占创建：
+ *    rename 是原子移动，两个竞争者的 rename 只有一个成功，另一个得到 ENOENT 后回到独占创建，
+ *    最终仍只有一个进程创建成功（真正的赢家），其余进程创建 EEXIST 或读回新租约后判负。
+ *
+ * 支持拓扑：单机多进程 / 多页面、同一本地（或具备 POSIX rename + O_EXCL 语义的共享）文件系统。
+ * 跨主机 NFS/对象存储不保证强一致，明确标注为不支持。
  */
 export function acquireLease(runDir: string, lease: Lease): boolean {
 	try {
-		fs.mkdirSync(runDir, { recursive: true });
-		writeAtomicSync(leasePath(runDir), JSON.stringify(lease, null, 2));
-		const current = readLease(runDir);
-		return current != null && current.owner === lease.owner && current.generation === lease.generation;
+		if (tryCreateLeaseFile(runDir, lease)) return true;
+		const cur = readLease(runDir);
+		if (cur && !leaseExpired(cur)) return false;
+		// 过期 / 无法解析 → 尝试接管：原子移走旧文件，再独占创建。
+		const stale = leasePath(runDir) + ".stale." + process.pid + "." + crypto.randomBytes(4).toString("hex");
+		try {
+			fs.renameSync(leasePath(runDir), stale);
+		} catch {
+			// ENOENT：他人已移走旧文件并可能已重建。落到下面的独占创建，赢则赢、输则输。
+		}
+		try {
+			fs.rmSync(stale, { force: true });
+		} catch {}
+		return tryCreateLeaseFile(runDir, lease);
 	} catch {
 		return false;
 	}
@@ -111,7 +170,17 @@ export function heartbeat(runDir: string, owner: string, generation: number): bo
 	try {
 		const cur = readLease(runDir);
 		if (!cur || cur.owner !== owner || cur.generation !== generation) return false;
-		writeAtomicSync(leasePath(runDir), JSON.stringify({ ...cur, heartbeatAt: new Date().toISOString() }, null, 2));
+		const next = { ...cur, heartbeatAt: new Date().toISOString() };
+		const tmp = leasePath(runDir) + ".hb." + process.pid + "." + crypto.randomBytes(4).toString("hex");
+		fs.writeFileSync(tmp, JSON.stringify(next, null, 2));
+		// rename 到同一路径是原子的；但必须确认当前 owner 仍是自己（rename 会覆盖他人文件）。
+		// 因此 rename 前再读一次校验 owner+generation，随后立即 rename，窗口极小且只能自己覆盖自己。
+		const before = readLease(runDir);
+		if (!before || before.owner !== owner || before.generation !== generation) {
+			fs.rmSync(tmp, { force: true });
+			return false;
+		}
+		fs.renameSync(tmp, leasePath(runDir));
 		return true;
 	} catch {
 		return false;

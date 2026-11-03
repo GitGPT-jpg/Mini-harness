@@ -26,12 +26,17 @@ export interface WorkspaceProbe {
 	kubeconfigReady: boolean;
 	markers: string[];
 	dirs: string[];
+	/** 发现的部署 manifest 候选（相对路径，如 "deploy/decode.yaml"）。 */
+	deployManifests: string[];
 }
 
 const KNOWN_MARKERS = [
 	"validate.py", "run.py", "task.yaml", "pyproject.toml", "Cargo.toml", "Makefile",
 	"package.json", "bench_ascache.py", "benchmark", "Script", "references", "workflows", "tasks",
 ];
+
+/** 部署 manifest 候选名（必须在扫描清单里，否则 service-config-verify 的 deploy_yaml 永远发现不到）。 */
+const DEPLOY_MANIFEST_NAMES = ["decode.yaml", "deploy.yaml", "deployment.yaml", "decode.yml", "deploy.yml", "deployment.yml"];
 
 const CONFIG_FILES = ["pyproject.toml", "task.yaml", "package.json"];
 
@@ -50,12 +55,14 @@ export interface TaskContext {
 	conflicts: Array<{ inputId: string; defaultValue: string; resolvedValue: string; source: string }>;
 	packVersion: string | null;
 	provenance: Array<{ repo: string; path: string; version: string }>;
+	/** 发现错误（未知能力包 / 工作区不存在 / 配置解析失败等）；非 null 时不得当作成功结果。 */
+	error?: string | null;
 }
 
 /** 只读扫描工作区，发现已有入口与关键文件；不执行任何工作区命令。 */
 export function probeWorkspace(workspace: string): WorkspaceProbe {
 	const ws = path.resolve(workspace || process.cwd());
-	const probe: WorkspaceProbe = { workspace: ws, exists: false, gitBranch: null, gitHead: null, kubeconfigReady: false, markers: [], dirs: [] };
+	const probe: WorkspaceProbe = { workspace: ws, exists: false, gitBranch: null, gitHead: null, kubeconfigReady: false, markers: [], dirs: [], deployManifests: [] };
 	try { probe.exists = fs.existsSync(ws); } catch { return probe; }
 	if (!probe.exists) return probe;
 	let entries: string[] = [];
@@ -66,7 +73,21 @@ export function probeWorkspace(workspace: string): WorkspaceProbe {
 		try { stat = fs.statSync(full); } catch { continue; }
 		if (stat.isDirectory()) { if (KNOWN_MARKERS.includes(e)) probe.dirs.push(e); }
 		else if (KNOWN_MARKERS.includes(e)) probe.markers.push(e);
+		else if (DEPLOY_MANIFEST_NAMES.includes(e)) probe.deployManifests.push(e);
 	}
+	// 部署 manifest 常放在 deploy/ 子目录：浅扫一层，仍是有界扫描。
+	try {
+		const deployDir = path.join(ws, "deploy");
+		if (fs.statSync(deployDir).isDirectory()) {
+			for (const f of fs.readdirSync(deployDir)) {
+				if (DEPLOY_MANIFEST_NAMES.includes(f)) probe.deployManifests.push("deploy/" + f);
+				else if (/\.ya?ml$/.test(f)) {
+					// 其它 yaml：只登记名字，不递归；namespace 解析只对登记到的 manifest 做。
+					probe.deployManifests.push("deploy/" + f);
+				}
+			}
+		}
+	} catch {}
 	probe.gitHead = resolveGitHeadSha(ws);
 	try {
 		probe.gitBranch = execFileSync("git", ["-C", ws, "rev-parse", "--abbrev-ref", "HEAD"], { timeout: 3000, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
@@ -90,7 +111,11 @@ export function resolveTaskContext(packId: string, workspace: string, userInputs
 	const missing: ResolvedInput[] = [];
 	const conflicts: TaskContext["conflicts"] = [];
 	if (!pack) {
-		return { packId, workspace: probe.workspace, probe, inputs, missing, conflicts, packVersion: null, provenance: [] };
+		// 未知能力包：明确错误，不返回「没有缺口」的空成功结果。
+		return { packId, workspace: probe.workspace, probe, inputs, missing, conflicts, packVersion: null, provenance: [], error: "未知能力包：" + packId };
+	}
+	if (!probe.exists) {
+		return { packId, workspace: probe.workspace, probe, inputs, missing, conflicts, packVersion: pack.version, provenance: [], error: "工作区不存在：" + probe.workspace };
 	}
 	const configHints: Record<string, string | null> = {};
 	for (const f of CONFIG_FILES) { const h = readConfigHint(probe.workspace, f); if (h) configHints[f] = h; }
@@ -113,6 +138,13 @@ export function resolveTaskContext(packId: string, workspace: string, userInputs
 	return { packId, workspace: probe.workspace, probe, inputs, missing, conflicts, packVersion: pack.version, provenance: pack.provenance.map((p) => ({ repo: p.repo, path: p.path, version: p.version })) };
 }
 
+/** 从部署 manifest 内容解析 namespace（只读，支持 metadata.namespace / 顶层 namespace:）。 */
+export function parseNamespaceFromManifest(text: string): string | null {
+	if (!text) return null;
+	const m = /^\s*namespace\s*:\s*['"]?([A-Za-z0-9._-]+)['"]?\s*(?:#.*)?$/m.exec(text);
+	return m ? m[1]! : null;
+}
+
 function discoverInputValue(inputId: string, probe: WorkspaceProbe, configHints: Record<string, string | null>): ResolvedInput | null {
 	const has = (m: string) => probe.markers.includes(m) || probe.dirs.includes(m);
 	switch (inputId) {
@@ -121,16 +153,26 @@ function discoverInputValue(inputId: string, probe: WorkspaceProbe, configHints:
 			if (has("run.py")) return { id: "validateCmd", label: "验收命令", source: "discovery", value: "run.py", sourceOf: "发现 run.py（执行入口）；验收命令仍需真实 --validate 入口" };
 			return null;
 		case "deploy_yaml":
-			for (const m of ["decode.yaml", "deploy.yaml", "deployment.yaml"]) {
-				if (probe.markers.includes(m) || probe.dirs.includes(m)) return { id: "deploy_yaml", label: "部署 YAML", required: true, source: "project-config", value: m, sourceOf: "发现部署 manifest：" + m };
+			for (const m of probe.deployManifests) {
+				return { id: "deploy_yaml", label: "部署 YAML", required: true, source: "project-config", value: m, sourceOf: "发现部署 manifest（候选，须发起者确认）：" + m };
 			}
 			return null;
 		case "kubeconfig":
 			if (probe.kubeconfigReady) return { id: "kubeconfig", label: "kubeconfig", required: true, source: "discovery", value: process.env.KUBECONFIG!, sourceOf: "KUBECONFIG 环境变量" };
 			return null;
-		case "namespace":
-			if ((configHints["task.yaml"] || "").includes("namespace")) return { id: "namespace", label: "namespace", source: "project-config", value: "取自 manifest", sourceOf: "manifest/task.yaml 声明 namespace" };
+		case "namespace": {
+			// 真实解析：优先从发现的部署 manifest 取 metadata.namespace；退回 task.yaml 的 namespace 声明。
+			for (const m of probe.deployManifests) {
+				const full = path.join(probe.workspace, m);
+				try {
+					const ns = parseNamespaceFromManifest(fs.readFileSync(full, "utf8"));
+					if (ns) return { id: "namespace", label: "namespace", source: "project-config", value: ns, sourceOf: "从 manifest 解析：" + m + " → " + ns };
+				} catch {}
+			}
+			const taskNs = parseNamespaceFromManifest(configHints["task.yaml"] || "");
+			if (taskNs) return { id: "namespace", label: "namespace", source: "project-config", value: taskNs, sourceOf: "从 task.yaml 解析：" + taskNs };
 			return null;
+		}
 		default:
 			return null;
 	}
@@ -142,6 +184,10 @@ function discoverInputValue(inputId: string, probe: WorkspaceProbe, configHints:
  */
 export function renderDiscoverySummary(ctx: TaskContext): string {
 	const lines: string[] = [];
+	if (ctx.error) {
+		lines.push("error: " + ctx.error);
+		return lines.join("\n");
+	}
 	lines.push("pack: " + ctx.packId + (ctx.packVersion ? "@" + ctx.packVersion : "") + " | workspace: " + ctx.workspace);
 	if (ctx.probe.gitBranch || ctx.probe.gitHead) {
 		lines.push("git: " + (ctx.probe.gitBranch || "") + (ctx.probe.gitHead ? "@" + ctx.probe.gitHead : ""));

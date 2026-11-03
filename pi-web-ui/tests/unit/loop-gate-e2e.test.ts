@@ -28,12 +28,22 @@ function makePi(execImpl: (cmd: string, args: string[]) => any) {
 	return { pi, tools, handlers };
 }
 
+/** validator/precheck 走同一个 mock exec，避免 extension 用真实 runCommand 离开测试工作区。 */
+async function bindLoopExec(pi: any): Promise<void> {
+	const { setLoopExecForTest } = await import("../../server/loop/extension.js");
+	setLoopExecForTest(async (cmd: string, args: string[], opts?: { cwd?: string }) => {
+		const r = await pi.exec(cmd, args, opts);
+		return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.code ?? null, killed: false };
+	});
+}
+
 describe("指标门禁端到端（Task 2）", () => {
 	it("validator exit 0 但缺主指标 → 不判 done，bestRound 为空，以 metric-gate 停下", async () => {
 		const { createLoopExtension, createLoopRun, loadLoopState } = await import("../../server/loop/extension.js");
 		const cwd = mkdtempSync(join(tmpdir(), "loop-gate-missing-"));
 		const { pi, tools, handlers } = makePi(async () => ({ code: 0, stdout: "HARNESS_METRIC: tps=100", stderr: "" }));
 		createLoopExtension()(pi);
+		await bindLoopExec(pi);
 		const sid = "sess-missing-" + Date.now();
 		const created = createLoopRun({
 			sessionId: sid,
@@ -68,6 +78,7 @@ describe("指标门禁端到端（Task 2）", () => {
 		const cwd = mkdtempSync(join(tmpdir(), "loop-gate-thresh-"));
 		const { pi, tools, handlers } = makePi(async () => ({ code: 0, stdout: "HARNESS_METRIC: loss_pct=25", stderr: "" }));
 		createLoopExtension()(pi);
+		await bindLoopExec(pi);
 		const sid = "sess-thresh-" + Date.now();
 		const created = createLoopRun({
 			sessionId: sid,
@@ -114,6 +125,7 @@ describe("验收前后代码指纹（Task 3）", () => {
 			return { code: 0, stdout: "ok", stderr: "" };
 		});
 		createLoopExtension()(pi);
+		await bindLoopExec(pi);
 		const sid = "sess-fp-" + Date.now();
 		const created = createLoopRun({
 			sessionId: sid,

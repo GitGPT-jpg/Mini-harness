@@ -9,7 +9,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { probeWorkspace, renderDiscoverySummary, resolveTaskContext } from "../../server/loop/discovery.js";
+import { parseNamespaceFromManifest, probeWorkspace, renderDiscoverySummary, resolveTaskContext } from "../../server/loop/discovery.js";
 import { getPackKnowledge, getPackReference, listCapabilityPacks, listPackReferences, resolvePack } from "../../server/loop/packs.js";
 
 const TMP = mkdtempSync(join(tmpdir(), "mh-knowledge-"));
@@ -95,5 +95,41 @@ describe("三层任务默认知识", () => {
 		expect(summary).toContain("validateCmd");
 		expect(summary).toContain("provenance:");
 		expect(summary).toContain("mini-harness");
+	});
+
+	it("发现部署 manifest 并从 metadata.namespace 解析真实 namespace（不是占位符）", () => {
+		const ws = join(TMP, "ws-deploy");
+		mkdirSync(join(ws, "deploy"), { recursive: true });
+		writeFileSync(join(ws, "deploy", "deployment.yaml"), "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: infer\n  namespace: prod-infer\nspec:\n  replicas: 1\n");
+		writeFileSync(join(ws, "validate.py"), "print(1)");
+		const probe = probeWorkspace(ws);
+		expect(probe.deployManifests).toContain("deploy/deployment.yaml");
+		// 直接解析 manifest
+		expect(parseNamespaceFromManifest("metadata:\n  namespace: prod-infer\n")).toBe("prod-infer");
+		// 通过 service-config-verify 的 namespace 输入走真实解析
+		const ctx = resolveTaskContext("service-config-verify", ws, {});
+		const ns = ctx.inputs.find((i) => i.id === "namespace");
+		expect(ns?.value).toBe("prod-infer");
+		expect(ns?.sourceOf).toContain("prod-infer");
+		// deploy_yaml 输入用 probe.deployManifests 解析
+		const dy = ctx.inputs.find((i) => i.id === "deploy_yaml");
+		expect(dy?.value).toContain("deployment.yaml");
+	});
+
+	it("顶层 deploy.yaml 也能被发现并解析 namespace（顶层 namespace: 行）", () => {
+		const ws = join(TMP, "ws-deploy2");
+		mkdirSync(ws, { recursive: true });
+		writeFileSync(join(ws, "decode.yaml"), "namespace: radix-cache\nfoo: bar\n");
+		const probe = probeWorkspace(ws);
+		expect(probe.deployManifests).toContain("decode.yaml");
+		const ctx = resolveTaskContext("service-config-verify", ws, {});
+		const ns = ctx.inputs.find((i) => i.id === "namespace");
+		expect(ns?.value).toBe("radix-cache");
+	});
+
+	it("未知能力包 / 缺失工作区：resolveTaskContext 明确返回 error（不再空成功）", () => {
+		expect(resolveTaskContext("no-such-pack", join(TMP, "x"), {}).error).toContain("未知能力包");
+		expect(resolveTaskContext("cache-loss", join(TMP, "missing-dir"), {}).error).toContain("工作区不存在");
+		expect(renderDiscoverySummary(resolveTaskContext("no-such-pack", join(TMP, "x"), {})).startsWith("error:")).toBe(true);
 	});
 });

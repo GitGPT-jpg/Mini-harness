@@ -536,6 +536,10 @@ export function registerLoopRoutes(app: Express, opts: LoopRoutesOptions): void 
 			return;
 		}
 		const ctx = resolveTaskContext(packId, workspace, inputs);
+		if (ctx.error) {
+			res.status(404).json({ error: ctx.error, context: ctx, summary: renderDiscoverySummary(ctx) });
+			return;
+		}
 		res.json({ context: ctx, summary: renderDiscoverySummary(ctx) });
 	});
 

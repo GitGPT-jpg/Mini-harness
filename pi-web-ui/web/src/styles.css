@@ -12742,6 +12742,35 @@
         resize: vertical;
     }
 
+    /* 上下文发现摘要 + 只问缺口的补充输入。 */
+    .cockpit-hint {
+        font-size: 12px;
+        color: var(--text-dim);
+        margin-top: 6px;
+    }
+
+    .task-discovery {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        background: var(--bg-elev);
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        padding: 6px 8px;
+        max-height: 140px;
+        overflow: auto;
+    }
+
+    .task-discovery-missing {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        margin-top: 6px;
+    }
+
+    .task-discovery-missing .cockpit-label {
+        margin-top: 0;
+    }
+
     .cockpit-code {
         font-family: var(--mono);
         font-size: 12px;
@@ -13153,6 +13182,33 @@
     }
 
     .task-desk-run-status.tone-idle {
+        color: var(--text-dim);
+    }
+
+    /* 隔夜恢复徽标：小字、按色调上色，跟在人话状态后面。 */
+    .task-desk-recovery {
+        font-size: 11px;
+        opacity: 0.9;
+        overflow-wrap: anywhere;
+    }
+
+    .task-desk-recovery.tone-ok {
+        color: var(--green);
+    }
+
+    .task-desk-recovery.tone-warn {
+        color: var(--amber);
+    }
+
+    .task-desk-recovery.tone-bad {
+        color: var(--red);
+    }
+
+    .task-desk-recovery.tone-busy {
+        color: var(--plugin-purple);
+    }
+
+    .task-desk-recovery.tone-idle {
         color: var(--text-dim);
     }
 

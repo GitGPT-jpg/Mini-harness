@@ -38,6 +38,7 @@ const {
 	deleteLoopRun,
 	listRuns,
 	loadLoopState,
+	setLoopExecForTest,
 } = ext;
 const CWD = "/tmp/loop-test-work";
 
@@ -120,6 +121,11 @@ function makeHarness(sessionId: string, opts: Partial<Harness> = {}): Harness & 
 		},
 		sendUserMessage: (text: string, opts: any) => h.sent.push({ text, opts }),
 	};
+	// validator/precheck 走同一 mock exec（否则 extension 用真实 runCommand 会离开测试工作区/受 cwd 影响）。
+	setLoopExecForTest(async (cmd: string, args: string[], opts?: { cwd?: string }) => {
+		const r = await h.pi.exec(cmd, args, opts);
+		return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.code ?? null, killed: false };
+	});
 	const ctx = {
 		sessionManager: { getSessionId: () => sessionId },
 		modelRegistry: registry,
@@ -259,6 +265,10 @@ describe("mini-harness loop extension", () => {
 			sendUserMessage: () => {},
 		};
 		createLoopExtension()(pi);
+		setLoopExecForTest(async (cmd: string, args: string[], opts?: { cwd?: string }) => {
+			const r = await pi.exec(cmd, args, opts);
+			return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.code ?? null, killed: false };
+		});
 		const created = createLoopRun({ sessionId: sid, cwd: CWD, goal: "g", validateCmd: "true", useReviewer: false });
 		if (!created.ok) throw new Error(created.error);
 		const runId = created.runId;
@@ -298,6 +308,10 @@ describe("mini-harness loop extension", () => {
 			sendUserMessage: () => {},
 		};
 		createLoopExtension()(pi);
+		setLoopExecForTest(async (cmd: string, args: string[], opts?: { cwd?: string }) => {
+			const r = await pi.exec(cmd, args, opts);
+			return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.code ?? null, killed: false };
+		});
 		const created = createLoopRun({
 			sessionId: sid,
 			cwd: CWD,

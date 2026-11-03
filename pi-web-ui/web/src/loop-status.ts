@@ -208,3 +208,25 @@ export function canAcceptValidatorOnly(run: {
 		run.status === "stopped" && run.stopReason === "reviewer-error" && run.mode !== "llm" && run.lastVerdict === "pass"
 	);
 }
+
+/** 隔夜恢复只读徽标（unit → 短文案 + 色调）；没有恢复信息（旧 state）时返回 null。 */
+export function recoveryBadgeOf(
+	recovery: { unit?: string | null } | null | undefined,
+	t: Translate,
+): { label: string; tone: LoopTone } | null {
+	const unit = recovery?.unit ?? null;
+	if (!unit) return null;
+	switch (unit) {
+		case "running":
+			return { label: t("recoveryRunning"), tone: "busy" };
+		case "completed-valid":
+			return { label: t("recoveryCompleted"), tone: "ok" };
+		case "failed-retryable":
+			return { label: t("recoveryFailed"), tone: "warn" };
+		case "cancelled":
+			return { label: t("recoveryCancelled"), tone: "idle" };
+		case "unknown":
+		default:
+			return { label: t("recoveryUnknown"), tone: "warn" };
+	}
+}

@@ -19,6 +19,8 @@ export interface RunCommandOptions {
 	signal?: AbortSignal;
 	timeout?: number;
 	maxBuffer?: number;
+	/** 子进程一 spawn 就回调其 pid（用于把「实际执行实体」及时落盘供恢复核对）。 */
+	onSpawn?: (pid: number) => void;
 }
 
 export interface RunCommandResult {
@@ -26,6 +28,8 @@ export interface RunCommandResult {
 	stderr: string;
 	code: number | null;
 	killed: boolean;
+	/** 子进程 pid（进程组 id，Unix 下为 detached 子进程的 pid）；用于恢复时核对实际执行实体。 */
+	pid: number | null;
 }
 
 const EXIT_STDIO_GRACE_MS = 100;
@@ -72,6 +76,11 @@ export function runCommand(
 			stdio: ["ignore", "pipe", "pipe"],
 			windowsHide: true,
 		});
+		if (child.pid != null) {
+			try {
+				options.onSpawn?.(child.pid);
+			} catch {}
+		}
 		const maxBuffer = options.maxBuffer ?? DEFAULT_MAX_BUFFER;
 		let stdout = "";
 		let stderr = "";
@@ -119,7 +128,7 @@ export function runCommand(
 			cleanup();
 			child.stdout?.destroy();
 			child.stderr?.destroy();
-			resolve({ stdout, stderr, code, killed });
+			resolve({ stdout, stderr, code, killed, pid: child.pid ?? null });
 		};
 
 		const maybeFinalizeAfterExit = () => {
