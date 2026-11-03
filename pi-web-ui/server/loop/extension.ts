@@ -2642,18 +2642,21 @@ function computeEnvironmentFingerprint(input: {
 	metricUnit?: string | null;
 	metricThreshold?: number | null;
 	metricThresholdOp?: string | null;
+	metricTolerance?: number | null;
 	metricScenario?: string | null;
 	hardConstraints?: HardConstraint[] | null;
+	/** 恢复核对时置 true：绕过 workspaceSignature 的 10s 缓存，重新探测真实磁盘。 */
+	freshWorkspace?: boolean;
 }): EnvironmentFingerprint {
 	const ws = input.workspace || process.cwd();
-	const sig = workspaceSignature(ws);
+	const sig = workspaceSignature(ws, input.freshWorkspace);
 	return {
 		workspace: input.workspace,
 		gitHead: sig.gitHead,
 		contentHash: sig.contentHash,
 		packId: input.packId,
 		packVersion: input.packVersion,
-		// 完整验收契约进入指纹：主指标/方向/单位/阈值/场景/硬约束任一变化都使旧证据失效。
+		// 完整验收契约进入指纹：主指标/方向/单位/阈值/容差/场景/硬约束任一变化都使旧证据失效。
 		inputsHash: hashInputs({
 			goal: input.goal,
 			criteria: input.criteria,
@@ -2664,6 +2667,7 @@ function computeEnvironmentFingerprint(input: {
 			metricUnit: input.metricUnit ?? "",
 			metricThreshold: input.metricThreshold != null ? String(input.metricThreshold) : "",
 			metricThresholdOp: input.metricThresholdOp ?? "",
+			metricTolerance: input.metricTolerance != null ? String(input.metricTolerance) : "",
 			metricScenario: input.metricScenario ?? "",
 			hardConstraints: JSON.stringify((input.hardConstraints ?? []).map((c) => [c.name, c.metric, c.op, c.value, c.scenario ?? ""])),
 		}),
@@ -2671,21 +2675,23 @@ function computeEnvironmentFingerprint(input: {
 	};
 }
 
-/** 工作区内容签名缓存（避免列表轮询对每个 run 反复 git 探测）。 */
+/** 工作区内容签名缓存（避免列表轮询对每个 run 反复 git 探测）；恢复核对走 fresh 绕过。 */
 const wsSigCache = new Map<string, { at: number; gitHead: string | null; contentHash: string | null }>();
 const WS_SIG_TTL_MS = 10_000;
 
 /** git HEAD + 未提交改动摘要；非 git 仓库退化为目录 mtime/关键文件摘要。结果按 workspace 缓存。 */
-function workspaceSignature(ws: string): { gitHead: string | null; contentHash: string | null } {
+function workspaceSignature(ws: string, fresh = false): { gitHead: string | null; contentHash: string | null } {
 	const nowMs = Date.now();
-	const hit = wsSigCache.get(ws);
-	if (hit && nowMs - hit.at < WS_SIG_TTL_MS) return hit;
+	if (!fresh) {
+		const hit = wsSigCache.get(ws);
+		if (hit && nowMs - hit.at < WS_SIG_TTL_MS) return hit;
+	}
 	const gitHead = resolveGitHeadSha(ws);
 	let contentHash: string | null = null;
 	try {
 		const script = "git rev-parse --is-inside-work-tree >/dev/null 2>&1 && { git status --porcelain; git diff; } 2>/dev/null";
 		const out = execFileSync("bash", ["-lc", script], { cwd: ws, timeout: 8000, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-		contentHash = hashString(gitHead ?? "" + "|" + out);
+		contentHash = hashString((gitHead ?? "") + "|" + out);
 	} catch {
 		// 非 git 仓库：用关键文件存在性 + 最近修改时间做弱摘要（不覆盖 git 的强指纹）。
 		try {
@@ -2714,8 +2720,8 @@ function fingerprintMatches(a: EnvironmentFingerprint | null, b: EnvironmentFing
 		a.packId === b.packId && a.packVersion === b.packVersion && a.inputsHash === b.inputsHash && a.envHash === b.envHash;
 }
 
-/** 从 run 状态构建当前环境指纹（恢复/展示共用，避免三处字段映射漂移）。 */
-function currentFingerprintOf(st: LoopState): EnvironmentFingerprint {
+/** 从 run 状态构建当前环境指纹（恢复/展示共用，避免三处字段映射漂移）。fresh 用于恢复核对绕过缓存。 */
+function currentFingerprintOf(st: LoopState, fresh = false): EnvironmentFingerprint {
 	return computeEnvironmentFingerprint({
 		workspace: st.workspace,
 		packId: st.packId ?? null,
@@ -2729,8 +2735,10 @@ function currentFingerprintOf(st: LoopState): EnvironmentFingerprint {
 		metricUnit: st.metricUnit ?? null,
 		metricThreshold: st.metricThreshold ?? null,
 		metricThresholdOp: st.metricThresholdOp ?? null,
+		metricTolerance: st.metricTolerance ?? null,
 		metricScenario: st.metricScenario ?? null,
 		hardConstraints: st.hardConstraints ?? null,
+		freshWorkspace: fresh,
 	});
 }
 
@@ -2770,7 +2778,7 @@ export function recoverRun(runId: string, requesterOwner?: string): RecoverRunRe
 	const lease = getLease(dir);
 	const leaseHeld = lease != null && !leaseExpired(lease) && lease.owner === me;
 	const leaseHeldByOther = lease != null && !leaseExpired(lease) && lease.owner !== me;
-	const currentFp = currentFingerprintOf(st);
+	const currentFp = currentFingerprintOf(st, true); // 恢复核对必须重新探测磁盘，不走 10s 缓存
 	const environmentChanged = !fingerprintMatches(st.environmentFingerprint, currentFp);
 	// 实际执行实体 = 租约里记录的本地 validator/precheck 子进程 pid（真实执行实体），不是服务 pid。
 	const taskPid = lease?.taskPid ?? null;
@@ -2848,7 +2856,7 @@ export function recoveryInfoOf(runId: string) {
 	if (!st) return null;
 	const lease = getLease(runDir(runId));
 	const leaseHeld = lease != null && !leaseExpired(lease) && lease.owner === (st.owner ?? newOwner());
-	const currentFp = currentFingerprintOf(st);
+	const currentFp = currentFingerprintOf(st, true); // 恢复核对必须重新探测磁盘，不走 10s 缓存
 	const environmentChanged = !fingerprintMatches(st.environmentFingerprint, currentFp);
 	const unit = st.status === "active" ? (leaseHeld ? "running" : environmentChanged ? "needs-review" : "interrupted") : (st.status === "stopped" ? "cancelled" : st.status);
 	return { unit, leaseHeld, environmentChanged, attemptId: st.attemptId, generation: st.generation ?? 0, owner: st.owner, remoteJobId: st.remoteJobId };
