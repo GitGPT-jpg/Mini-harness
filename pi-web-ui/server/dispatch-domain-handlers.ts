@@ -433,6 +433,7 @@ export function handlePlanAndGoalMessage(msg: ClientMessage, cs: DispatchSession
 				maxRounds: msg.maxRounds,
 				plannerModel: msg.plannerModel,
 				reviewerModel: msg.reviewerModel,
+				executorModel: msg.executorModel,
 				useReviewer: msg.useReviewer,
 				worktree: msg.worktree,
 				taskId: msg.taskId,

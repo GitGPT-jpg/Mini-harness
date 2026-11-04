@@ -94,6 +94,18 @@ interface RoleResolution {
 const isResolution = (v: unknown): v is RoleResolution =>
 	!!v && typeof (v as RoleResolution).ok === "boolean" && Array.isArray((v as RoleResolution).conflicts);
 const specOf = (m: { provider?: string; id: string }) => (m.provider ? `${m.provider}/${m.id}` : m.id);
+/** 选择器里的「自动」：与服务端 model-roles.ts 的 AUTO_MODEL 同值。 */
+const AUTO = "auto";
+/** 各验收方式里必须两两不同家族的角色对（与服务端 model-roles.ts 的 ISOLATED 一致）。 */
+const ROLE_PAIRS: Record<TaskAcceptance, Array<[RoleName, RoleName]>> = {
+	"code-review": [
+		["executor", "planner"],
+		["executor", "reviewer"],
+		["planner", "reviewer"],
+	],
+	code: [["executor", "planner"]],
+	llm: [["executor", "reviewer"]],
+};
 
 /** 输入框上沿的「新任务」胶囊：目标条折叠行（目标模式开）与 LoopBar（目标模式关）共用一份。 */
 export function TaskCapsule({ label }: { label?: string }) {
@@ -130,8 +142,10 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 	const [criteria, setCriteria] = useState("");
 	const [acceptance, setAcceptance] = useState<TaskAcceptance>("code-review");
 	// 代码 loop（mini-harness）
-	const [planner, setPlanner] = useState("");
-	const [reviewer, setReviewer] = useState("");
+	// 三个角色的选择：AUTO = 联立自动分配（服务端按家族规则两两隔离），其余为 "provider/id"。
+	const [planner, setPlanner] = useState(AUTO);
+	const [executor, setExecutor] = useState(AUTO);
+	const [reviewer, setReviewer] = useState(AUTO);
 	const [precheck, setPrecheck] = useState("");
 	const [cmd, setCmd] = useState("");
 	const [roots, setRoots] = useState("");
@@ -148,9 +162,9 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 	const [discovering, setDiscovering] = useState(false);
 	const [extraInputs, setExtraInputs] = useState<Record<string, string>>({});
 	// LLM loop（GoalService 偏好；空 = 使用主模型，轮数 0 = 不限）
-	const [llmPlanner, setLlmPlanner] = useState("");
-	const [execModel, setExecModel] = useState("");
-	const [llmReviewer, setLlmReviewer] = useState("");
+	const [llmPlanner, setLlmPlanner] = useState(AUTO);
+	const [execModel, setExecModel] = useState(AUTO);
+	const [llmReviewer, setLlmReviewer] = useState(AUTO);
 	const [llmRounds, setLlmRounds] = useState(0);
 	const [models, setModels] = useState<LoopModel[] | null>(null);
 	const [resolved, setResolved] = useState<{ key: string; r: RoleResolution } | null>(null);
@@ -170,9 +184,10 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 	// 每次打开都按服务端记住的 LLM loop 偏好回填（与旧目标条编辑器同源）；开着时不被推送覆盖。
 	useEffect(() => {
 		if (!open) return;
-		setLlmPlanner(goalStatus.reviewModel ?? "");
-		setExecModel(goalStatus.execModel ?? "");
-		setLlmReviewer(goalStatus.reviewerModel ?? "");
+		// 旧偏好里的空值（跟随主对话）一律显示为「自动」：自动分配同样优先主对话模型。
+		setLlmPlanner(goalStatus.reviewModel || AUTO);
+		setExecModel(goalStatus.execModel || AUTO);
+		setLlmReviewer(goalStatus.reviewerModel || AUTO);
 		setLlmRounds(goalStatus.maxRounds > 0 ? goalStatus.maxRounds : 0);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [open]);
@@ -246,7 +261,7 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 					executor: execModel,
 					reviewer: reviewerSelectable ? llmReviewer : "",
 				}
-			: { mode, main: mainSpec, planner, reviewer: mode === "code-review" ? reviewer : "" },
+			: { mode, main: mainSpec, planner, executor, reviewer: mode === "code-review" ? reviewer : "" },
 	);
 	useEffect(() => {
 		if (!open) return;
@@ -269,17 +284,25 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 	// 服务端结果没到（或旧服务端没有该接口）时，先用模型列表里服务端给的家族比较显式选择与主模型。
 	const famOf = (spec: string) => familyOf.get(spec) ?? "";
 	const mainFam = famOf(mainSpec);
+	// 只比较已确定的模型：显式选择，以及旧服务端上固定为主对话的审查；「自动」交给服务端联立分配。
+	const famOfChoice = (v: string) => (v && v !== AUTO ? famOf(v) : "");
 	const localConflict = ((): { roles: [RoleName, RoleName]; family: string } | null => {
-		if (mode === "llm") {
-			const e = execModel ? famOf(execModel) : mainFam;
-			const r = reviewerSelectable && llmReviewer ? famOf(llmReviewer) : mainFam;
-			return e && e === r ? { roles: ["executor", "reviewer"], family: e } : null;
+		const picked: Record<RoleName, string> =
+			mode === "llm"
+				? {
+						planner: "",
+						// 旧服务端：审查固定是主对话，执行的「自动」也按跟随主对话发出
+						executor: !reviewerSelectable && execModel === AUTO ? mainFam : famOfChoice(execModel),
+						reviewer: reviewerSelectable ? famOfChoice(llmReviewer) : mainFam,
+					}
+				: {
+						planner: famOfChoice(planner),
+						executor: famOfChoice(executor),
+						reviewer: mode === "code-review" ? famOfChoice(reviewer) : "",
+					};
+		for (const [a, b] of ROLE_PAIRS[mode]) {
+			if (picked[a] && picked[a] === picked[b]) return { roles: [a, b], family: picked[a] };
 		}
-		const p = famOf(planner);
-		const r = mode === "code-review" ? famOf(reviewer) : "";
-		if (p && p === mainFam) return { roles: ["executor", "planner"], family: p };
-		if (r && r === mainFam) return { roles: ["executor", "reviewer"], family: r };
-		if (p && r && p === r) return { roles: ["planner", "reviewer"], family: p };
 		return null;
 	})();
 	const blocked = resolution ? !resolution.ok : !!localConflict;
@@ -290,13 +313,26 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 	/** 下拉项：模型列表；当前值不在列表里（旧偏好 / 列表没读到）时补一项，不悄悄改掉用户的选择。 */
 	const modelOptions = (current: string) => (
 		<>
-			{current && !familyOf.has(current) && <option value={current}>{current}</option>}
+			{current && current !== AUTO && !familyOf.has(current) && <option value={current}>{current}</option>}
 			{(models ?? []).map((m) => (
 				<option key={`${m.provider}/${m.id}`} value={`${m.provider}/${m.id}`}>
 					{`${m.id}（${m.family}）`}
 				</option>
 			))}
 		</>
+	);
+
+	/** 一个角色的选择器：「自动」（联立分配）+ 模型列表。三个角色并排。 */
+	const roleSelect = (id: string, label: string, value: string, onChange: (v: string) => void, tip?: string) => (
+		<div>
+			<label className="cockpit-label" htmlFor={id} title={tip}>
+				{label}
+			</label>
+			<select id={id} className="cockpit-input" value={value} onChange={(e) => onChange(e.target.value)}>
+				<option value={AUTO}>{t("taskRoleAutoOption")}</option>
+				{modelOptions(value)}
+			</select>
+		</div>
 	);
 
 	const finish = () => {
@@ -320,12 +356,15 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 	};
 
 	/** LLM loop：先把本次选的偏好记下（同旧编辑器的 set_goal_prefs），再发目标 / 启动细化向导。 */
+	// 规划（细化向导）的「自动」= 主对话模型，线上仍用空值；旧服务端不认识 auto，执行的自动也退回空值（跟随主对话）。
+	const wirePlanner = llmPlanner === AUTO ? "" : llmPlanner;
+	const wireExec = execModel === AUTO && !reviewerSelectable ? "" : execModel;
 	const sendLlmPrefs = (maxRounds: number) =>
 		appSend({
 			type: "set_goal_prefs",
 			maxRounds,
-			reviewModel: llmPlanner,
-			execModel,
+			reviewModel: wirePlanner,
+			execModel: wireExec,
 			...(reviewerSelectable ? { reviewerModel: llmReviewer } : {}),
 		});
 
@@ -337,10 +376,10 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 			appSend({
 				type: "set_goal",
 				goal: withCriteria(g, c),
-				...(llmPlanner ? { reviewModel: llmPlanner } : {}),
+				...(wirePlanner ? { reviewModel: wirePlanner } : {}),
 				maxRounds,
 				locked: true,
-				...(execModel ? { execModel } : {}),
+				...(wireExec ? { execModel: wireExec } : {}),
 				...(reviewerSelectable && llmReviewer ? { reviewerModel: llmReviewer } : {}),
 			});
 		} else {
@@ -357,9 +396,10 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 				...(precheck.trim() ? { precheckCmd: precheck } : {}),
 				...(cmd.trim() ? { validateCmd: cmd } : {}),
 				...(artifactRoots.length ? { artifactRoots } : {}),
-				...(planner ? { plannerModel: planner } : {}),
+				...(planner !== AUTO ? { plannerModel: planner } : {}),
+				executorModel: executor,
 				useReviewer: mode === "code-review",
-				...(mode === "code-review" && reviewer ? { reviewerModel: reviewer } : {}),
+				...(mode === "code-review" && reviewer !== AUTO ? { reviewerModel: reviewer } : {}),
 				...(primaryMetric.trim() ? { primaryMetric: primaryMetric.trim() } : {}),
 				...(metricDirection ? { metricDirection } : {}),
 				...(metricPrecision.trim() ? { metricPrecision: Number(metricPrecision) } : {}),
@@ -382,7 +422,7 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 		appSend({
 			type: "start_goal_wizard",
 			text: withCriteria(g, c),
-			...(llmPlanner ? { wizardModel: llmPlanner } : {}),
+			...(wirePlanner ? { wizardModel: wirePlanner } : {}),
 			maxRounds,
 			locked: true,
 		});
@@ -403,7 +443,16 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 	const problem = ((): string | null => {
 		const e = resolution?.error;
 		if (e?.code === "unresolved") return t("taskRoleUnresolved", { role: roleLabel(e.role) });
-		if (e?.code === "no-candidate") return t("taskRoleNoCandidate", { role: roleLabel(e.role) });
+		if (e?.code === "no-candidate") {
+			// 只列出与该角色隔离、且已分到模型的角色的家族
+			const avoid = new Set<string>();
+			for (const [a, b] of ROLE_PAIRS[mode]) {
+				const other = a === e.role ? b : b === e.role ? a : null;
+				const fam = other ? resolution?.roles[other]?.family : undefined;
+				if (fam) avoid.add(fam);
+			}
+			return t("taskRoleNoCandidate", { role: roleLabel(e.role), families: [...avoid].join(" / ") });
+		}
 		if (e?.code === "no-main") return t("taskRoleNoMain");
 		const cf = resolution?.conflicts[0];
 		if (cf)
@@ -423,26 +472,22 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 		return null;
 	})();
 	// 一键修正：只替换可在本面板里调整的那个角色（审查不可选时改执行模型）。
+	const setRole = (role: RoleName, spec: string) => {
+		if (mode === "llm")
+			(role === "planner" ? setLlmPlanner : role === "executor" ? setExecModel : setLlmReviewer)(spec);
+		else (role === "planner" ? setPlanner : role === "executor" ? setExecutor : setReviewer)(spec);
+	};
 	const fix = ((): { label: string; apply: () => void } | null => {
 		if (!resolution || resolution.ok) return null;
+		// 建议替换冲突里的后一个角色；旧服务端上审查不可选时改执行。
 		const s = resolution.suggestion;
-		if (s && mode === "code-review")
-			return {
-				label: t("taskRoleUseSuggestion", { role: roleLabel("reviewer"), model: s.id }),
-				apply: () => setReviewer(specOf(s)),
-			};
-		if (s && mode === "llm" && reviewerSelectable)
-			return {
-				label: t("taskRoleUseSuggestion", { role: roleLabel("reviewer"), model: s.id }),
-				apply: () => setLlmReviewer(specOf(s)),
-			};
-		const x = resolution.executorSuggestion;
-		if (x && mode === "llm")
-			return {
-				label: t("taskRoleUseSuggestion", { role: roleLabel("executor"), model: x.id }),
-				apply: () => setExecModel(specOf(x)),
-			};
-		return null;
+		const usable =
+			s && !(mode === "llm" && s.role === "reviewer" && !reviewerSelectable) ? s : resolution.executorSuggestion;
+		if (!usable) return null;
+		return {
+			label: t("taskRoleUseSuggestion", { role: roleLabel(usable.role), model: usable.id }),
+			apply: () => setRole(usable.role, specOf(usable)),
+		};
 	})();
 	const summary =
 		resolution && !resolution.error
@@ -602,87 +647,20 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 				</div>
 				{codeMode ? (
 					<>
-						<div className="cockpit-models">
-							<div>
-								<label className="cockpit-label" htmlFor="task-planner">
-									{t("codeLoopPlanner")}
-								</label>
-								<select
-									id="task-planner"
-									className="cockpit-input"
-									value={planner}
-									onChange={(e) => setPlanner(e.target.value)}
-								>
-									<option value="">{t("codeLoopAuto")}</option>
-									{modelOptions(planner)}
-								</select>
-							</div>
-							{mode === "code-review" && (
-								<div>
-									<label className="cockpit-label" htmlFor="task-reviewer">
-										{t("codeLoopReviewer")}
-									</label>
-									<select
-										id="task-reviewer"
-										className="cockpit-input"
-										value={reviewer}
-										onChange={(e) => setReviewer(e.target.value)}
-									>
-										<option value="">{t("codeLoopAuto")}</option>
-										{modelOptions(reviewer)}
-									</select>
-								</div>
-							)}
+						<div className="cockpit-models three">
+							{roleSelect("task-planner", t("codeLoopPlanner"), planner, setPlanner)}
+							{roleSelect("task-executor", t("goalBarExecModel"), executor, setExecutor, t("taskExecutorTip"))}
+							{mode === "code-review" && roleSelect("task-reviewer", t("codeLoopReviewer"), reviewer, setReviewer)}
 						</div>
 						{roleNotes}
 					</>
 				) : (
 					<>
-						<div className="cockpit-models">
-							<div>
-								<label className="cockpit-label" htmlFor="task-llm-planner">
-									{t("codeLoopPlanner")}
-								</label>
-								<select
-									id="task-llm-planner"
-									className="cockpit-input"
-									value={llmPlanner}
-									onChange={(e) => setLlmPlanner(e.target.value)}
-								>
-									<option value="">{t("goalBarUseMainModel")}</option>
-									{modelOptions(llmPlanner)}
-								</select>
-							</div>
-							<div>
-								<label className="cockpit-label" htmlFor="task-exec" title={t("goalBarExecModelTip")}>
-									{t("goalBarExecModel")}
-								</label>
-								<select
-									id="task-exec"
-									className="cockpit-input"
-									value={execModel}
-									onChange={(e) => setExecModel(e.target.value)}
-								>
-									<option value="">{t("goalBarUseMainModel")}</option>
-									{modelOptions(execModel)}
-								</select>
-							</div>
-							{reviewerSelectable && (
-								<div>
-									<label className="cockpit-label" htmlFor="task-llm-reviewer">
-										{t("codeLoopReviewer")}
-									</label>
-									<select
-										id="task-llm-reviewer"
-										className="cockpit-input"
-										value={llmReviewer}
-										onChange={(e) => setLlmReviewer(e.target.value)}
-									>
-										<option value="">{t("taskRoleFollowMain", { name: mainModel?.name ?? "—" })}</option>
-										{modelOptions(llmReviewer)}
-									</select>
-								</div>
-							)}
+						<div className="cockpit-models three">
+							{roleSelect("task-llm-planner", t("codeLoopPlanner"), llmPlanner, setLlmPlanner)}
+							{roleSelect("task-exec", t("goalBarExecModel"), execModel, setExecModel, t("taskExecutorTip"))}
+							{reviewerSelectable &&
+								roleSelect("task-llm-reviewer", t("codeLoopReviewer"), llmReviewer, setLlmReviewer)}
 						</div>
 						{roleNotes}
 					</>

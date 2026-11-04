@@ -188,7 +188,7 @@ import { PlanManager } from "./plan-manager.js";
 import { buildPlanModePrompt, planModeDenial, planModeNoticeText, PLAN_MODE_BLOCKED_TOOL_NAMES } from "./plan-mode.js";
 import { DELEGATION_SYSTEM_PROMPT, delegateNoticeText } from "./delegate-mode.js";
 import { goalReviewDenial, shouldDeferPromptForReview } from "./goal-review-gate.js";
-import { resolveTaskRoles } from "./loop/model-roles.js";
+import { resolveTaskRoles, type RoleRequest, type RoleResolution } from "./loop/model-roles.js";
 import { activeClusterConfig } from "./loop/cluster-config.js";
 import { readPlanModeFromSession, readPlanFromSession } from "./permission-preset.js";
 import { readDelegateModeFromSession } from "./permission-preset.js";
@@ -377,6 +377,32 @@ const UI_MESSAGE_CACHE_CAP = 4096;
 
 /** mini-harness Loop：落盘的 run 状态 → 快照里的 conv.loop。事件路由、服务端建 run、续跑共用
  *  这一个口径（D-12-1）；评审理由走 reviewBrief 截断，与 /api/mini-harness/runs 同源。 */
+/** 新任务角色解析（server/loop/model-roles.ts）：模型目录与换模型用的是同一个 sharedModelRuntime；
+ *  缺运行时或会话（未就绪 / 单测替身）时返回 undefined，调用方按旧路径处理。 */
+function resolveRolesForSession(
+	runtime:
+		| {
+				getModel(p: string, id: string): unknown;
+				getModels(): readonly unknown[];
+				getAvailableSnapshot(): readonly unknown[];
+		  }
+		| undefined,
+	session: { model?: unknown } | undefined,
+	req: RoleRequest,
+): RoleResolution | undefined {
+	if (!runtime || !session) return undefined;
+	type M = { provider?: string; id: string };
+	return resolveTaskRoles(
+		{
+			find: (provider, id) => runtime.getModel(provider, id) as M | undefined,
+			getAll: () => [...runtime.getModels()] as M[],
+			getAvailable: () => [...runtime.getAvailableSnapshot()] as M[],
+		},
+		(session.model as M | undefined) ?? null,
+		req,
+	);
+}
+
 function loopUiFromState(st: LoopState): LoopUiState {
 	const review = reviewBrief(st.lastReview);
 	return {
@@ -2670,26 +2696,14 @@ export class ClientSession {
 				await activeClusterConfig()?.bindTask(`goal:${convId}`);
 			},
 			releaseGoalCluster: (convId) => activeClusterConfig()?.releaseTask(`goal:${convId}`),
-			resolveGoalRoles: (convId, req) => {
-				const conv = this.convs.get(convId);
-				const runtime = this.sharedModelRuntime;
-				if (!conv?.session || !runtime) return undefined;
-				const main = conv.session.model as { provider?: string; id: string } | undefined;
-				return resolveTaskRoles(
-					{
-						find: (provider, id) => runtime.getModel(provider, id),
-						getAll: () => [...runtime.getModels()],
-						getAvailable: () => [...runtime.getAvailableSnapshot()],
-					},
-					main ?? null,
-					{
-						mode: "llm",
-						planner: req.planner ?? null,
-						executor: req.executor || this.settingsSvc.current.subagentDefaultModel || null,
-						reviewer: req.reviewer ?? null,
-					},
-				);
-			},
+			// 执行的旧默认（空）= 子代理默认模型 → 主对话模型，与 spawnSubagentConversation 的回落同序。
+			resolveGoalRoles: (convId, req) =>
+				resolveRolesForSession(this.sharedModelRuntime, this.convs.get(convId)?.session, {
+					mode: "llm",
+					planner: req.planner ?? null,
+					executor: req.executor || this.settingsSvc.current.subagentDefaultModel || null,
+					reviewer: req.reviewer ?? null,
+				}),
 		});
 
 		this.modelAdmin = new ModelAdminService({
@@ -12484,6 +12498,7 @@ export class ClientSession {
 		maxRounds?: number;
 		plannerModel?: string;
 		reviewerModel?: string;
+		executorModel?: string;
 		useReviewer?: boolean;
 		worktree?: boolean;
 		taskId?: string;
@@ -12558,6 +12573,24 @@ export class ClientSession {
 		// 显式项目位置与会话目录不同：模型工具必须落在 workspace，否则「模型改会话目录、验收查 workspace」不一致。
 		const sessionCwd = conv.runtime?.cwd || conv.cwd || this.cwd;
 		const workspaceDiffers = !!workspace && !!sessionCwd && resolve(workspace) !== resolve(sessionCwd);
+		// 三个角色联立解析（与新任务预检同一套规则）：冲突、缺候选、模型失效都在建 run 之前拒绝，不发模型请求。
+		const roles = resolveRolesForSession(this.sharedModelRuntime, conv.session, {
+			mode: useReviewer === false ? "code" : "code-review",
+			planner: msg.plannerModel,
+			executor: msg.executorModel,
+			reviewer: msg.reviewerModel,
+		});
+		if (roles && !roles.ok) {
+			conv.loop = { kind: "request-failed", taskId, goal, reason: roles.message, createdAt: new Date().toISOString() };
+			this.emitNotice("warning", `Loop 启动失败：${roles.message}`);
+			this.flushSnapshot();
+			return;
+		}
+		const roleSpec = (m: { provider?: string; id: string } | null | undefined) =>
+			m ? (m.provider ? `${m.provider}/${m.id}` : m.id) : undefined;
+		// 执行不是主对话模型 → 在独立执行会话里跑（主对话的聊天模型不变）。
+		const executorSpec =
+			roles?.roles.executor && roles.roles.executor.source !== "main" ? (roleSpec(roles.roles.executor) ?? null) : null;
 		// 上下文发现：只读整理已确认/缺失/冲突，不执行工作区命令；结果注入执行提示词（含 worktree 执行者）。
 		let discoveryLines: string[] = [];
 		let taskContext: ReturnType<typeof resolveTaskContext> | undefined;
@@ -12609,8 +12642,9 @@ export class ClientSession {
 			mode: msg.mode,
 			maxRounds,
 			useReviewer,
-			plannerModel: msg.plannerModel,
-			reviewerModel: msg.reviewerModel,
+			// 联立解析后的实际模型显式传给运行时，规划 / 审查与预览展示的保持一致。
+			plannerModel: roles ? roleSpec(roles.roles.planner) : msg.plannerModel,
+			reviewerModel: roles ? (useReviewer === false ? undefined : roleSpec(roles.roles.reviewer)) : msg.reviewerModel,
 			worktree: msg.worktree,
 			artifactRoots: roots,
 			taskId,
@@ -12681,16 +12715,20 @@ export class ClientSession {
 		lines.push("不要向用户提问。");
 		if (st.worktreeBranch && st.worktreeDir) {
 			// worktree 执行者会话：模型工具/终端/validator/reviewer 全落独立 worktree，不污染 base 工作区
-			await this.startWorktreeExecutor(conv, st, lines.join("\n"));
-		} else if (workspaceDiffers) {
-			// 显式项目位置 ≠ 会话目录：也起绑定 workspace 的执行者，保证「模型工具/验收」同一工作区。
+			await this.startWorktreeExecutor(conv, st, lines.join("\n"), executorSpec);
+		} else if (workspaceDiffers || executorSpec) {
+			// 显式项目位置 ≠ 会话目录，或执行模型不是主对话模型：起绑定 workspace 的执行者会话，
+			// 保证「模型工具/验收」同一工作区，且主对话的聊天模型不变。
 			await this.startExecutorInWorkspace(
 				conv,
 				st,
 				lines.join("\n"),
-				`工作目录：${st.workspace}（显式项目位置，与当前会话目录不同）。你的 shell/终端/文件工具默认就在这个目录，所有修改都直接做在这里。`,
+				workspaceDiffers
+					? `工作目录：${st.workspace}（显式项目位置，与当前会话目录不同）。你的 shell/终端/文件工具默认就在这个目录，所有修改都直接做在这里。`
+					: `工作目录：${st.workspace}。你的 shell/终端/文件工具默认就在这个目录，所有修改都直接做在这里。`,
 				"执行环境绑定失败",
 				"workspace-executor-error",
+				executorSpec,
 			);
 		} else {
 			// 注册回合控制器：停止要能取消该 run 绑定会话的模型回合。
@@ -12701,7 +12739,12 @@ export class ClientSession {
 
 	/** worktree 模式：起一个绑定在 st.workspace 的执行者子代理跑 loop，模型工具/终端都落 worktree。
 	 *  失败显式报错并停 run，绝不静默回退到 base 工作区（否则「模型改原目录、验收查 worktree」不一致）。 */
-	private async startWorktreeExecutor(conv: Conversation, st: LoopState, prompt: string): Promise<void> {
+	private async startWorktreeExecutor(
+		conv: Conversation,
+		st: LoopState,
+		prompt: string,
+		executorModel: string | null = null,
+	): Promise<void> {
 		return this.startExecutorInWorkspace(
 			conv,
 			st,
@@ -12709,6 +12752,7 @@ export class ClientSession {
 			`工作目录：${st.workspace}（独立 git worktree，分支 ${st.worktreeBranch}）。你的 shell/终端/文件工具默认就在这个目录，所有修改都直接做在这里。`,
 			"worktree 执行环境绑定失败",
 			"worktree-executor-error",
+			executorModel,
 		);
 	}
 
@@ -12721,6 +12765,8 @@ export class ClientSession {
 		workspaceNote: string,
 		errorLabel: string,
 		stopReason: string,
+		/** 执行模型（"provider/id"）；null = 跟随主对话。 */
+		executorModel: string | null = null,
 	): Promise<void> {
 		try {
 			// deferKickoff：先建会话、重绑 run.sessionId，再触发首回合 —— 否则首回合的
@@ -12730,7 +12776,7 @@ export class ClientSession {
 				"loop-executor",
 				st.workspace,
 				undefined,
-				null,
+				executorModel,
 				conv.id,
 				true,
 				`Loop ${st.runId}`,
@@ -12738,6 +12784,13 @@ export class ClientSession {
 			);
 			const execConv = this.convs.get(execConvId);
 			if (!execConv?.session) throw new Error("执行者会话创建失败");
+			// 换模型失败时子代理会沿用默认模型：执行角色不能悄悄换人，直接按失败处理。
+			const actualExec = execConv.session.model
+				? `${execConv.session.model.provider}/${execConv.session.model.id}`
+				: "";
+			if (executorModel && actualExec !== executorModel) {
+				throw new Error(`执行会话没能切换到所选模型 ${executorModel}（实际为 ${actualExec || "无"}）`);
+			}
 			const re = rebindLoopSession(st.runId, execConv.session.sessionId);
 			if (!re.ok) throw new Error(re.error || "run 会话重绑失败");
 			// 执行者会话也接入回合取消：任务台/API 停止要能取消该子代理的模型回合。

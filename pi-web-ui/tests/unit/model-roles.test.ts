@@ -135,6 +135,73 @@ describe("resolveTaskRoles：代码验收", () => {
 	});
 });
 
+describe("resolveTaskRoles：三个角色显式 / 自动联立", () => {
+	const fams = (r: ReturnType<typeof resolveTaskRoles>) =>
+		(["planner", "executor", "reviewer"] as const).map((k) => r.roles[k]?.family ?? null);
+
+	it("三个都选「自动」：执行优先主对话，规划 / 审查联立分配，三者两两不同家族", () => {
+		const r = resolveTaskRoles(reg, gpt, { mode: "code-review", planner: "auto", executor: "auto", reviewer: "auto" });
+		expect(r.ok).toBe(true);
+		expect(r.roles.executor).toMatchObject({ id: "gpt-5", source: "main" });
+		expect(r.roles.planner?.source).toBe("auto");
+		expect(r.roles.reviewer?.source).toBe("auto");
+		expect(new Set(fams(r)).size).toBe(3);
+	});
+
+	it("显式执行模型不同于主对话：自动角色避开执行模型的家族，可以用主对话的家族", () => {
+		const r = resolveTaskRoles(reg, glm, { mode: "code-review", executor: "oneapi/gpt-5" });
+		expect(r.ok).toBe(true);
+		expect(r.roles.executor).toMatchObject({ id: "gpt-5", source: "explicit" });
+		expect(fams(r)).not.toContain(null);
+		expect(new Set(fams(r)).size).toBe(3);
+		const llm = resolveTaskRoles(reg, glm, { mode: "llm", executor: "oneapi/gpt-5", reviewer: "auto" });
+		expect(llm.roles.reviewer).toMatchObject({ id: "glm-5.3", source: "main" });
+	});
+
+	it("显式执行与显式审查同家族：点名执行 / 审查，建议替换审查", () => {
+		const r = resolveTaskRoles(reg, glm, { mode: "code-review", executor: "oneapi/gpt-5", reviewer: "other/GPT-5" });
+		expect(r.ok).toBe(false);
+		expect(r.conflicts[0]?.roles).toEqual(["executor", "reviewer"]);
+		expect(r.suggestion?.role).toBe("reviewer");
+		expect(r.suggestion?.family).not.toBe("openai");
+		expect(r.message).toContain("执行模型");
+	});
+
+	it("只有两个家族：三角色凑不齐 → 点名缺审查、列出要避开的家族；切到仅代码验证或仅模型评审可启动", () => {
+		const two = registry([gpt, glm]);
+		const r = resolveTaskRoles(two, gpt, { mode: "code-review", planner: "auto", executor: "auto", reviewer: "auto" });
+		expect(r).toMatchObject({ ok: false, error: { code: "no-candidate", role: "reviewer" } });
+		expect(r.message).toContain("openai");
+		expect(r.message).toContain("zhipu");
+		expect(resolveTaskRoles(two, gpt, { mode: "code", planner: "auto", executor: "auto", reviewer: "auto" }).ok).toBe(
+			true,
+		);
+		const llm = resolveTaskRoles(two, gpt, { mode: "llm", planner: "auto", executor: "auto", reviewer: "auto" });
+		expect(llm.ok).toBe(true);
+		expect(llm.roles.reviewer?.family).toBe("zhipu");
+		expect(llm.message).toBe("");
+	});
+
+	it("模式切换：同一组选择按各自的隔离规则解析", () => {
+		const pick = { planner: "oneapi/glm-5.3", executor: "oneapi/gpt-5", reviewer: "oneapi/glm-4.6" };
+		const cr = resolveTaskRoles(reg, gpt, { mode: "code-review", ...pick });
+		expect(cr.conflicts.map((c) => c.roles)).toEqual([["planner", "reviewer"]]);
+		const code = resolveTaskRoles(reg, gpt, { mode: "code", ...pick });
+		expect(code.ok).toBe(true);
+		expect(code.roles.reviewer).toBeNull();
+		const llm = resolveTaskRoles(reg, gpt, { mode: "llm", ...pick });
+		expect(llm.ok).toBe(true);
+		expect(llm.roles.planner?.family).toBe("zhipu");
+	});
+
+	it("所选执行模型已失效：报执行无法解析，不静默回落主对话", () => {
+		const r = resolveTaskRoles(reg, gpt, { mode: "code-review", executor: "oneapi/removed-model" });
+		expect(r).toMatchObject({ ok: false, error: { code: "unresolved", role: "executor" } });
+		expect(r.roles.executor).toBeNull();
+		expect(r.message).toContain("执行模型无法解析");
+	});
+});
+
 describe("POST /api/mini-harness/roles", () => {
 	let server: Server;
 	let base = "";

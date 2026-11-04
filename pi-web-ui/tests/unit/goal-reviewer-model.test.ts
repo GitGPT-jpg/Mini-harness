@@ -250,4 +250,31 @@ describe("仅模型评审：显式审查模型", () => {
 		expect(h.clusterEvents[1]).toBe("bind:conv-a");
 		expect(h.clusterEvents.at(-1)).toBe("release:conv-a");
 	});
+
+	it("自动联立：执行 auto 优先主对话（跟随），审查 auto 避开执行家族；状态读回实际模型，偏好记 auto", async () => {
+		const h = makeHarness();
+		await h.svc.setGoal("写发布说明", { maxRounds: 1, locked: true, execModel: "auto", reviewerModel: "auto" });
+		await h.svc.whenDelegatedSettled("conv-a");
+		expect(h.spawned.map((x) => [x.role, x.model])).toEqual([
+			["executor", null],
+			["reviewer", "oneapi/gpt-5"],
+		]);
+		const during = h.sent
+			.filter((m) => m.type === "goal_status")
+			.map((m) => (m as { status: { reviewerModel?: string | null } }).status);
+		expect(during.some((st) => st.reviewerModel === "oneapi/gpt-5")).toBe(true);
+		expect(h.saved.at(-1)).toMatchObject({ execModel: "auto", reviewerModel: "auto" });
+		expect(h.mainModelChanges).toEqual([]);
+	});
+
+	it("显式执行模型（≠ 主对话）：执行对话按它新建，主对话聊天模型不变", async () => {
+		const h = makeHarness();
+		await h.svc.setGoal("写发布说明", { maxRounds: 1, locked: true, execModel: "oneapi/gpt-5", reviewerModel: "auto" });
+		await h.svc.whenDelegatedSettled("conv-a");
+		expect(h.spawned[0]).toMatchObject({ role: "executor", model: "oneapi/gpt-5" });
+		// 审查自动：主对话 glm 与执行 gpt 不同家族 → 主对话自己审，不另起审查对话
+		expect(h.spawned.map((x) => x.role)).toEqual(["executor"]);
+		expect(h.mainModelChanges).toEqual([]);
+		await h.svc.clearGoal();
+	});
 });

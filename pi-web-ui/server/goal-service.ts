@@ -764,14 +764,18 @@ export class GoalService {
 			goal.maxRounds = mr >= 1 ? Math.min(mr, 50) : 0;
 		}
 		if (opts?.locked !== undefined) goal.locked = opts.locked;
-		if (opts?.execModel !== undefined) goal.execModel = opts.execModel || null;
-		goal.reviewerModel = nextReviewer;
+		// 偏好记用户的选择（含「auto」）；目标状态记联立解析后的实际模型（null = 跟随主对话 / 主对话审查），
+		// 界面读回的就是这次任务实际生效的执行与审查模型。
+		const actualOf = (m: { provider?: string; id: string; source: string } | null | undefined): string | null =>
+			!m || m.source === "main" ? null : m.provider ? `${m.provider}/${m.id}` : m.id;
+		goal.execModel = roles ? actualOf(roles.roles.executor) : nextExec;
+		goal.reviewerModel = roles ? actualOf(roles.roles.reviewer) : nextReviewer;
 		this.prefs = {
 			reviewModel: goal.reviewModel,
 			maxRounds: goal.maxRounds,
 			locked: goal.locked,
-			execModel: goal.execModel ?? null,
-			reviewerModel: goal.reviewerModel,
+			execModel: nextExec,
+			reviewerModel: nextReviewer,
 		};
 		// Persist the chosen preferences so they survive reload.
 		this.host.stateStore.saveGoalPrefs(this.host.clientId, {

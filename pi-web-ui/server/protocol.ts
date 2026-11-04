@@ -852,6 +852,9 @@ export type ClientMessage =
 			maxRounds?: number;
 			plannerModel?: string;
 			reviewerModel?: string;
+			/** 执行模型（"provider/id" / "auto" 联立分配；缺省 = 主对话模型）。非主对话模型时
+			 *  任务在独立执行会话里跑，主对话的聊天模型不变。 */
+			executorModel?: string;
 			useReviewer?: boolean;
 			worktree?: boolean;
 			taskId?: string;

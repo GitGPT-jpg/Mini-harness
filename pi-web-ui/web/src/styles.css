@@ -12781,6 +12781,15 @@
         gap: 10px;
     }
 
+    /* 新任务的规划 / 执行 / 审查三个选择器并排；窄屏换行。 */
+    .cockpit-models.three {
+        flex-wrap: wrap;
+    }
+
+    .cockpit-models.three > div {
+        flex: 1 1 140px;
+    }
+
     .cockpit-models > div {
         flex: 1;
         min-width: 0;

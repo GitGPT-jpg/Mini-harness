@@ -205,7 +205,8 @@ describe("新任务弹窗：验收方式三选一", () => {
 		setValue($("#task-reviewer"), "oneapi/qwen3");
 		expect($(".cockpit-model-note.bad")!.textContent).toContain("规划模型与审查模型同属 qwen 家族");
 		expect(startBtn()!.disabled).toBe(true);
-		// 审查与执行（主对话 GLM-4.6）同家族：换 provider 也算同家族
+		// 执行显式选 GLM-4.6 后，审查选同家族（换 provider 也算同家族）→ 执行 / 审查冲突
+		setValue($("#task-executor"), "oneapi/glm-4.6");
 		setValue($("#task-reviewer"), "other/glm-4.5");
 		expect($(".cockpit-model-note.bad")!.textContent).toContain("执行模型与审查模型同属 glm 家族");
 		expect(startBtn()!.disabled).toBe(true);
@@ -228,6 +229,7 @@ describe("新任务弹窗：验收方式三选一", () => {
 				mode: "code",
 				maxRounds: 5,
 				criteria: "npm test 退出码 0",
+				executorModel: "auto",
 				useReviewer: true,
 				reviewerModel: "oneapi/qwen3",
 				worktree: true,
@@ -253,6 +255,7 @@ describe("新任务弹窗：验收方式三选一", () => {
 				mode: "code",
 				maxRounds: 5,
 				validateCmd: "npm test",
+				executorModel: "auto",
 				useReviewer: false,
 				worktree: false,
 			},
@@ -273,6 +276,7 @@ describe("新任务弹窗：验收方式三选一", () => {
 				goal: "优化吞吐",
 				mode: "code",
 				maxRounds: 5,
+				executorModel: "auto",
 				useReviewer: true,
 				primaryMetric: "tps",
 				metricDirection: "maximize",
@@ -305,6 +309,7 @@ describe("新任务弹窗：验收方式三选一", () => {
 				mode: "code",
 				maxRounds: 6,
 				criteria: "tps 越大越好",
+				executorModel: "auto",
 				useReviewer: true,
 				primaryMetric: "tps",
 				metricDirection: "maximize",
@@ -876,22 +881,29 @@ describe("任务台：代码 loop 的行（D-12-3）", () => {
 
 describe("新任务弹窗：审查模型可选（服务端支持 reviewerModel）", () => {
 	const roleStub = (body: { executor?: string; reviewer?: string }) => {
-		const reviewer = body.reviewer || "oneapi/glm-4.6";
-		const executor = body.executor || "oneapi/glm-4.6";
+		const fam0 = (s: string) => (s.includes("glm") ? "glm" : s.includes("qwen") ? "qwen" : "deepseek");
+		// 与服务端联立分配同口径：执行自动 = 主对话 GLM-4.6；审查自动 = 避开执行家族的第一个
+		const executor = !body.executor || body.executor === "auto" ? "oneapi/glm-4.6" : body.executor;
+		const reviewer =
+			!body.reviewer || body.reviewer === "auto"
+				? fam0(executor) === "glm"
+					? "oneapi/qwen3"
+					: "oneapi/glm-4.6"
+				: body.reviewer;
 		const fam = (s: string) => (s.includes("glm") ? "glm" : s.includes("qwen") ? "qwen" : "deepseek");
 		const view = (s: string, explicit: boolean) => ({
 			provider: "oneapi",
 			id: s.split("/")[1],
 			family: fam(s),
-			source: explicit ? "explicit" : "main",
+			source: explicit ? "explicit" : s === "oneapi/glm-4.6" ? "main" : "auto",
 		});
 		const same = fam(reviewer) === fam(executor);
 		return {
 			ok: !same,
 			roles: {
 				planner: view("oneapi/glm-4.6", false),
-				executor: view(executor, !!body.executor),
-				reviewer: view(reviewer, !!body.reviewer),
+				executor: view(executor, !!body.executor && body.executor !== "auto"),
+				reviewer: view(reviewer, !!body.reviewer && body.reviewer !== "auto"),
 			},
 			conflicts: same ? [{ roles: ["executor", "reviewer"], family: fam(executor), models: [executor, reviewer] }] : [],
 			error: null,
@@ -899,7 +911,7 @@ describe("新任务弹窗：审查模型可选（服务端支持 reviewerModel�
 		};
 	};
 
-	it("默认审查与执行同家族 → 指出两个角色与模型；一键改选另一家族审查后可启动，set_goal 带 reviewerModel", async () => {
+	it("三个角色都可选：自动联立出三个实际模型；显式执行与审查同家族 → 指出冲突并一键改选；set_goal 带执行与审查", async () => {
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async (url: string, init?: { body?: string }) => ({
@@ -919,10 +931,18 @@ describe("新任务弹窗：审查模型可选（服务端支持 reviewerModel�
 		await openModal();
 		click($('input[name="task-accept"][value="llm"]'));
 		setValue($("#task-goal"), "写一份发布说明");
-		expect($("#task-llm-reviewer")!.textContent).toContain("跟随主对话（GLM-4.6）");
+		expect($("#task-llm-planner")).not.toBeNull();
+		expect($<HTMLSelectElement>("#task-exec")!.value).toBe("auto");
+		expect($<HTMLSelectElement>("#task-llm-reviewer")!.value).toBe("auto");
+		await settle();
+		// 全自动：执行 = 主对话 GLM-4.6，审查自动避开到 qwen3
+		expect($(".cockpit-model-note.bad")).toBeNull();
+		expect($(".task-role-summary")!.textContent).toContain("审查：qwen3（qwen · 自动）");
+		setValue($("#task-exec"), "oneapi/glm-4.6");
+		setValue($("#task-llm-reviewer"), "other/glm-4.5");
 		await settle();
 		expect($(".cockpit-model-note.bad")!.textContent).toContain(
-			"执行模型 oneapi/glm-4.6 与审查模型 oneapi/glm-4.6 同属 glm 家族",
+			"执行模型 oneapi/glm-4.6 与审查模型 other/glm-4.5 同属 glm 家族",
 		);
 		expect(startBtn()!.disabled).toBe(true);
 		expect($(".task-role-fix")!.textContent).toBe("审查改用 qwen3");
@@ -934,21 +954,69 @@ describe("新任务弹窗：审查模型可选（服务端支持 reviewerModel�
 		expect(startBtn()!.disabled).toBe(false);
 		click(startBtn());
 		expect(sent).toEqual([
-			{ type: "set_goal_prefs", maxRounds: 3, reviewModel: "", execModel: "", reviewerModel: "oneapi/qwen3" },
-			{ type: "set_goal", goal: "写一份发布说明", maxRounds: 3, locked: true, reviewerModel: "oneapi/qwen3" },
+			{
+				type: "set_goal_prefs",
+				maxRounds: 3,
+				reviewModel: "",
+				execModel: "oneapi/glm-4.6",
+				reviewerModel: "oneapi/qwen3",
+			},
+			{
+				type: "set_goal",
+				goal: "写一份发布说明",
+				maxRounds: 3,
+				locked: true,
+				execModel: "oneapi/glm-4.6",
+				reviewerModel: "oneapi/qwen3",
+			},
 		]);
+	});
+
+	it("可用家族不足：点名缺哪个角色、列出要避开的家族，启动保持禁用", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string) => ({
+				ok: true,
+				json: async () =>
+					String(url).includes("/roles")
+						? {
+								ok: false,
+								mode: "code-review",
+								roles: {
+									planner: { provider: "oneapi", id: "qwen3", family: "qwen", source: "auto" },
+									executor: { provider: "oneapi", id: "glm-4.6", family: "glm", source: "main" },
+									reviewer: null,
+								},
+								conflicts: [],
+								error: { code: "no-candidate", role: "reviewer" },
+								suggestion: null,
+							}
+						: { models: MODELS },
+			})),
+		);
+		mount(taskModal());
+		await openModal();
+		setValue($("#task-goal"), "跑测试");
+		await act(async () => void (await new Promise((r) => setTimeout(r, 220))));
+		expect($(".cockpit-model-note.bad")!.textContent).toBe(
+			"没有可用的审查模型：需要一个不属于 glm / qwen 家族的模型，请在「模型与服务商」里添加并配置密钥。",
+		);
+		expect($(".task-role-fix")).toBeNull();
+		expect(startBtn()!.disabled).toBe(true);
 	});
 
 	it("切到仅代码验收：残留的审查选择不进请求、不阻断启动", async () => {
 		mount(taskModal());
 		await openModal();
 		setValue($("#task-goal"), "跑测试");
+		setValue($("#task-executor"), "oneapi/glm-4.6");
 		setValue($("#task-reviewer"), "other/glm-4.5");
 		expect(startBtn()!.disabled).toBe(true);
 		click($('input[name="task-accept"][value="code"]'));
+		expect($("#task-reviewer")).toBeNull();
 		expect(startBtn()!.disabled).toBe(false);
 		click(startBtn());
-		expect(sent[0]).toMatchObject({ type: "loop_start_request", useReviewer: false });
+		expect(sent[0]).toMatchObject({ type: "loop_start_request", useReviewer: false, executorModel: "oneapi/glm-4.6" });
 		expect(sent[0]).not.toHaveProperty("reviewerModel");
 	});
 });
