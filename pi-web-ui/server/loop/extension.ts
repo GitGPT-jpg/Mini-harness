@@ -49,6 +49,7 @@ import {
 	buildRecoverySummary,
 	classifyRecovery,
 	getLease,
+	getProcessStartId,
 	heartbeat,
 	LEASE_HEARTBEAT_MS,
 	leaseExpired,
@@ -99,6 +100,34 @@ function abortRun(runId: string): void {
 	const ac = runAborts.get(runId);
 	if (ac) ac.abort();
 }
+
+// ---------- 绑定会话的模型回合取消（停止要作用于 Pi 回合，而不只是 validator 进程） ----------
+
+/**
+ * 服务层为每个活跃 run 注册的回合控制器：abort 取消该 run 绑定会话（原会话或
+ * worktree 执行者）的在途回合，turnEnded 给出可核验的「回合已结束」判定。
+ * 宿主消失或会话未加载时没有注册项：不存在可取消的回合，不能据此声称回合仍在运行。
+ */
+const runTurnControllers = new Map<string, { abort: () => void; turnEnded: () => boolean }>();
+
+/** 服务层注册/注销回合控制器（startLoop/resumeLoop/stopLoop 入口调用）。 */
+export function registerRunTurnController(
+	runId: string,
+	controller: { abort: () => void; turnEnded: () => boolean },
+): void {
+	runTurnControllers.set(runId, controller);
+}
+export function unregisterRunTurnController(runId: string): void {
+	runTurnControllers.delete(runId);
+}
+
+/**
+ * 扩展可见的「本进程有在途回合」标记：before_agent_start 置位、agent_end 清除。
+ * 服务层控制器未注册时（例如宿主刚重启、会话尚未恢复）作为回合在途的兜底判断；
+ * 已注册时以服务层的 turnEnded 为准（agent_end 可能因强制重置不触发）。
+ */
+const runTurnActive = new Set<string>();
+const runTurnSessions = new Map<string, string>();
 
 // ---------- 租约心跳生命周期（Task B：心跳接入真实服务生命周期） ----------
 
@@ -307,8 +336,17 @@ export interface LoopState {
 	taskContext?: TaskContext;
 	/** Result application and acceptance facts share this single state commit. */
 	consumedResults?: Record<string, { digest: string; round: number; stage: string }>;
-	validationIdentity?: { round: number; attemptId: string | null; fingerprint: EnvironmentFingerprint } & AttemptIdentity;
-	reviewStep?: { id: string; round: number; status: "requested" | "completed"; result?: Awaited<ReturnType<typeof runReview>> };
+	validationIdentity?: {
+		round: number;
+		attemptId: string | null;
+		fingerprint: EnvironmentFingerprint;
+	} & AttemptIdentity;
+	reviewStep?: {
+		id: string;
+		round: number;
+		status: "requested" | "completed";
+		result?: Awaited<ReturnType<typeof runReview>>;
+	};
 	taskId: string | null;
 	goal: string;
 	workspace: string;
@@ -343,6 +381,17 @@ export interface LoopState {
 	stopRequestedAt?: string | null;
 	/** 本地执行（validator/precheck 子进程组）确认退出时间；未确认 = 仍可能在途或远端未知。 */
 	stopConfirmedAt?: string | null;
+	/**
+	 * 接管前从旧租约保留的执行实体证据（旧协议 run 可能没有 operation）。
+	 * 只作核对线索：身份未核实时不向该 pid 发信号，也不自动重放任务。
+	 */
+	legacyExecutionEntities?: Array<{
+		pid: number;
+		host: string | null;
+		startId: string | null;
+		capturedAt: string;
+		generation: number;
+	}>;
 	/** 最近一轮的指标门禁结果（命令成功 ≠ 指标达标）。 */
 	lastMetricGate?: MetricGateResult | null;
 	maxRounds: number;
@@ -441,7 +490,7 @@ export type LoopEvent =
 
 /** 多客户端事件上报器注册表：每个 ClientSession 注册一份，后注册不再覆盖先注册。
  *  事件按 sessionId 由各上报器自行过滤路由（handleLoopEvent 只更新属于本客户端的会话）。 */
-const eventReporters = new Set<((e: LoopEvent) => void)>();
+const eventReporters = new Set<(e: LoopEvent) => void>();
 
 /** 注册全局事件上报器，返回注销函数（dispose 时调用退订）。上报器异常不影响其它上报器。 */
 export function addLoopEventReporter(fn: (e: LoopEvent) => void): () => void {
@@ -529,6 +578,7 @@ function normalizeState(st: LoopState): LoopState {
 	if (st.environmentFingerprint === undefined) st.environmentFingerprint = null;
 	if (st.recoveryState === undefined) st.recoveryState = null;
 	if (st.observedBest === undefined) st.observedBest = null;
+	if (st.legacyExecutionEntities === undefined) st.legacyExecutionEntities = [];
 	return st;
 }
 
@@ -543,8 +593,12 @@ function saveState(st: LoopState, token?: ExecToken): boolean {
 		const current = loadState(st.runId);
 		const lease = getLease(runDir(st.runId));
 		if (!lease || leaseExpired(lease) || lease.owner !== st.owner || lease.generation !== st.generation) return false;
-		if (current && ((current.revision ?? 0) !== (st.revision ?? 0) ||
-			(token ? !matchesToken(current, token) : current.owner !== st.owner || current.generation !== st.generation))) return false;
+		if (
+			current &&
+			((current.revision ?? 0) !== (st.revision ?? 0) ||
+				(token ? !matchesToken(current, token) : current.owner !== st.owner || current.generation !== st.generation))
+		)
+			return false;
 		const next = { ...st, revision: (st.revision ?? 0) + 1, updatedAt: now() };
 		writeFileAtomicPreserveSync(statePath(st.runId), JSON.stringify(next, null, 2) + "\n");
 		Object.assign(st, next);
@@ -574,15 +628,38 @@ function journal(st: LoopState, event: string, extra: Record<string, unknown> = 
 	} catch {}
 }
 
-/** 全部运行（读 state.json；任务台 / 运行状态接口也用它）。 */
+/** 有界只读扫描；损坏/超限明确失败而非返回部分或空列表，避免遗漏活跃任务后重复创建。 */
 export function listRuns(): LoopState[] {
+	let directory: fs.Dir;
 	try {
-		return fs
-			.readdirSync(ROOT)
-			.map((n) => loadState(n))
-			.filter((s): s is LoopState => !!s);
-	} catch {
-		return [];
+		directory = fs.opendirSync(ROOT);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+		throw error;
+	}
+	const deadline = performance.now() + 1000;
+	let entries = 0;
+	let bytes = 0;
+	const runs: LoopState[] = [];
+	try {
+		for (let entry = directory.readSync(); entry; entry = directory.readSync()) {
+			if (++entries > 10_000 || performance.now() > deadline) throw new Error("Run list scan budget exceeded");
+			if (!entry.isDirectory() || !RUN_ID_RE.test(entry.name)) continue;
+			try {
+				const size = fs.statSync(statePath(entry.name)).size;
+				bytes += size;
+				if (size > 16 * 1024 * 1024 || bytes > 64 * 1024 * 1024) throw new Error("Run list state size budget exceeded");
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+				throw error;
+			}
+			const st = loadState(entry.name);
+			if (st) runs.push(st);
+		}
+		if (performance.now() > deadline) throw new Error("Run list scan budget exceeded");
+		return runs;
+	} finally {
+		directory.closeSync();
 	}
 }
 
@@ -838,14 +915,28 @@ async function runValidation(pi: ExtensionAPI, st: LoopState): Promise<Validatio
 	if (existing) return existing;
 	const pending = runValidationOnce(pi, st);
 	validationFlights.set(st.runId, pending);
-	try { return await pending; }
-	catch (error) {
+	try {
+		return await pending;
+	} catch (error) {
 		if (stillCurrent(tokenOf(st))) throw error;
-		return { pass: false, noValidator: false, precheckFailed: false, cancelled: true, code: null,
-			evidence: null, output: "执行已停止或控制权已变更", metrics: null, scenario: null,
-			snapshotRef: null, snapshotSha: null, recoverable: false, workspaceChangedDuringValidation: false };
+		return {
+			pass: false,
+			noValidator: false,
+			precheckFailed: false,
+			cancelled: true,
+			code: null,
+			evidence: null,
+			output: "执行已停止或控制权已变更",
+			metrics: null,
+			scenario: null,
+			snapshotRef: null,
+			snapshotSha: null,
+			recoverable: false,
+			workspaceChangedDuringValidation: false,
+		};
+	} finally {
+		if (validationFlights.get(st.runId) === pending) validationFlights.delete(st.runId);
 	}
-	finally { if (validationFlights.get(st.runId) === pending) validationFlights.delete(st.runId); }
 }
 
 async function validationFromOperation(st: LoopState, opId: string): Promise<ValidationResult> {
@@ -853,25 +944,48 @@ async function validationFromOperation(st: LoopState, opId: string): Promise<Val
 	const op = observed.record;
 	if (!op?.result || !op.resultDigest) throw new Error("操作结果未知，不能重跑");
 	const expected = op.stage === "precheck" ? { cmd: "bash", args: ["-lc", st.precheckCmd] } : resolveValidator(st);
-	if (op.runId !== st.runId || op.round !== st.round || op.attemptId !== st.attemptId ||
-		!["validate", "precheck"].includes(op.stage) || real(op.cwd) !== real(st.workspace) ||
-		!expected || op.command !== expected.cmd || JSON.stringify(op.args) !== JSON.stringify(expected.args)) {
+	if (
+		op.runId !== st.runId ||
+		op.round !== st.round ||
+		op.attemptId !== st.attemptId ||
+		!["validate", "precheck"].includes(op.stage) ||
+		real(op.cwd) !== real(st.workspace) ||
+		!expected ||
+		op.command !== expected.cmd ||
+		JSON.stringify(op.args) !== JSON.stringify(expected.args)
+	) {
 		throw new Error("结果与当前执行契约不匹配");
 	}
 	const identity = st.validationIdentity;
-	if (!identity || identity.round !== st.round || identity.attemptId !== st.attemptId) throw new Error("缺少执行前身份");
-	if (op.snapshotSha !== identity.snapshotSha || op.snapshotRef !== identity.snapshotRef) throw new Error("结果快照身份冲突");
+	if (!identity || identity.round !== st.round || identity.attemptId !== st.attemptId)
+		throw new Error("缺少执行前身份");
+	if (op.snapshotSha !== identity.snapshotSha || op.snapshotRef !== identity.snapshotRef)
+		throw new Error("结果快照身份冲突");
 	const unchanged = fingerprintMatches(identity.fingerprint, currentFingerprintOf(st, true));
 	const combined = observed.stdout + "\n" + observed.stderr;
 	return {
-		opId, resultDigest: op.resultDigest,
-		pass: observed.code === 0 && !observed.killed && !observed.timedOut &&
-			!op.result.killed && !op.result.signal && !op.result.error && !op.cancelRequestedAt &&
-			!observed.stdoutTruncated && !observed.stderrTruncated,
-		noValidator: false, precheckFailed: op.stage === "precheck",
-		code: observed.code, output: combined, evidence: op.stdoutFile,
-		metrics: parseHarnessMetrics(combined), scenario: parseHarnessScenario(combined),
-		snapshotRef: identity.snapshotRef, snapshotSha: identity.snapshotSha, recoverable: identity.recoverable,
+		opId,
+		resultDigest: op.resultDigest,
+		pass:
+			observed.code === 0 &&
+			!observed.killed &&
+			!observed.timedOut &&
+			!op.result.killed &&
+			!op.result.signal &&
+			!op.result.error &&
+			!op.cancelRequestedAt &&
+			!observed.stdoutTruncated &&
+			!observed.stderrTruncated,
+		noValidator: false,
+		precheckFailed: op.stage === "precheck",
+		code: observed.code,
+		output: combined,
+		evidence: op.stdoutFile,
+		metrics: parseHarnessMetrics(combined),
+		scenario: parseHarnessScenario(combined),
+		snapshotRef: identity.snapshotRef,
+		snapshotSha: identity.snapshotSha,
+		recoverable: identity.recoverable,
 		workspaceChangedDuringValidation: !unchanged,
 	};
 }
@@ -882,11 +996,22 @@ async function runValidationOnce(pi: ExtensionAPI, st: LoopState): Promise<Valid
 	const token = tokenOf(st);
 	try {
 		if (!stillCurrent(token)) throw new Error("执行权已失效");
-		if (st.validatedRound === st.round && st.lastVerdict) {
-			return { pass: st.lastVerdict === "pass", noValidator: false, precheckFailed: false,
-				code: st.lastCode, evidence: null, output: st.lastEvidence, metrics: st.lastMetrics ?? null,
-				scenario: st.metricScenario ?? null, snapshotRef: null, snapshotSha: null, recoverable: false,
-				workspaceChangedDuringValidation: st.history.at(-1)?.workspaceChangedDuringValidation ?? false };
+		// 复用旧结果的前提：证据仍对应当前 round/attempt 的执行内容与验收契约。
+		if (st.validatedRound === st.round && st.lastVerdict && evidenceStillValid(st)) {
+			return {
+				pass: st.lastVerdict === "pass",
+				noValidator: false,
+				precheckFailed: false,
+				code: st.lastCode,
+				evidence: null,
+				output: st.lastEvidence,
+				metrics: st.lastMetrics ?? null,
+				scenario: st.metricScenario ?? null,
+				snapshotRef: null,
+				snapshotSha: null,
+				recoverable: false,
+				workspaceChangedDuringValidation: st.history.at(-1)?.workspaceChangedDuringValidation ?? false,
+			};
 		}
 		const prior = listOperations(st.runId).filter((op) => op.round === st.round && op.attemptId === st.attemptId);
 		const validator = prior.find((op) => op.stage === "validate");
@@ -896,7 +1021,8 @@ async function runValidationOnce(pi: ExtensionAPI, st: LoopState): Promise<Valid
 			return validationFromOperation(st, validator.opId);
 		}
 		// 验收前绑定代码身份（Task 3）：先快照 candidate-A（真正被 validator 读取的代码）。
-		const preId = st.validationIdentity?.round === st.round ? st.validationIdentity : await captureAttemptIdentity(st, token);
+		const preId =
+			st.validationIdentity?.round === st.round ? st.validationIdentity : await captureAttemptIdentity(st, token);
 		if (!stillCurrent(token)) throw new Error("执行权已失效");
 		if (!st.validationIdentity || st.validationIdentity.round !== st.round) {
 			const fingerprint = currentFingerprintOf(st, true);
@@ -906,7 +1032,9 @@ async function runValidationOnce(pi: ExtensionAPI, st: LoopState): Promise<Valid
 		}
 		const preCmd = st.precheckCmd ?? "";
 		const execOptions = {
-			attemptId: st.attemptId, ...preId, canControl: () => stillCurrent(token),
+			attemptId: st.attemptId,
+			...preId,
+			canControl: () => stillCurrent(token),
 		};
 
 		// L0 快速预检：若配置了 precheckCmd，先秒级拦截语法/导包/配置错误，不浪费集群与压测资源
@@ -914,16 +1042,18 @@ async function runValidationOnce(pi: ExtensionAPI, st: LoopState): Promise<Valid
 			let pre: Partial<LoopExecResult>;
 			try {
 				const previous = prior.find((op) => op.stage === "precheck");
-				pre = previous ? { ...(await observeOperation(st.runId, previous.opId)), opId: previous.opId } : await loopExec("bash", ["-lc", preCmd], {
-					...execOptions,
-					cwd,
-					timeout: 5 * 60 * 1000,
-					signal: ac.signal,
-					runId: st.runId,
-					stage: "precheck",
-					round: st.round,
-					onSpawn: (pid) => recordTaskPid(st.runId, pid, st.owner!, st.generation),
-				});
+				pre = previous
+					? { ...(await observeOperation(st.runId, previous.opId)), opId: previous.opId }
+					: await loopExec("bash", ["-lc", preCmd], {
+							...execOptions,
+							cwd,
+							timeout: 5 * 60 * 1000,
+							signal: ac.signal,
+							runId: st.runId,
+							stage: "precheck",
+							round: st.round,
+							onSpawn: (pid) => recordTaskPid(st.runId, pid, st.owner!, st.generation),
+						});
 			} catch (e) {
 				if (!loopExecOverride) throw e;
 				pre = { stdout: "", stderr: String((e as Error)?.message || e), code: -1, killed: false };
@@ -933,18 +1063,44 @@ async function runValidationOnce(pi: ExtensionAPI, st: LoopState): Promise<Valid
 			if (pre.opId) {
 				const result = await validationFromOperation(st, pre.opId);
 				if (!result.pass || result.workspaceChangedDuringValidation) return result;
-				st.consumedResults = { ...st.consumedResults, [pre.opId]: { digest: result.resultDigest!, round: st.round, stage: "precheck" } };
+				st.consumedResults = {
+					...st.consumedResults,
+					[pre.opId]: { digest: result.resultDigest!, round: st.round, stage: "precheck" },
+				};
 				if (!saveState(st, token)) throw new Error("预检结果提交冲突");
 			}
 			if (pre.killed) {
-				return { pass: false, noValidator: false, precheckFailed: false, cancelled: true, code: null, evidence: null, output: "运行已停止：L0 预检进程已被取消。", metrics: null, scenario: null, snapshotRef: preId.snapshotRef, snapshotSha: preId.snapshotSha, recoverable: preId.recoverable, workspaceChangedDuringValidation: false };
+				return {
+					pass: false,
+					noValidator: false,
+					precheckFailed: false,
+					cancelled: true,
+					code: null,
+					evidence: null,
+					output: "运行已停止：L0 预检进程已被取消。",
+					metrics: null,
+					scenario: null,
+					snapshotRef: preId.snapshotRef,
+					snapshotSha: preId.snapshotSha,
+					recoverable: preId.recoverable,
+					workspaceChangedDuringValidation: false,
+				};
 			}
 			if (pre.code !== 0) {
 				const output =
-					"[L0 precheck] $ " + preCmd + "\n" +
-					"exit=" + pre.code + (pre.killed ? " (killed/timeout)" : "") + "（快速预检未通过，已跳过 L1 完整验收）\n" +
-					"--- stdout (tail) ---\n" + tail(pre.stdout, 4000) + "\n" +
-					"--- stderr (tail) ---\n" + tail(pre.stderr, 4000) + "\n";
+					"[L0 precheck] $ " +
+					preCmd +
+					"\n" +
+					"exit=" +
+					pre.code +
+					(pre.killed ? " (killed/timeout)" : "") +
+					"（快速预检未通过，已跳过 L1 完整验收）\n" +
+					"--- stdout (tail) ---\n" +
+					tail(pre.stdout, 4000) +
+					"\n" +
+					"--- stderr (tail) ---\n" +
+					tail(pre.stderr, 4000) +
+					"\n";
 				let evidence = "";
 				try {
 					const dir = path.join(runDir(st.runId), "evidence");
@@ -952,11 +1108,38 @@ async function runValidationOnce(pi: ExtensionAPI, st: LoopState): Promise<Valid
 					evidence = path.join(dir, "round-" + st.round + "-" + Date.now() + ".log");
 					fs.writeFileSync(evidence, output);
 				} catch {}
-				return { pass: false, noValidator: false, precheckFailed: true, code: pre.code ?? -1, evidence, output, metrics: null, scenario: null, snapshotRef: preId.snapshotRef, snapshotSha: preId.snapshotSha, recoverable: preId.recoverable, workspaceChangedDuringValidation: false };
+				return {
+					pass: false,
+					noValidator: false,
+					precheckFailed: true,
+					code: pre.code ?? -1,
+					evidence,
+					output,
+					metrics: null,
+					scenario: null,
+					snapshotRef: preId.snapshotRef,
+					snapshotSha: preId.snapshotSha,
+					recoverable: preId.recoverable,
+					workspaceChangedDuringValidation: false,
+				};
 			}
 			// 停止/取消守卫：L0 预检期间若被停止（epoch 已递增），绝不再启动昂贵的 L1 完整验收。
 			if (!stillCurrent(token)) {
-				return { pass: false, noValidator: false, precheckFailed: false, cancelled: true, code: null, evidence: null, output: "运行已停止：L0 预检期间收到停止，已跳过 L1 完整验收。", metrics: null, scenario: null, snapshotRef: preId.snapshotRef, snapshotSha: preId.snapshotSha, recoverable: preId.recoverable, workspaceChangedDuringValidation: false };
+				return {
+					pass: false,
+					noValidator: false,
+					precheckFailed: false,
+					cancelled: true,
+					code: null,
+					evidence: null,
+					output: "运行已停止：L0 预检期间收到停止，已跳过 L1 完整验收。",
+					metrics: null,
+					scenario: null,
+					snapshotRef: preId.snapshotRef,
+					snapshotSha: preId.snapshotSha,
+					recoverable: preId.recoverable,
+					workspaceChangedDuringValidation: false,
+				};
 			}
 		}
 
@@ -998,7 +1181,21 @@ async function runValidationOnce(pi: ExtensionAPI, st: LoopState): Promise<Valid
 		if (!stillCurrent(token)) throw new Error("执行权已失效");
 		if (res.opId) return validationFromOperation(st, res.opId);
 		if (res.killed) {
-			return { pass: false, noValidator: false, precheckFailed: false, cancelled: true, code: res.code ?? null, evidence: null, output: "运行已停止：L1 validator 进程已被取消。", metrics: null, scenario: null, snapshotRef: preId.snapshotRef, snapshotSha: preId.snapshotSha, recoverable: preId.recoverable, workspaceChangedDuringValidation: false };
+			return {
+				pass: false,
+				noValidator: false,
+				precheckFailed: false,
+				cancelled: true,
+				code: res.code ?? null,
+				evidence: null,
+				output: "运行已停止：L1 validator 进程已被取消。",
+				metrics: null,
+				scenario: null,
+				snapshotRef: preId.snapshotRef,
+				snapshotSha: preId.snapshotSha,
+				recoverable: preId.recoverable,
+				workspaceChangedDuringValidation: false,
+			};
 		}
 
 		// 验收后校验代码指纹（Task 3）：工作区是否在验收期间发生变化。
@@ -1011,10 +1208,19 @@ async function runValidationOnce(pi: ExtensionAPI, st: LoopState): Promise<Valid
 		const scenario = parseHarnessScenario(combined);
 		const output =
 			(preCmd ? "[L0 precheck] $ " + preCmd + " -> PASS\n" : "") +
-			"$ " + r.label + "\n" +
-			"exit=" + res.code + (res.killed ? " (killed/timeout)" : "") + "\n" +
-			"--- stdout (tail) ---\n" + tail(res.stdout, 6000) + "\n" +
-			"--- stderr (tail) ---\n" + tail(res.stderr, 4000) + "\n";
+			"$ " +
+			r.label +
+			"\n" +
+			"exit=" +
+			res.code +
+			(res.killed ? " (killed/timeout)" : "") +
+			"\n" +
+			"--- stdout (tail) ---\n" +
+			tail(res.stdout, 6000) +
+			"\n" +
+			"--- stderr (tail) ---\n" +
+			tail(res.stderr, 4000) +
+			"\n";
 		let evidence = "";
 		try {
 			const dir = path.join(runDir(st.runId), "evidence");
@@ -1094,7 +1300,8 @@ async function recordValidationOutcome(
 	},
 	token: ExecToken,
 ): Promise<boolean> {
-	if (!v.opId && st.validatedRound === st.round) return stillCurrent(token);
+	// 无 opId 的重复提交（loop_validate 工具复用路径）同样要求证据仍对应当前内容。
+	if (!v.opId && st.validatedRound === st.round && evidenceStillValid(st)) return stillCurrent(token);
 	if (v.opId) {
 		const round = st.round;
 		const attempt = st.attemptId;
@@ -1109,8 +1316,10 @@ async function recordValidationOutcome(
 			return false;
 		}
 		Object.assign(st, fresh);
-		st.consumedResults = { ...st.consumedResults,
-			[v.opId!]: { digest: v.resultDigest!, round: st.round, stage: v.precheckFailed ? "precheck" : "validate" } };
+		st.consumedResults = {
+			...st.consumedResults,
+			[v.opId!]: { digest: v.resultDigest!, round: st.round, stage: v.precheckFailed ? "precheck" : "validate" },
+		};
 	}
 	const at = now();
 	const verdict = v.pass ? "pass" : "fail";
@@ -1417,12 +1626,7 @@ function tokenOf(st: LoopState): ExecToken {
 }
 
 function matchesToken(fresh: LoopState | null, token: ExecToken): boolean {
-	return (
-		!!fresh &&
-		fresh.owner === token.owner &&
-		fresh.generation === token.generation &&
-		fresh.epoch === token.epoch
-	);
+	return !!fresh && fresh.owner === token.owner && fresh.generation === token.generation && fresh.epoch === token.epoch;
 }
 
 /**
@@ -1434,8 +1638,16 @@ function stillCurrent(token: ExecToken) {
 	if (!locallyClaimed(token.runId, token.owner, token.generation)) return false;
 	const fresh = loadState(token.runId);
 	const lease = getLease(runDir(token.runId));
-	return !!fresh && fresh.status === "active" && !fresh.stopRequestedAt && matchesToken(fresh, token) &&
-		!!lease && !leaseExpired(lease) && lease.owner === token.owner && lease.generation === token.generation;
+	return (
+		!!fresh &&
+		fresh.status === "active" &&
+		!fresh.stopRequestedAt &&
+		matchesToken(fresh, token) &&
+		!!lease &&
+		!leaseExpired(lease) &&
+		lease.owner === token.owner &&
+		lease.generation === token.generation
+	);
 }
 
 /** Service dispatch uses the same lease fence as command/reviewer dispatch. */
@@ -1514,15 +1726,61 @@ async function reviewOnce(pi: ExtensionAPI, ctx: LoopCtx, st: LoopState, v: { co
 		reviewsInFlight.delete(st.reviewStep.id);
 	}
 }
+/**
+ * 生成「实际准备提交」的树并核对它与通过验收/评审的内容一致，然后提交该树：
+ * 优先使用验收绑定的不可变快照树（validationIdentity.snapshotSha）；无预存快照时
+ * 用影子 index 重建当前内容的树，并在 commit-tree 前再次核对证据。commit-tree 只
+ * 提交已构建的树对象，核对之后的并发改动不会进入提交。
+ * 返回 null=无法构建已核验树（保持未提交）；"drift"=证据与当前内容不一致（不得判完成）。
+ */
+async function commitVerifiedWorktreeTree(st: LoopState): Promise<string | null | "drift"> {
+	const worktree = st.worktreeDir!;
+	const identity = st.validationIdentity;
+	let tree: string;
+	if (identity?.snapshotSha) {
+		tree = gitSync(["-C", worktree, "rev-parse", identity.snapshotSha + "^{tree}"], worktree, 15000).trim();
+	} else {
+		const fresh = await createWorkspaceSnapshot(st.workspace);
+		if (!fresh) return null;
+		tree = gitSync(["-C", worktree, "rev-parse", fresh + "^{tree}"], worktree, 15000).trim();
+	}
+	if (!evidenceStillValid(st)) return "drift";
+	const branch = st.worktreeBranch!;
+	const parent = gitSync(["-C", worktree, "rev-parse", "--verify", "refs/heads/" + branch], worktree, 15000).trim();
+	if (gitSync(["-C", worktree, "rev-parse", parent + "^{tree}"], worktree, 15000).trim() === tree) return tree;
+	const commit = gitSync(
+		["-C", worktree, "commit-tree", tree, "-p", parent, "-m", `mini-harness run ${st.runId}`],
+		worktree,
+		15000,
+	).trim();
+	gitSync(["-C", worktree, "update-ref", "refs/heads/" + branch, commit], worktree, 15000);
+	return commit;
+}
+
+/** 同步路径（用户「按代码验证收下」）取验收绑定的不可变树；无预存快照返回 null。 */
+function verifiedTreeFromIdentity(st: LoopState): string | null {
+	const identity = st.validationIdentity;
+	if (!identity?.snapshotSha || !st.worktreeDir) return null;
+	return gitSync(["-C", st.worktreeDir, "rev-parse", identity.snapshotSha + "^{tree}"], st.worktreeDir, 15000).trim();
+}
+
 /** 代码 loop 判定：validator 是硬门禁，reviewer 是否决层。 */
 async function handleVerdict(
 	pi: ExtensionAPI,
 	ctx: LoopCtx,
 	st: LoopState,
-	v: { pass: boolean; noValidator?: boolean; code: number | null; output: string; workspaceChangedDuringValidation?: boolean },
+	v: {
+		pass: boolean;
+		noValidator?: boolean;
+		code: number | null;
+		output: string;
+		workspaceChangedDuringValidation?: boolean;
+	},
 ) {
 	const token = tokenOf(st);
-	if (!stillCurrent(token)) return;
+	if (!stillCurrent(token)) {
+		return;
+	}
 	// Task 3：验收期间工作区发生变化 → 本轮结果不可信，不得判通过 / 不得选为最优 Checkpoint。
 	if (v.workspaceChangedDuringValidation) {
 		advanceOrStop(
@@ -1537,14 +1795,7 @@ async function handleVerdict(
 	}
 	// Task 2：命令成功（exit 0）不等于指标达标。主指标缺失 / 数值非法 / 阈值或硬约束不满足 → 不判完成。
 	if (v.pass && st.lastMetricGate && !st.lastMetricGate.ok) {
-		advanceOrStop(
-			pi,
-			st,
-			v,
-			"指标门禁未通过：\n" + (st.lastMetricGate.reasons || []).join("\n"),
-			"metric-gate",
-			token,
-		);
+		advanceOrStop(pi, st, v, "指标门禁未通过：\n" + (st.lastMetricGate.reasons || []).join("\n"), "metric-gate", token);
 		return;
 	}
 	if (v.pass) {
@@ -1552,6 +1803,18 @@ async function handleVerdict(
 		if (!review) return;
 		if (!stillCurrent(token)) {
 			journal(st, "late-callback-dropped", { at: "handleVerdict/review", epoch: token.epoch });
+			return;
+		}
+		// reviewer 等待期间代码发生变化 → 旧结论不对应新版本，不得据此通过或提交。
+		if (!evidenceStillValid(st)) {
+			advanceOrStop(
+				pi,
+				st,
+				v,
+				"评审期间工作区内容发生变化，评审结论不再对应当前代码；请基于稳定代码重新验证。",
+				"workspace-changed-during-review",
+				token,
+			);
 			return;
 		}
 		st.lastReview = review;
@@ -1599,31 +1862,60 @@ async function handleVerdict(
 		st.acceptance = review.verdict === "pass" ? "passed" : "passed-validator-only";
 		if (st.worktreeDir && st.worktreeBranch && !st.worktreeCommitted) {
 			try {
-				if (!stillCurrent(token)) return;
-				await pi.exec("git", ["-C", st.worktreeDir, "add", "-A"], { cwd: st.worktreeDir, timeout: 60000 });
-				if (!stillCurrent(token)) return;
-				const d = await pi.exec("git", ["-C", st.worktreeDir, "diff", "--cached", "--quiet"], {
-					cwd: st.worktreeDir,
-					timeout: 60000,
-				});
-				if (d.code !== 0) {
-					if (!stillCurrent(token)) return;
-					await pi.exec("git", ["-C", st.worktreeDir, "commit", "-m", `mini-harness run ${st.runId}`], {
+				if (!stillCurrent(token)) {
+					return;
+				}
+				const committed = await commitVerifiedWorktreeTree(st);
+				if (committed === "drift") {
+					advanceOrStop(
+						pi,
+						st,
+						v,
+						"提交前工作区内容发生变化，验收结论不再对应当前代码；请基于稳定代码重新验证。",
+						"workspace-changed-before-commit",
+						token,
+					);
+					return;
+				}
+				if (!committed) {
+					// 构建不了可核验树（非 git / 快照失败）：退化为原有 add+commit 序列；
+					// 证据核对已在前置门禁完成，该退化路径仅存在于无法生成快照的工作区。
+					await pi.exec("git", ["-C", st.worktreeDir, "add", "-A"], { cwd: st.worktreeDir, timeout: 60000 });
+					if (!stillCurrent(token)) {
+						return;
+					}
+					const d = await pi.exec("git", ["-C", st.worktreeDir, "diff", "--cached", "--quiet"], {
 						cwd: st.worktreeDir,
 						timeout: 60000,
 					});
+					if (d.code !== 0) {
+						if (!stillCurrent(token)) return;
+						await pi.exec("git", ["-C", st.worktreeDir, "commit", "-m", `mini-harness run ${st.runId}`], {
+							cwd: st.worktreeDir,
+							timeout: 60000,
+						});
+					}
+					if (!sameEpoch(token)) {
+						journal(st, "late-callback-dropped", { at: "handleVerdict/worktree", epoch: token.epoch });
+						return;
+					}
+					st.worktreeCommitted = true;
+					journal(st, "worktree-commit", { branch: st.worktreeBranch, dir: st.worktreeDir, fallback: true });
+				} else {
+					if (!sameEpoch(token)) {
+						journal(st, "late-callback-dropped", { at: "handleVerdict/worktree", epoch: token.epoch });
+						return;
+					}
+					st.worktreeCommitted = true;
+					journal(st, "worktree-commit", { branch: st.worktreeBranch, dir: st.worktreeDir, commit: committed });
 				}
-				if (!sameEpoch(token)) {
-					journal(st, "late-callback-dropped", { at: "handleVerdict/worktree", epoch: token.epoch });
-					return;
-				}
-				st.worktreeCommitted = true;
-				journal(st, "worktree-commit", { branch: st.worktreeBranch, dir: st.worktreeDir });
 			} catch (e) {
 				journal(st, "worktree-commit-error", { error: String((e as Error)?.message || e) });
 			}
 		}
-		if (!saveState(st, token)) return;
+		if (!saveState(st, token)) {
+			return;
+		}
 		journal(st, "validate-pass", { code: v.code, review: review.verdict, acceptance: st.acceptance });
 		notify(
 			ctx,
@@ -1834,9 +2126,12 @@ export function createLoopRun(
 ): { ok: true; runId: string; st: LoopState } | { ok: false; error: string } {
 	const normalized = normalizeTaskInputs(input);
 	if (!normalized.ok) return { ok: false, error: normalized.error ?? "输入不合法" };
-	input = { ...input, inputs: normalized.inputs,
+	input = {
+		...input,
+		inputs: normalized.inputs,
 		validateCmd: normalized.inputs.validateCmd ?? undefined,
-		precheckCmd: normalized.inputs.precheckCmd ?? undefined };
+		precheckCmd: normalized.inputs.precheckCmd ?? undefined,
+	};
 	if (input.packId) {
 		const context = resolveTaskContext(input.packId, input.cwd, normalized.inputs);
 		if (context.error || context.missing.length || context.conflicts.length) {
@@ -1859,7 +2154,8 @@ export function createLoopRun(
 	const runId = newRunId();
 	const maxRounds = Math.max(1, Math.min(20, Number(input.maxRounds) || DEFAULT_MAX_ROUNDS));
 	const baseWorkspace = real(input.cwd || process.cwd());
-	if (!fs.existsSync(baseWorkspace) || !fs.statSync(baseWorkspace).isDirectory()) return { ok: false, error: "workspace 不存在" };
+	if (!fs.existsSync(baseWorkspace) || !fs.statSync(baseWorkspace).isDirectory())
+		return { ok: false, error: "workspace 不存在" };
 	// worktree 隔离：可选，在 git 仓库里开一个独立 worktree，避免并行任务互相污染
 	let workspace = baseWorkspace;
 	let worktreeDir: string | null = null;
@@ -1905,10 +2201,17 @@ export function createLoopRun(
 		precheckCmd: input.precheckCmd ?? null,
 		validateCmd: input.validateCmd ?? null,
 		primaryMetric: String(input.primaryMetric ?? "").trim() || null,
-		metricDirection: input.metricDirection === "minimize" ? "minimize" : input.metricDirection === "maximize" ? "maximize" : null,
-		metricPrecision: input.metricPrecision != null && Number.isFinite(Number(input.metricPrecision)) ? Number(input.metricPrecision) : null,
+		metricDirection:
+			input.metricDirection === "minimize" ? "minimize" : input.metricDirection === "maximize" ? "maximize" : null,
+		metricPrecision:
+			input.metricPrecision != null && Number.isFinite(Number(input.metricPrecision))
+				? Number(input.metricPrecision)
+				: null,
 		metricUnit: String(input.metricUnit ?? "").trim() || null,
-		metricThreshold: input.metricThreshold != null && Number.isFinite(Number(input.metricThreshold)) ? Number(input.metricThreshold) : null,
+		metricThreshold:
+			input.metricThreshold != null && Number.isFinite(Number(input.metricThreshold))
+				? Number(input.metricThreshold)
+				: null,
 		metricThresholdOp: isThresholdOp(input.metricThresholdOp) ? input.metricThresholdOp : null,
 		metricTolerance:
 			input.metricTolerance != null && Number.isFinite(Number(input.metricTolerance))
@@ -1957,12 +2260,12 @@ export function createLoopRun(
 	// 隔夜恢复：run 创建即取得执行所有权（owner + generation + 心跳）。
 	const leaseAcquired = withRunLockSync(runDir(runId), () => {
 		const acquired = acquireLease(runDir(runId), {
-		owner: st.owner!,
-		pid: process.pid,
-		generation: st.generation,
-		startedAt: st.createdAt,
-		heartbeatAt: st.createdAt,
-		remoteJobId: null,
+			owner: st.owner!,
+			pid: process.pid,
+			generation: st.generation,
+			startedAt: st.createdAt,
+			heartbeatAt: st.createdAt,
+			remoteJobId: null,
 		});
 		if (!acquired) return false;
 		localClaims.set(runId, { owner: st.owner!, generation: st.generation });
@@ -2212,7 +2515,10 @@ export function createLoopExtension() {
 					validateCmd: params.validateCmd,
 					harnessRoot: params.harnessRoot,
 					primaryMetric: params.primaryMetric,
-					metricDirection: params.metricDirection === "minimize" || params.metricDirection === "maximize" ? params.metricDirection : undefined,
+					metricDirection:
+						params.metricDirection === "minimize" || params.metricDirection === "maximize"
+							? params.metricDirection
+							: undefined,
 					metricPrecision: params.metricPrecision,
 					metricUnit: params.metricUnit,
 					metricThreshold: params.metricThreshold,
@@ -2298,7 +2604,8 @@ export function createLoopExtension() {
 				}
 				st.plan = String(params.plan || "").trim();
 				st.stage = "run";
-				if (!saveState(st)) return { content: [{ type: "text", text: "状态提交冲突，计划未保存，请重新核对任务。" }], details: {} };
+				if (!saveState(st))
+					return { content: [{ type: "text", text: "状态提交冲突，计划未保存，请重新核对任务。" }], details: {} };
 				journal(st, "plan", { plan: tail(st.plan, 400) });
 				return {
 					content: [
@@ -2321,12 +2628,14 @@ export function createLoopExtension() {
 					return { content: [{ type: "text", text: "当前会话没有活跃运行。请先调用 loop_start。" }], details: {} };
 				}
 				st.summary = String(params.summary || "").trim();
-				if (!stillCurrent(tokenOf(st))) return { content: [{ type: "text", text: "执行权已失效或正在停止。" }], details: {} };
+				if (!stillCurrent(tokenOf(st)))
+					return { content: [{ type: "text", text: "执行权已失效或正在停止。" }], details: {} };
 				if (st.stage === "validate" || st.validatedRound === st.round || st.reviewStep) {
 					return { content: [{ type: "text", text: "本轮验收已开始或已记录，复用原结果。" }], details: {} };
 				}
 				st.stage = "validate";
-				if (!saveState(st)) return { content: [{ type: "text", text: "状态提交冲突，未进入验收，请重新核对任务。" }], details: {} };
+				if (!saveState(st))
+					return { content: [{ type: "text", text: "状态提交冲突，未进入验收，请重新核对任务。" }], details: {} };
 				journal(st, "done-claimed", { summary: tail(st.summary, 400) });
 				return {
 					content: [{ type: "text", text: "已声明完成。运行时将在本轮结束时自动执行 validator 并给出判定。" }],
@@ -2383,7 +2692,8 @@ export function createLoopExtension() {
 				} else {
 					// 失败：交给 agent_end 统一推进下一轮（带证据 followUp）
 					st.stage = "run";
-					if (!saveState(st, token)) return { content: [{ type: "text", text: "状态提交冲突，不再推进任务。" }], details: {} };
+					if (!saveState(st, token))
+						return { content: [{ type: "text", text: "状态提交冲突，不再推进任务。" }], details: {} };
 				}
 				return {
 					content: [
@@ -2436,7 +2746,16 @@ export function createLoopExtension() {
 				}
 				const result = stopRunExternal(st.runId, String(params.reason || "") || "user-stop");
 				return {
-					content: [{ type: "text", text: !result.ok ? result.error! : result.stopConfirmedAt ? "已确认停止运行 " + st.runId : "已请求停止，等待执行实体退出确认。" }],
+					content: [
+						{
+							type: "text",
+							text: !result.ok
+								? result.error!
+								: result.stopConfirmedAt
+									? "已确认停止运行 " + st.runId
+									: "已请求停止，等待执行实体退出确认。",
+						},
+					],
 					details: { runId: st.runId, ...result },
 				};
 			},
@@ -2487,6 +2806,9 @@ export function createLoopExtension() {
 			if (!st || st.status !== "active") {
 				return;
 			}
+			// 回合在途标记：停止要能定位并取消该 run 绑定会话的模型回合。
+			runTurnActive.add(st.runId);
+			runTurnSessions.set(st.runId, sessionIdOf(c));
 			// D-12-2：服务端建的 run 在第一次开跑前做模型准备（家族解析 + 规划，原 loop_start 的逻辑）
 			if (st.setupPending && !setupBusy.has(st.runId)) {
 				const runId = st.runId;
@@ -2515,6 +2837,14 @@ export function createLoopExtension() {
 		// ---- 运行结束：自动 validator → 通过则完成；失败则自动下一轮 ----
 		pi.on("agent_end", async (_event, ctx) => {
 			const c = ctx as unknown as LoopCtx;
+			// 本会话的任何回合结束都清除其 run 的「回合在途」标记（含刚被停止的 run）。
+			const endedSid = sessionIdOf(c);
+			for (const [runId, sid] of runTurnSessions) {
+				if (sid === endedSid) {
+					runTurnSessions.delete(runId);
+					runTurnActive.delete(runId);
+				}
+			}
 			const st = findActiveRun(c);
 			if (!st) {
 				// 修复「启动后无可见记录/无明确失败态」：服务层发启动提示词前会登记挂起请求；
@@ -2556,7 +2886,7 @@ export function createLoopExtension() {
 						cancelled?: boolean;
 						workspaceChangedDuringValidation?: boolean;
 					};
-					if (st.validatedRound === st.round && st.lastVerdict) {
+					if (st.validatedRound === st.round && st.lastVerdict && evidenceStillValid(st)) {
 						// 模型本轮已手动 loop_validate：复用结果，不再重复执行
 						v = {
 							pass: st.lastVerdict === "pass",
@@ -2572,7 +2902,9 @@ export function createLoopExtension() {
 							journal(st, "late-callback-dropped", { at: "agent_end/runValidation", epoch: token.epoch });
 							return;
 						}
-						if (!(await recordValidationOutcome(st, v, token))) return;
+						if (!(await recordValidationOutcome(st, v, token))) {
+							return;
+						}
 					}
 					await handleVerdict(pi, c, st, v);
 				}
@@ -2604,7 +2936,10 @@ export function createLoopExtension() {
  * 与扩展内 loop_stop 工具同语义；saveState 会自动上报 run-state 事件，
  * 服务层据此刷新快照。返回 ok=false 附原因（run 不存在/已终态）。
  */
-function acquireRunControl(st: LoopState, owner = locallyClaimed(st.runId, st.owner, st.generation) ? st.owner! : newOwner()): boolean {
+function acquireRunControl(
+	st: LoopState,
+	owner = locallyClaimed(st.runId, st.owner, st.generation) ? st.owner! : newOwner(),
+): boolean {
 	const result = withRunLockSync(runDir(st.runId), () => {
 		const fresh = loadState(st.runId);
 		if (!fresh || fresh.revision !== st.revision) return false;
@@ -2614,10 +2949,30 @@ function acquireRunControl(st: LoopState, owner = locallyClaimed(st.runId, st.ow
 		}
 		const token = tokenOf(st);
 		const generation = Math.max(st.generation, lease?.generation ?? 0) + 1;
-		if (!acquireLease(runDir(st.runId), { owner, generation, pid: process.pid, startedAt: now(),
-			heartbeatAt: now(), remoteJobId: st.remoteJobId }, { allowOrphan: true })) return false;
+		if (
+			!acquireLease(
+				runDir(st.runId),
+				{ owner, generation, pid: process.pid, startedAt: now(), heartbeatAt: now(), remoteJobId: st.remoteJobId },
+				{ allowOrphan: true },
+			)
+		)
+			return false;
 		st.owner = owner;
 		st.generation = generation;
+		// 接管前保留旧租约的执行实体证据（旧协议 run 没有 operation，taskPid 是唯一线索；
+		// 身份未核实前不向该 pid 发信号，也不据此确认已停止）。
+		const previousTaskPid = lease?.taskPid ?? null;
+		const legacy = st.legacyExecutionEntities ?? [];
+		if (previousTaskPid != null && !legacy.some((e) => e.pid === previousTaskPid)) {
+			legacy.push({
+				pid: previousTaskPid,
+				host: lease?.host ?? null,
+				startId: getProcessStartId(previousTaskPid),
+				capturedAt: now(),
+				generation: lease?.generation ?? 0,
+			});
+		}
+		st.legacyExecutionEntities = legacy.slice(-8);
 		// Acquisition is a distinct commit; don't release a terminal run until the
 		// explicitly authorized terminal action has finished.
 		const next = { ...st, revision: (st.revision ?? 0) + 1, updatedAt: now() };
@@ -2632,8 +2987,15 @@ function acquireRunControl(st: LoopState, owner = locallyClaimed(st.runId, st.ow
 	return result.value;
 }
 
-export function stopRunExternal(runId: string, reason = "user-stop"): {
-	ok: boolean; error?: string; stopRequestedAt?: string | null; stopConfirmedAt?: string | null; status?: string;
+export function stopRunExternal(
+	runId: string,
+	reason = "user-stop",
+): {
+	ok: boolean;
+	error?: string;
+	stopRequestedAt?: string | null;
+	stopConfirmedAt?: string | null;
+	status?: string;
 } {
 	try {
 		const st = loadState(runId);
@@ -2652,28 +3014,61 @@ export function stopRunExternal(runId: string, reason = "user-stop"): {
 		const token = tokenOf(st);
 		const canControl = () => {
 			const lease = getLease(runDir(runId));
-			return matchesToken(loadState(runId), token) && !!lease && !leaseExpired(lease) &&
-				lease.owner === token.owner && lease.generation === token.generation;
+			return (
+				matchesToken(loadState(runId), token) &&
+				!!lease &&
+				!leaseExpired(lease) &&
+				lease.owner === token.owner &&
+				lease.generation === token.generation
+			);
 		};
+		// 先取消绑定会话的模型回合（宿主存活时注册的控制器；含原会话与 worktree 执行者），
+		// 再取消持久 operation。abort 只是请求：回合是否真正结束由 turnEnded 给出可核验结论。
+		const turn = runTurnControllers.get(runId);
+		let turnAbortError: string | null = null;
+		if (turn) {
+			try {
+				turn.abort();
+			} catch (error) {
+				turnAbortError = String((error as Error).message);
+			}
+		}
+		const turnInFlight = turn ? !turn.turnEnded() : runTurnActive.has(runId);
 		const cancellation = cancelRunOperations(runId, reason, { canControl });
 		if (!canControl()) return { ok: false, error: "停止期间控制权已失效" };
 		const fresh = loadState(runId)!;
 		const operations = listOperations(runId);
-		const taskPid = getLease(runDir(runId))?.taskPid;
-		const unknownExternal = !!fresh.remoteJobId || (!!taskPid && !operations.some((op) => op.pid === taskPid));
-		if (cancellation.allConfirmed && !unknownExternal) {
+		const lease = getLease(runDir(runId));
+		const taskPid = lease?.taskPid;
+		// 接管保留的旧执行实体：身份未核实（裸 PID 不可信）时不发信号、不确认已停。
+		const legacyUnverified = (fresh.legacyExecutionEntities ?? []).filter(
+			(e) => e.pid != null && !operations.some((op) => op.pid === e.pid) && isPidAlive(e.pid),
+		);
+		const unknownExternal =
+			!!fresh.remoteJobId || (!!taskPid && !operations.some((op) => op.pid === taskPid)) || legacyUnverified.length > 0;
+		if (cancellation.allConfirmed && !unknownExternal && !turnInFlight && !turnAbortError) {
 			fresh.status = "stopped";
 			fresh.stage = "stopped";
 			fresh.stopConfirmedAt = now();
 			fresh.recoveryState = "cancelled";
+			unregisterRunTurnController(runId);
 		} else {
 			fresh.stage = "stopping";
 			fresh.recoveryState = "stop-unconfirmed";
 		}
 		if (!saveState(fresh, token)) return { ok: false, error: "停止确认提交冲突" };
 		abortRun(runId);
-		journal(fresh, fresh.stopConfirmedAt ? "stop-confirmed" : "stop-requested", { cancellation });
-		return { ok: true, status: fresh.stage, stopRequestedAt: fresh.stopRequestedAt, stopConfirmedAt: fresh.stopConfirmedAt };
+		journal(fresh, fresh.stopConfirmedAt ? "stop-confirmed" : "stop-requested", {
+			cancellation,
+			turn: { inFlight: turnInFlight, abortError: turnAbortError },
+			legacyUnverified: legacyUnverified.map((e) => e.pid),
+		});
+		return {
+			ok: true,
+			status: fresh.stage,
+			stopRequestedAt: fresh.stopRequestedAt,
+			stopConfirmedAt: fresh.stopConfirmedAt,
+		};
 	} catch (error) {
 		return { ok: false, error: String((error as Error).message) };
 	}
@@ -2828,25 +3223,71 @@ export function acceptRunValidatorOnly(runId: string): { ok: boolean; error?: st
 		return { ok: false, error: "只有代码验证已通过、模型评审出错的 run 才能按代码验证收下" };
 	}
 	if (!acquireRunControl(st)) return { ok: false, error: "无法取得执行权" };
-	st.status = "done";
-	st.stage = "done";
-	st.acceptance = "passed-validator-only";
-	delete st.stopReason;
-	if (st.worktreeDir && st.worktreeBranch && !st.worktreeCommitted) {
-		try {
-			gitSync(["-C", st.worktreeDir, "add", "-A"], st.worktreeDir, 60000);
-			const staged = gitSync(["-C", st.worktreeDir, "diff", "--cached", "--name-only"], st.worktreeDir, 60000);
-			if (staged.trim())
-				gitSync(["-C", st.worktreeDir, "commit", "-m", `mini-harness run ${st.runId}`], st.worktreeDir, 60000);
+	// 收下的前提：验证证据仍对应当前 round/attempt 的执行内容与验收契约（不能补记未验证版本）。
+	if (!evidenceStillValid(st)) return { ok: false, error: "验收证据与当前代码不一致，不能按代码验证收下" };
+	const token = tokenOf(st);
+	const assertAcceptControl = () => {
+		const fresh = loadState(runId);
+		const lease = getLease(runDir(runId));
+		if (
+			!locallyClaimed(runId, token.owner, token.generation) ||
+			!fresh ||
+			!matchesToken(fresh, token) ||
+			fresh.revision !== st.revision ||
+			!isReviewerErrorRun(fresh) ||
+			!lease ||
+			leaseExpired(lease) ||
+			lease.owner !== token.owner ||
+			lease.generation !== token.generation
+		)
+			throw new Error("验收期间执行权或任务状态已变化");
+	};
+	try {
+		assertAcceptControl();
+		if (st.worktreeDir && st.worktreeBranch && !st.worktreeCommitted) {
+			const tree = verifiedTreeFromIdentity(st);
+			if (tree) {
+				// 提交验收绑定的不可变树，不重新 add 当前工作树（关闭检查与暂存之间的竞态）。
+				const branch = st.worktreeBranch;
+				const parent = gitSync(
+					["-C", st.worktreeDir, "rev-parse", "--verify", "refs/heads/" + branch],
+					st.worktreeDir,
+					60000,
+				).trim();
+				if (gitSync(["-C", st.worktreeDir, "rev-parse", parent + "^{tree}"], st.worktreeDir, 60000).trim() !== tree) {
+					const commit = gitSync(
+						["-C", st.worktreeDir, "commit-tree", tree, "-p", parent, "-m", `mini-harness run ${st.runId}`],
+						st.worktreeDir,
+						60000,
+					).trim();
+					gitSync(["-C", st.worktreeDir, "update-ref", "refs/heads/" + branch, commit], st.worktreeDir, 60000);
+				}
+			} else {
+				// 无预存快照（非快照路径的旧状态）：退化为 add+commit，每步之间核对控制权。
+				gitSync(["-C", st.worktreeDir, "add", "-A"], st.worktreeDir, 60000);
+				assertAcceptControl();
+				const staged = gitSync(["-C", st.worktreeDir, "diff", "--cached", "--name-only"], st.worktreeDir, 60000);
+				if (staged.trim()) {
+					assertAcceptControl();
+					gitSync(["-C", st.worktreeDir, "commit", "-m", `mini-harness run ${st.runId}`], st.worktreeDir, 60000);
+				}
+			}
+			assertAcceptControl();
 			st.worktreeCommitted = true;
 			journal(st, "worktree-commit", { branch: st.worktreeBranch, dir: st.worktreeDir, by: "user-accept" });
-		} catch (e) {
-			journal(st, "worktree-commit-error", { error: String((e as Error)?.message || e) });
 		}
+		st.status = "done";
+		st.stage = "done";
+		st.acceptance = "passed-validator-only";
+		delete st.stopReason;
+		assertAcceptControl();
+		if (!saveState(st, token)) return { ok: false, error: "验收提交冲突" };
+		journal(st, "accepted-validator-only", { by: "user" });
+		return { ok: true };
+	} catch (error) {
+		journal(st, "accept-error", { error: String((error as Error).message || error) });
+		return { ok: false, error: String((error as Error).message || error) };
 	}
-	if (!saveState(st)) return { ok: false, error: "验收提交冲突" };
-	journal(st, "accepted-validator-only", { by: "user" });
-	return { ok: true };
 }
 
 /**
@@ -2858,7 +3299,8 @@ export function reactivateForReview(runId: string): { ok: true; st: LoopState } 
 	const st = loadState(runId);
 	if (!st) return { ok: false, error: `run 不存在：${runId}` };
 	if (!isReviewerErrorRun(st)) return { ok: false, error: "只有模型评审出错停下的 run 才能重试评审" };
-	if (!fingerprintMatches(st.environmentFingerprint, currentFingerprintOf(st, true))) return { ok: false, error: "执行内容已变化，不能复用旧验收" };
+	if (!fingerprintMatches(st.environmentFingerprint, currentFingerprintOf(st, true)))
+		return { ok: false, error: "执行内容已变化，不能复用旧验收" };
 	if (!acquireRunControl(st)) return { ok: false, error: "无法取得执行权" };
 	st.status = "active";
 	st.stage = "validate";
@@ -2903,8 +3345,29 @@ function readFileTail(file: string, max: number): string {
 /** 环境指纹是否仍一致；旧记录无指纹时视为「已变化」→ 需要核对，不盲目复用。 */
 function fingerprintMatches(a: EnvironmentFingerprint | null, b: EnvironmentFingerprint): boolean {
 	if (!a) return false;
-	return a.workspace === b.workspace && a.gitHead === b.gitHead && a.contentHash === b.contentHash &&
-		a.packId === b.packId && a.packVersion === b.packVersion && a.inputsHash === b.inputsHash && a.envHash === b.envHash;
+	return (
+		a.workspace === b.workspace &&
+		a.gitHead === b.gitHead &&
+		a.contentHash === b.contentHash &&
+		a.packId === b.packId &&
+		a.packVersion === b.packVersion &&
+		a.inputsHash === b.inputsHash &&
+		a.envHash === b.envHash
+	);
+}
+
+/**
+ * 已有验收证据（validationIdentity）是否仍对应当前 round/attempt 的实际执行内容与
+ * 验收契约。指纹受阻（读失败/超限）视为不能复用：复用决策不允许「无法证明就没变」。
+ */
+function evidenceStillValid(st: LoopState): boolean {
+	const identity = st.validationIdentity;
+	if (!identity || identity.round !== st.round || identity.attemptId !== st.attemptId) return false;
+	try {
+		return fingerprintMatches(identity.fingerprint, currentFingerprintOf(st, true));
+	} catch {
+		return false;
+	}
 }
 
 /** 从 run 状态构建当前环境指纹（恢复/展示共用，避免三处字段映射漂移）。fresh 用于恢复核对绕过缓存。 */
@@ -2965,54 +3428,131 @@ export function loadLoopStateForRecovery(runId: string): LoopState | null {
 	return loadState(runId);
 }
 
+/**
+ * 启动专用迁移：把只剩 .cas 残留、缺少 state.json 的旧任务目录恢复为可见记录。
+ * 只处理有效 run ID 的目录；最多 1000 条、总预算 5 秒、每次锁等待 500ms；
+ * 冲突/损坏保留原件并返回错误，不做猜测合并。列表轮询不触发本函数。
+ */
+export function migrateMissingLoopStates(): Array<{ runId: string; error?: string }> {
+	const out: Array<{ runId: string; error?: string }> = [];
+	if (!fs.existsSync(ROOT)) return out;
+	let directory: fs.Dir;
+	try {
+		directory = fs.opendirSync(ROOT);
+	} catch {
+		return out;
+	}
+	const deadline = performance.now() + 5000;
+	let visited = 0;
+	try {
+		for (let entry = directory.readSync(); entry; entry = directory.readSync()) {
+			if (++visited > 1000 || performance.now() > deadline) break;
+			if (!entry.isDirectory() || !RUN_ID_RE.test(entry.name)) continue;
+			if (fs.existsSync(statePath(entry.name))) continue;
+			try {
+				const migrated = withRunLockSync(runDir(entry.name), () => true, { timeoutMs: 500 });
+				if (!migrated.ok) throw new Error(migrated.error);
+			} catch (error) {
+				out.push({ runId: entry.name, error: String((error as Error).message || error) });
+			}
+		}
+	} finally {
+		directory.closeSync();
+	}
+	return out;
+}
+
 export function recoverRun(runId: string, requesterOwner?: string): RecoverRunResult {
 	// Migration is an explicit write action; list/detail/load remain read-only.
 	if (RUN_ID_RE.test(runId) && fs.existsSync(runDir(runId))) {
 		const migrated = withRunLockSync(runDir(runId), () => true);
-		if (!migrated.ok) return { ok: false, runId, classification: null, summary: null, takeover: false,
-			connectedEntity: false, resumeEligible: false, blockedReason: migrated.error,
-			nextAction: "核对存储迁移", inFlightOpId: null, error: migrated.error };
+		if (!migrated.ok)
+			return {
+				ok: false,
+				runId,
+				classification: null,
+				summary: null,
+				takeover: false,
+				connectedEntity: false,
+				resumeEligible: false,
+				blockedReason: migrated.error,
+				nextAction: "核对存储迁移",
+				inFlightOpId: null,
+				error: migrated.error,
+			};
 	}
 	const st = loadState(runId);
 	if (!st) {
-		return { ok: false, runId, classification: null, summary: null, takeover: false, connectedEntity: false, resumeEligible: false, blockedReason: "run 不存在", nextAction: "确认 runId 是否正确", inFlightOpId: null, error: "run 不存在：" + runId };
+		return {
+			ok: false,
+			runId,
+			classification: null,
+			summary: null,
+			takeover: false,
+			connectedEntity: false,
+			resumeEligible: false,
+			blockedReason: "run 不存在",
+			nextAction: "确认 runId 是否正确",
+			inFlightOpId: null,
+			error: "run 不存在：" + runId,
+		};
 	}
 	const dir = runDir(runId);
 	if (st.stopRequestedAt && !st.stopConfirmedAt) {
 		const stopped = stopRunExternal(runId, st.stopReason);
-		return { ok: stopped.ok, runId, classification: null, summary: null, takeover: false,
-			connectedEntity: false, resumeEligible: false, blockedReason: stopped.error ?? "停止请求待核对，不恢复工作",
-			nextAction: "核对停止确认", inFlightOpId: null };
+		return {
+			ok: stopped.ok,
+			runId,
+			classification: null,
+			summary: null,
+			takeover: false,
+			connectedEntity: false,
+			resumeEligible: false,
+			blockedReason: stopped.error ?? "停止请求待核对，不恢复工作",
+			nextAction: "核对停止确认",
+			inFlightOpId: null,
+		};
 	}
 	const me = requesterOwner || newOwner();
 	const lease = getLease(dir);
 	const leaseOwnerAlive = lease != null && lease.pid != null ? isPidAlive(lease.pid) : false;
-	const leaseHeld = lease != null && !leaseExpired(lease) && lease.owner === me &&
-		locallyClaimed(runId, me, lease.generation);
+	const leaseHeld =
+		lease != null && !leaseExpired(lease) && lease.owner === me && locallyClaimed(runId, me, lease.generation);
 	// 他人仍持有有效执行权 = 租约未过期 + owner 不同 + 且该 owner 的服务进程仍存活。
 	// 服务已退出（孤儿租约）不算「他人持权」，可立即接管 —— 这是「服务可重启」支持范围的一部分。
 	const leaseHeldByOther = lease != null && !leaseExpired(lease) && lease.owner !== me && leaseOwnerAlive;
 	let currentFp: EnvironmentFingerprint;
-	try { currentFp = currentFingerprintOf(st, true); }
-	catch (error) {
-		return { ok: false, runId, classification: null, summary: null, takeover: false, connectedEntity: false,
-			resumeEligible: false, blockedReason: String((error as Error).message), nextAction: "核对执行指纹", inFlightOpId: null };
+	try {
+		currentFp = currentFingerprintOf(st, true);
+	} catch (error) {
+		return {
+			ok: false,
+			runId,
+			classification: null,
+			summary: null,
+			takeover: false,
+			connectedEntity: false,
+			resumeEligible: false,
+			blockedReason: String((error as Error).message),
+			nextAction: "核对执行指纹",
+			inFlightOpId: null,
+		};
 	}
 	const environmentChanged = !fingerprintMatches(st.environmentFingerprint, currentFp);
-	// 实际执行实体 = 租约里记录的本地 validator/precheck 子进程 pid（真实执行实体），不是服务 pid。
-	const taskPid = lease?.taskPid ?? null;
-	const pidAlive = taskPid != null ? isPidAlive(taskPid) : null;
-	// 在途 = 曾记录过本地执行实体（validator/precheck 已启动但尚未落定）。
+	// 在途 = 新协议持久化操作（validator/precheck 已启动但尚未落定）。仅含旧 taskPid 而没有
+	// 对应 operation 的 run 是历史实体证据：不作为在途（不阻止接管），接管后由 stop 侧保持未确认。
 	const ops = listOperations(runId);
-	const pending = ops.find((op) => op.attemptId === st.attemptId && op.round === st.round &&
-		!st.consumedResults?.[op.opId]);
-	const inFlight = !!pending || taskPid != null;
+	const pending = ops.find(
+		(op) => op.attemptId === st.attemptId && op.round === st.round && !st.consumedResults?.[op.opId],
+	);
+	const inFlight = !!pending;
 	const cls = classifyRecovery(st, {
 		leaseHeld,
 		environmentChanged,
-		pidAlive: pending ? pending.status === "running" : pidAlive,
+		pidAlive: pending ? pending.status === "running" : null,
 		hasUnconsumedResult: !!pending?.result || st.validatedRound === st.round,
-		lastRoundPassed: st.lastVerdict === "pass",
+		// 只认当前 round/attempt 的验收结论；上一轮 lastVerdict 仅保留作历史与诊断。
+		lastRoundPassed: st.validatedRound === st.round && st.lastVerdict === "pass",
 		inFlight,
 	});
 	const connectedEntity = !!pending?.entity && pending.status === "running";
@@ -3025,21 +3565,44 @@ export function recoverRun(runId: string, requesterOwner?: string): RecoverRunRe
 		const so = readFileTail(latestRunning.stdoutFile, 2000);
 		const se = readFileTail(latestRunning.stderrFile, 1000);
 		inFlightNote =
-			"仍在运行的本地执行实体: " + latestRunning.stage + " (round " + latestRunning.round + ") pid=" + latestRunning.pid +
-			"\n--- 已收集 stdout 片段 ---\n" + so +
-			"\n--- 已收集 stderr 片段 ---\n" + se;
+			"仍在运行的本地执行实体: " +
+			latestRunning.stage +
+			" (round " +
+			latestRunning.round +
+			") pid=" +
+			latestRunning.pid +
+			"\n--- 已收集 stdout 片段 ---\n" +
+			so +
+			"\n--- 已收集 stderr 片段 ---\n" +
+			se;
 	}
 	let takeover = false;
 	let blockedReason: string | null = null;
 	if (lease?.remoteJobId || st.remoteJobId) {
-		return { ok: true, runId, classification: cls, summary: null, takeover: false, connectedEntity: false,
-			resumeEligible: false, blockedReason: "缺少远端任务执行适配器，无法核验或接续", nextAction: "核对远端原任务",
-			inFlightOpId: null };
+		return {
+			ok: true,
+			runId,
+			classification: cls,
+			summary: null,
+			takeover: false,
+			connectedEntity: false,
+			resumeEligible: false,
+			blockedReason: "缺少远端任务执行适配器，无法核验或接续",
+			nextAction: "核对远端原任务",
+			inFlightOpId: null,
+		};
 	}
 	// 只有「明确失败、允许重试」或「在途本地执行实体仍在运行」才允许接管；
 	// unknown / cancelled / completed-valid / 环境变化一律不接管。
 	// 「在途仍在跑」接管 = 原子取得执行所有权（generation+1），但不重跑：resumeLoop 会 observeRunOperation 接续收集。
-	if (st.status === "active" && !environmentChanged && !leaseHeld && !leaseHeldByOther && (cls.unit === "failed-retryable" || (cls.unit === "running" && (inFlightOpId != null || st.validatedRound === st.round)))) {
+	if (
+		st.status === "active" &&
+		!environmentChanged &&
+		!leaseHeld &&
+		!leaseHeldByOther &&
+		(cls.unit === "failed-retryable" ||
+			(cls.unit === "running" && (inFlightOpId != null || st.validatedRound === st.round)))
+	) {
 		const got = acquireRunControl(st, me);
 		if (got) {
 			takeover = true;
@@ -3058,9 +3621,10 @@ export function recoverRun(runId: string, requesterOwner?: string): RecoverRunRe
 		// 他人仍持有有效执行权：不接管，不覆盖。
 		blockedReason = "其他执行者仍持有有效执行权";
 	}
-	const resumeEligible =
-		!blockedReason && st.status === "active" && (leaseHeld || takeover);
-	const completedRounds = st.history.filter((h) => h.verdict === "pass" && h.metricGateOk !== false && !h.workspaceChangedDuringValidation).length;
+	const resumeEligible = !blockedReason && st.status === "active" && (leaseHeld || takeover);
+	const completedRounds = st.history.filter(
+		(h) => h.verdict === "pass" && h.metricGateOk !== false && !h.workspaceChangedDuringValidation,
+	).length;
 	const summary = buildRecoverySummary({
 		runId,
 		attemptId: st.attemptId,
@@ -3079,7 +3643,18 @@ export function recoverRun(runId: string, requesterOwner?: string): RecoverRunRe
 	else if (takeover) nextAction = "已原子接管，从未完成部分继续";
 	else if (blockedReason) nextAction = "先核对执行现场/证据，再决定是否重试";
 	else nextAction = "先核对执行现场/证据，再决定";
-	return { ok: true, runId, classification: cls, summary, takeover, connectedEntity, resumeEligible, blockedReason, nextAction, inFlightOpId };
+	return {
+		ok: true,
+		runId,
+		classification: cls,
+		summary,
+		takeover,
+		connectedEntity,
+		resumeEligible,
+		blockedReason,
+		nextAction,
+		inFlightOpId,
+	};
 }
 
 /**
@@ -3091,8 +3666,9 @@ export async function observeRunOperation(runId: string, timeoutMs = 30 * 60 * 1
 	if (!st) return null;
 	const token = tokenOf(st);
 	if (!stillCurrent(token)) return null;
-	const pending = listOperations(runId).find((op) => op.round === st.round && op.attemptId === st.attemptId &&
-		!st.consumedResults?.[op.opId]);
+	const pending = listOperations(runId).find(
+		(op) => op.round === st.round && op.attemptId === st.attemptId && !st.consumedResults?.[op.opId],
+	);
 	if (!pending) return null;
 	const observed = await observeOperation(runId, pending.opId, { timeoutMs });
 	if (!stillCurrent(token) || !observed.record?.result) return observed;
@@ -3100,8 +3676,10 @@ export async function observeRunOperation(runId: string, timeoutMs = 30 * 60 * 1
 	if (!stillCurrent(token)) return observed;
 	if (pending.stage === "precheck" && v.pass && !v.workspaceChangedDuringValidation) {
 		const fresh = loadState(runId)!;
-		fresh.consumedResults = { ...fresh.consumedResults,
-			[pending.opId]: { digest: v.resultDigest!, round: st.round, stage: "precheck" } };
+		fresh.consumedResults = {
+			...fresh.consumedResults,
+			[pending.opId]: { digest: v.resultDigest!, round: st.round, stage: "precheck" },
+		};
 		if (!saveState(fresh, token)) throw new Error("恢复预检结果提交冲突");
 	} else {
 		// false also means another callback already applied this exact result.
@@ -3116,9 +3694,31 @@ export function recoveryInfoOf(runId: string) {
 	const st = loadState(runId);
 	if (!st) return null;
 	const lease = getLease(runDir(runId));
-	const leaseHeld = lease != null && lease.pid != null && !leaseExpired(lease) && isPidAlive(lease.pid) && lease.owner === (st.owner ?? newOwner());
+	const leaseHeld =
+		lease != null &&
+		lease.pid != null &&
+		!leaseExpired(lease) &&
+		isPidAlive(lease.pid) &&
+		lease.owner === (st.owner ?? newOwner());
 	// Polling is a projection. Only explicit recover/recheck hashes execution bytes.
 	const environmentChanged = st.recoveryState === "needs-review";
-	const unit = st.status === "active" ? (leaseHeld ? "running" : environmentChanged ? "needs-review" : "interrupted") : (st.status === "stopped" ? "cancelled" : st.status);
-	return { unit, leaseHeld, environmentChanged, attemptId: st.attemptId, generation: st.generation ?? 0, owner: st.owner, remoteJobId: st.remoteJobId };
+	const unit =
+		st.status === "active"
+			? leaseHeld
+				? "running"
+				: environmentChanged
+					? "needs-review"
+					: "interrupted"
+			: st.status === "stopped"
+				? "cancelled"
+				: st.status;
+	return {
+		unit,
+		leaseHeld,
+		environmentChanged,
+		attemptId: st.attemptId,
+		generation: st.generation ?? 0,
+		owner: st.owner,
+		remoteJobId: st.remoteJobId,
+	};
 }

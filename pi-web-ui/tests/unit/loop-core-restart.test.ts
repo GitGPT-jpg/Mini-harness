@@ -237,3 +237,91 @@ for (const mode of [
 		}
 	}, 45000);
 }
+
+// ---------------------------------------------------------------------------
+// P5：恢复分类按当前 round/attempt 判断。上一轮 validator pass 但 reviewer/指标
+// 门禁否决、新一轮已落盘且尚未执行时真实终止宿主 → 新服务必须接续当前轮，
+// 不得把上一轮 lastVerdict=pass 当作当前轮结论（unknown），也不重放上一轮。
+// ---------------------------------------------------------------------------
+for (const mode of ["reviewer-block-new-round", "metric-gate-new-round"] as const) {
+	it(`P5: ${mode} — 新轮落盘后首执行前 SIGKILL，恢复接续当前轮`, async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "loop-core-restart-"));
+		for (const dir of ["workspace", "runs", "data", "agent"]) fs.mkdirSync(path.join(root, dir));
+		const counter = path.join(root, "starts.jsonl");
+		const barrier = path.join(root, "release");
+		const nonce = crypto.randomUUID();
+		// 两种模式都需要 validator 快速退出（exit 0）：reviewer 模式打印指标，metric 模式不打印。
+		const program =
+			mode === "reviewer-block-new-round"
+				? `
+			const fs = require("node:fs");
+			fs.appendFileSync(${JSON.stringify(counter)}, JSON.stringify({pid:process.pid, nonce:${JSON.stringify(nonce)}})+"\\n");
+			const timer = setInterval(() => {
+				if (fs.existsSync(${JSON.stringify(barrier)})) {
+					clearInterval(timer);
+					console.log("HARNESS_METRIC score=42 unit=items");
+					process.exit(0);
+				}
+			}, 20);
+		`
+				: `
+			const fs = require("node:fs");
+			fs.appendFileSync(${JSON.stringify(counter)}, JSON.stringify({pid:process.pid, nonce:${JSON.stringify(nonce)}})+"\\n");
+			process.exit(0);
+		`;
+		const command = `${quote(process.execPath)} -e ${quote(program)}`;
+		let a: Awaited<ReturnType<typeof host>> | undefined;
+		let b: Awaited<ReturnType<typeof host>> | undefined;
+		let runId: string | undefined;
+		try {
+			a = await host(root);
+			const created = await a.rpc("start", {
+				command,
+				review: mode === "reviewer-block-new-round",
+				reviewBlock: mode === "reviewer-block-new-round",
+				maxRounds: 2,
+				...(mode === "metric-gate-new-round"
+					? { constraints: { primaryMetric: "tps", metricDirection: "maximize" } }
+					: {}),
+			});
+			runId = created.runId;
+			await until(() => (fs.existsSync(counter) ? true : undefined), "round-1 command startup");
+			if (mode === "reviewer-block-new-round") {
+				// 第 1 轮 validator 通过、reviewer 否决 → 第 2 轮已落盘（尚无 operation）。
+				fs.writeFileSync(barrier, "release");
+			}
+			const stateFile = path.join(root, "runs", runId!, "state.json");
+			await until(() => {
+				if (!fs.existsSync(stateFile)) return;
+				const st = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+				return st.round === 2 && st.status === "active" ? true : undefined;
+			}, "round 2 persisted before first execution");
+			// 新轮状态落盘后、首次执行前真实终止宿主。
+			await killHost(a.child);
+			b = await host(root);
+			const recovered = await b.http(runId!, "recover");
+			expect(recovered.status, JSON.stringify(recovered.body)).toBe(200);
+			expect(recovered.body).toMatchObject({ takeover: true, resumeEligible: true, inFlightOpId: null });
+			// 关键断言：按当前轮分类为 failed-retryable，而不是拿上一轮 lastVerdict=pass 判 unknown。
+			expect(recovered.body.classification.unit).toBe("failed-retryable");
+			const resumed = await b.rpc("resume", { runId });
+			expect(resumed.state.status, JSON.stringify(resumed)).toBe("stopped");
+			const final = await b.rpc("duplicate", { runId });
+			expect(final.round).toBe(2);
+			expect(final.stopReason).toBe(mode === "reviewer-block-new-round" ? "reviewer-block" : "metric-gate");
+			expect(final.status).toBe("stopped");
+			// 每个 round 各自验证一次：不重放第 1 轮，也不跳过第 2 轮。
+			expect(fs.readFileSync(counter, "utf8").trim().split("\n")).toHaveLength(2);
+			expect(final.history).toHaveLength(2);
+			fs.writeFileSync(
+				path.join(root, "evidence.json"),
+				JSON.stringify({ mode, nonce, oldHost: a.child.pid, newHost: b.child.pid, runId, recovered, final }, null, 2),
+			);
+			console.info(`restart evidence: ${root}`);
+		} finally {
+			if (b && runId) await b.http(runId, "stop").catch(() => {});
+			if (a) await killHost(a.child);
+			if (b) await killHost(b.child);
+		}
+	}, 45000);
+}

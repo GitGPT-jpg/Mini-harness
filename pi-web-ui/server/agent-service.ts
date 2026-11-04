@@ -50,6 +50,7 @@ import {
 	addLoopEventReporter,
 	createLoopExtension,
 	createLoopRun,
+	registerRunTurnController,
 	stopRunExternal,
 	canContinueLoop,
 	loadLoopState,
@@ -12590,6 +12591,8 @@ export class ClientSession {
 				"workspace-executor-error",
 			);
 		} else {
+			// 注册回合控制器：停止要能取消该 run 绑定会话的模型回合。
+			this.registerLoopTurnControl(st.runId, conv);
 			await this.prompt(lines.join("\n"));
 		}
 	}
@@ -12635,6 +12638,8 @@ export class ClientSession {
 			if (!execConv?.session) throw new Error("执行者会话创建失败");
 			const re = rebindLoopSession(st.runId, execConv.session.sessionId);
 			if (!re.ok) throw new Error(re.error || "run 会话重绑失败");
+			// 执行者会话也接入回合取消：任务台/API 停止要能取消该子代理的模型回合。
+			this.registerLoopTurnControl(st.runId, execConv);
 			// 执行者会话 cwd 就是 workspace：工具/终端天然落 workspace，提示词不再需要「先 cd」兜底。
 			const kickPrompt = `${prompt}\n${workspaceNote}`;
 			execConv.kickoff = execConv.session.sendUserMessage(kickPrompt).catch((err) => {
@@ -12688,10 +12693,35 @@ export class ClientSession {
 			this.emitNotice("info", "没有可停止的 Loop（当前会话无活跃 run）");
 			return;
 		}
+		// 停止必须能取消该 run 绑定会话（原会话或 worktree 执行者）的在途模型回合，
+		// 而不只是 validator 子进程：注册回合控制器后再走 stopRunExternal。
+		const st = loadLoopState(target);
+		if (st) this.registerLoopTurnControl(target, this.loopExecutorConv(st) ?? conv);
 		const r = stopRunExternal(target, "user-stop");
 		if (!r.ok) this.emitNotice("warning", `Loop 停止失败：${r.error}`);
 		else if (!r.stopConfirmedAt && r.status !== "done")
 			this.emitNotice("info", "停止请求已受理，执行实体退出尚未确认；可再次停止以核对。");
+	}
+
+	/**
+	 * 把该 run 绑定会话的在途回合接入 stopRunExternal 的取消域：
+	 * abort 触发 interruptRun（含会话 abort 与卡死强制重置），turnEnded 给出可核验的
+	 * 「回合已结束」判定（stopRunExternal 据此决定 stopConfirmedAt）。
+	 */
+	private registerLoopTurnControl(runId: string, bound: Conversation): void {
+		if (!bound?.session) return;
+		registerRunTurnController(runId, {
+			abort: () => {
+				void this.interruptRun(bound, "已停止").catch(() => {});
+			},
+			turnEnded: () => {
+				try {
+					return !this.conversationStreaming(bound) && bound.session.isIdle !== false;
+				} catch {
+					return true;
+				}
+			},
+		});
 	}
 
 	/** 显式续跑：runId 绑定（sessionId 必须匹配本会话）+ 在途互斥（修#2）。
@@ -12815,8 +12845,10 @@ export class ClientSession {
 				beforeDispatch.epoch !== cur.epoch
 			)
 				return;
-			const executor = this.loopExecutorConv(cur);
-			if (executor && executor !== conv) {
+			const executor = this.loopExecutorConv(cur) ?? conv;
+			// 续跑回合也接入取消域：恢复期间被停止，停止要能取消该回合。
+			this.registerLoopTurnControl(runId, executor);
+			if (executor !== conv) {
 				// 修复（Task 4）：await 投递落定后再释放 loopResuming 互斥锁，
 				// 避免快速重复 resume 在投递尚未完成时再次进入、导致双投递。
 				await executor.session.sendUserMessage(resumePrompt).catch((err) => {

@@ -55,7 +55,14 @@ const OUTPUTS = new Set([
 	"runs",
 	".mini-harness",
 ]);
+/**
+ * 指纹算法版本：纳入 contentHash 组合。算法变化会使所有旧证据的 contentHash
+ * 无法对等证明等价 → 旧证据自动失效并触发重新验证（保留任务与历史，不误判「未变化」）。
+ * v2：已跟踪内容默认纳入（build/dist 等产物目录的排除只作用于未跟踪文件）。
+ */
+const FINGERPRINT_VERSION = 2;
 const sensitive = isSensitiveTaskPath;
+// 产物目录排除只应用于未跟踪文件；已跟踪的 build/code.py 修改必须被检测（见 scan()）。
 const ignored = (relative: string) =>
 	relative.split(path.sep).some((part) => OUTPUTS.has(part)) || /\.(log|pyc)$/.test(relative);
 // token 指标/分词器身份不是凭据；不要因包含 token 子串漏掉验收输入。
@@ -182,7 +189,9 @@ function captureWorkspace(cwd: string, options: WorkspaceFingerprintOptions): Wo
 				const tab = record.indexOf("\t");
 				const meta = record.slice(0, tab);
 				const rel = record.slice(tab + 1);
-				if (blocked(rel) || (ignored(rel) && !explicit.has(rel))) continue;
+				// 已跟踪内容默认纳入（含 build/dist 等产物目录）；敏感路径仍排除。
+				// 产物目录排除只作用于未跟踪文件：修改并重新暂存 build/code.py 必须改变指纹。
+				if (blocked(rel)) continue;
 				if (meta.startsWith("160000 ")) throw new FingerprintBlockedError("unsupported");
 				if (!meta.endsWith(" 0")) throw new FingerprintBlockedError("unsupported");
 				relativeOf(rel);
@@ -574,7 +583,8 @@ export function computeExecutionFingerprint(
 		workspace: snapshot.workspace,
 		gitHead: snapshot.gitHead,
 		// Index identity is separate from worktree bytes, but both bind reconstructable evidence.
-		contentHash: hash(stable([snapshot.contentHash, snapshot.indexHash])),
+		// FINGERPRINT_VERSION 使算法变化显式区分指纹版本（旧证据无法对等证明 → 重新验证）。
+		contentHash: hash(stable([FINGERPRINT_VERSION, snapshot.contentHash, snapshot.indexHash])),
 		packId: pack?.id ?? null,
 		packVersion: pack?.version ?? null,
 		inputsHash: hash(stable(contract)),

@@ -19,6 +19,12 @@ services:
       # The container must bind ALL interfaces so the -p port mapping works —
       # the server defaults to loopback-only for security.
       PI_WEB_HOST: "0.0.0.0"
+      # Loop 运行状态（run/lease/operation 等）必须落在持久卷内：容器 OverlayFS
+      # 可写层会被存储门禁拒绝，且容器重建即丢失。默认值 ~/.mini-harness/runs 在
+      # 容器内指向 /home/node/.mini-harness/runs（可写层），因此显式指到卷内。
+      # 显式设置同名环境变量会覆盖此默认；从旧配置升级时，若 run 仍留在旧路径，
+      # 需先停旧容器并迁移到卷内目录，否则新容器看不到旧任务。
+      MINI_HARNESS_RUNTIME_ROOT: "/app/.pi-web/loop-runs"
       # Workspace the agent operates in (read/edit/bash/write). Mount your
       # project dir and point PI_WEB_CWD at it, e.g.:
       # PI_WEB_CWD: /workspace

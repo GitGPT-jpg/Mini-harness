@@ -1003,15 +1003,26 @@ describe("D-12：评审掉线的两条路 / 服务端结构化启动", () => {
 		expect(h.modelCalls.length).toBe(0); // 没调规划模型
 	});
 
-	it("before_agent_start：模型准备期间被停止 → 迟到的规划结果不得复活 run（epoch 守卫）", async () => {
+	it("before_agent_start：模型准备期间被停止 → 回合在途不确认停止，迟到的规划结果不得复活 run（epoch 守卫）", async () => {
 		const sid = SID();
 		const h = makeHarness(sid, { deferPlanner: true });
 		const r: any = createLoopRun({ sessionId: sid, cwd: CWD, goal: "g" });
 		const pending = h.handlers.get("before_agent_start")![0]({}, h.ctx);
 		await waitFor(() => !!h.resolvePlanner);
-		expect(stopRunExternal(r.runId).ok).toBe(true);
+		// 模型回合在途（尚无 validator operation）：停止只能受理请求，不能直接确认已停。
+		const first = stopRunExternal(r.runId);
+		expect(first.ok).toBe(true);
+		expect(first.stopRequestedAt).toBeTruthy();
+		expect(first.stopConfirmedAt).toBeFalsy();
+		expect(loadRun(r.runId)).toMatchObject({ stage: "stopping", recoveryState: "stop-unconfirmed" });
 		h.resolvePlanner!("迟到的计划");
 		const res = await pending;
+		// 回合结束清除「回合在途」标记（agent_end 也会被停止的 run 触发清理）。
+		await h.handlers.get("agent_end")![0](undefined, h.ctx);
+		// 重新核对：回合已结束且无未核实实体 → 确认停止。
+		const recheck = stopRunExternal(r.runId);
+		expect(recheck.ok).toBe(true);
+		expect(recheck.stopConfirmedAt).toBeTruthy();
 		const st = loadRun(r.runId);
 		expect(st).toMatchObject({ status: "stopped", stopReason: "user-stop", plannerOutput: "" });
 		expect(journalEvents(r.runId)).toContain("late-callback-dropped");

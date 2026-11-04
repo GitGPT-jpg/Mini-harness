@@ -42,6 +42,9 @@ ENV PI_WEB_DATA_DIR=/app/.pi-web
 EXPOSE 8787
 # Session data (per-client chat history) lives here — mount a volume.
 VOLUME ["/app/.pi-web"]
+# 挂载点先创建并归属 node 用户：空命名卷初始化时沿用镜像内的属主，
+# 否则 root 属主会让 USER node 下写不进会话/Loop 状态目录。
+RUN mkdir -p /app/.pi-web && chown node:node /app/.pi-web
 USER node
 # --import：pi SDK 副本选择钩子（issue #260/#321）——机器上有更新的 pi 就跟随，
 # 自带副本兜底；镜像内没有祖先副本，实际总是用自带那份。

@@ -29,6 +29,15 @@ const models = [
 	{ provider: "fixture", id: "gpt-planner" },
 	{ provider: "fixture", id: "glm-reviewer" },
 ];
+/** start 消息可配置 reviewer 返回固定结论（"block"）；持久到 data 文件供恢复宿主 B 沿用。 */
+const reviewerModeFile = () => path.join(data, "review-mode.json");
+const reviewerMode = () => {
+	try {
+		return JSON.parse(fs.readFileSync(reviewerModeFile(), "utf8")).mode as "block" | "hang" | null;
+	} catch {
+		return null;
+	}
+};
 const ctx = {
 	cwd: workspace,
 	sessionManager: { getSessionId: () => sid },
@@ -39,6 +48,8 @@ const ctx = {
 		getAvailable: () => models,
 		complete: async (model: any) => {
 			if (model.id === "gpt-planner") return { content: [{ type: "text", text: "validate existing workspace" }] };
+			if (reviewerMode() === "block")
+				return { content: [{ type: "text", text: '{"verdict":"block","reasons":["not ready"]}' }] };
 			fs.appendFileSync(path.join(data, "review-starts.jsonl"), JSON.stringify({ host: process.pid }) + "\n");
 			return new Promise<never>(() => {});
 		},
@@ -84,13 +95,17 @@ process.on("message", async (message: any) => {
 		let result: unknown;
 		switch (message.action) {
 			case "start": {
+				fs.writeFileSync(
+					reviewerModeFile(),
+					JSON.stringify({ mode: message.reviewBlock === true ? "block" : message.review === true ? "hang" : null }),
+				);
 				const created = createLoopRun({
 					sessionId: sid,
 					cwd: workspace,
 					goal: "restart acceptance",
 					validateCmd: message.command,
 					useReviewer: message.review === true,
-					maxRounds: 1,
+					maxRounds: message.maxRounds ?? 1,
 					...(message.constraints ?? {}),
 				});
 				if (!created.ok) throw new Error(created.error);
