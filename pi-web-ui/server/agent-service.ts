@@ -48,6 +48,7 @@ import { BG_CLEANUP_FALLBACK_MIN, BgServerTracker } from "./bg-servers.js";
 import {
 	acceptRunValidatorOnly,
 	addLoopEventReporter,
+	canResumeLoopDelivery,
 	createLoopExtension,
 	createLoopRun,
 	registerRunTurnController,
@@ -12694,9 +12695,11 @@ export class ClientSession {
 			return;
 		}
 		// 停止必须能取消该 run 绑定会话（原会话或 worktree 执行者）的在途模型回合，
-		// 而不只是 validator 子进程：注册回合控制器后再走 stopRunExternal。
+		// 而不只是 validator 子进程。只有 run 确实绑定到本对话（含其派生执行者）时才注册
+		// 控制器：找不到目标会话不得回退到当前聊天，否则会误取消无关对话的回合。
 		const st = loadLoopState(target);
-		if (st) this.registerLoopTurnControl(target, this.loopExecutorConv(st) ?? conv);
+		const boundConv = st ? this.loopExecutorConv(st) : undefined;
+		if (st && boundConv) this.registerLoopTurnControl(target, boundConv);
 		const r = stopRunExternal(target, "user-stop");
 		if (!r.ok) this.emitNotice("warning", `Loop 停止失败：${r.error}`);
 		else if (!r.stopConfirmedAt && r.status !== "done")
@@ -12845,6 +12848,12 @@ export class ClientSession {
 				beforeDispatch.epoch !== cur.epoch
 			)
 				return;
+			// P1-4：旧执行实体身份未核实前不得实际投递续跑（自动与手动入口共用同一门禁）。
+			if (!canResumeLoopDelivery(beforeDispatch)) {
+				this.emitNotice("warning", "Loop 续跑受阻：存在未核实的旧执行实体，请先核对现场或停止原任务。");
+				this.flushSnapshot();
+				return;
+			}
 			const executor = this.loopExecutorConv(cur) ?? conv;
 			// 续跑回合也接入取消域：恢复期间被停止，停止要能取消该回合。
 			this.registerLoopTurnControl(runId, executor);
