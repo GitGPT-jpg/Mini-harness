@@ -9,13 +9,34 @@ import { useEffect, useSyncExternalStore } from "react";
 import { appUrl } from "./base-url";
 import { withToken } from "./auth-token";
 
-/** GET /api/mini-harness/cluster 的结果（server/loop/routes.ts 的 ClusterStatus）。 */
+/** GET /api/mini-harness/cluster 的结果（server/loop/cluster-config.ts 的 ClusterStatus，只含白名单字段）。 */
 export interface ClusterStatus {
 	configured: boolean;
 	connected: boolean;
-	code: "not-configured" | "no-kubectl" | "error" | "ok";
+	code:
+		| "not-configured"
+		| "no-kubectl"
+		| "ok"
+		| "unauthorized"
+		| "forbidden"
+		| "tls"
+		| "network"
+		| "timeout"
+		| "config-invalid"
+		| "error";
 	message: string;
+	/** 服务实际使用的来源：Web 导入 / 启动时继承的 KUBECONFIG / ~/.kube/config / 无。 */
+	source?: ClusterSource;
+	envPathCount?: number;
+	shadowed?: ClusterSource[];
+	context?: string | null;
+	serverVersion?: string | null;
+	generation?: number;
+	instance?: string;
+	checkedAt?: string;
 }
+
+export type ClusterSource = "app" | "env" | "default" | "none";
 
 /** 新任务弹窗的验收方式：代码验证 + 模型评审 / 仅代码验证（都走 mini-harness 代码 loop）/
  *  仅模型评审（走 GoalService 的 LLM loop）。 */
@@ -38,6 +59,8 @@ interface CockpitState {
 	/** 任务详情面板正在看的 runId；null = 关着。 */
 	runDetail: string | null;
 	cluster: ClusterStatus | null;
+	/** 有集群探测在途（首次加载 / 打开面板 / 刷新 / 导入 / 清除）。 */
+	clusterChecking: boolean;
 }
 
 let state: CockpitState = {
@@ -47,6 +70,7 @@ let state: CockpitState = {
 	taskDeskOpen: false,
 	runDetail: null,
 	cluster: null,
+	clusterChecking: false,
 };
 const listeners = new Set<() => void>();
 
@@ -122,19 +146,54 @@ export async function mhPost<T>(path: string, body: unknown): Promise<{ ok: bool
 	}
 }
 
-export function setClusterStatus(c: ClusterStatus | null): void {
+// 集群状态的过期结果防护：每个请求一个序号；导入/清除把下限抬到自己的序号，
+// 之前发出、之后才返回的探测（配置已变）一律丢弃。同一服务实例内代次只增不减。
+let clusterSeq = 0;
+let clusterApplied = 0;
+let clusterFloor = 0;
+
+function applyCluster(seq: number, c: ClusterStatus | null | undefined): void {
+	if (!c || seq < clusterFloor || seq < clusterApplied) return;
+	const cur = state.cluster;
+	if (cur?.instance && cur.instance === c.instance && (c.generation ?? 0) < (cur.generation ?? 0)) return;
+	clusterApplied = seq;
 	patch({ cluster: c });
 }
 
-export async function refreshCluster(): Promise<void> {
-	const j = await mhGet<ClusterStatus>("cluster");
-	if (j) patch({ cluster: j });
+function settleChecking(seq: number): void {
+	if (seq === clusterSeq) patch({ clusterChecking: false });
+}
+
+/** 取服务端状态；force = 跳过服务端 8s 缓存（打开面板 / 点刷新）。 */
+export async function refreshCluster(force = false): Promise<void> {
+	const seq = ++clusterSeq;
+	patch({ clusterChecking: true });
+	applyCluster(seq, await mhGet<ClusterStatus>(force ? "cluster?refresh=1" : "cluster"));
+	settleChecking(seq);
+}
+
+/** 导入（path="cluster"）或清除（"cluster/clear"）；响应里是变更后对当前配置的探测结果。 */
+export async function mutateCluster(
+	path: "cluster" | "cluster/clear",
+	body: unknown,
+): Promise<{ ok: boolean; data: (ClusterStatus & { error?: string; status?: ClusterStatus }) | null } | null> {
+	const seq = ++clusterSeq;
+	clusterFloor = seq;
+	patch({ clusterChecking: true });
+	const r = await mhPost<ClusterStatus & { error?: string; status?: ClusterStatus }>(path, body);
+	applyCluster(seq, r?.ok ? r.data : r?.data?.status);
+	settleChecking(seq);
+	return r;
 }
 
 let pollers = 0;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+const onVisible = () => {
+	if (!document.hidden) void refreshCluster();
+};
 
-/** 集群状态轮询（6s，页面隐藏时跳过）：输入框按钮与底栏指示共用同一个定时器。 */
+/** 集群状态轮询（15s，页面隐藏时跳过、回到前台补一次）：输入框按钮与底栏指示共用同一个定时器。
+ *  服务端另有 8s 缓存与在途合并，多个页面不会叠加出高频探测。 */
 export function useClusterPolling(): void {
 	useEffect(() => {
 		pollers += 1;
@@ -142,13 +201,15 @@ export function useClusterPolling(): void {
 			void refreshCluster();
 			pollTimer = setInterval(() => {
 				if (!document.hidden) void refreshCluster();
-			}, 6000);
+			}, 15_000);
+			document.addEventListener("visibilitychange", onVisible);
 		}
 		return () => {
 			pollers -= 1;
 			if (pollers === 0 && pollTimer) {
 				clearInterval(pollTimer);
 				pollTimer = null;
+				document.removeEventListener("visibilitychange", onVisible);
 			}
 		};
 	}, []);

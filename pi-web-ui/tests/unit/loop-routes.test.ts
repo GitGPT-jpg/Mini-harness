@@ -130,7 +130,8 @@ describe("/api/mini-harness/*", () => {
 		recordGoalEvent(entry("created"), dataDir);
 		const app = express();
 		app.use(express.json());
-		registerLoopRoutes(app, { dataDir, agentDir });
+		// 集群探测用空环境 + 临时 HOME：结果不受本机 KUBECONFIG / ~/.kube/config 影响。
+		registerLoopRoutes(app, { dataDir, agentDir, cluster: { env: {}, home: dataDir } });
 		server = app.listen(0, "127.0.0.1");
 		await new Promise<void>((r) => server.once("listening", () => r()));
 		base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -214,6 +215,10 @@ describe("/api/mini-harness/*", () => {
 		const j = await (await fetch(`${base}/api/mini-harness/cluster`)).json();
 		expect(j).toMatchObject({ configured: false, connected: false, code: "not-configured" });
 		expect((await post("/api/mini-harness/cluster", { kubeconfig: "  " })).status).toBe(400);
-		expect(await (await post("/api/mini-harness/cluster/clear", {})).json()).toEqual({ ok: true });
+		expect(await (await post("/api/mini-harness/cluster/clear", {})).json()).toMatchObject({
+			ok: true,
+			code: "not-configured",
+			source: "none",
+		});
 	});
 });
