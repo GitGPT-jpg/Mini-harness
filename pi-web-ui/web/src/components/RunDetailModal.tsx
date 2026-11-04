@@ -1,9 +1,9 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { FiFileText } from "react-icons/fi";
 import type { LoopUiState } from "../types";
-import { useT } from "../i18n";
+import { useT, type Translate } from "../i18n";
 import { appSend } from "../app-globals";
-import { closeRunDetail, mhGet, mhPost, openTaskModal, useCockpit } from "../loop-cockpit";
+import { bumpRunsVersion, closeRunDetail, mhGet, mhPost, openTaskModal, useCockpit } from "../loop-cockpit";
 import {
 	canAcceptValidatorOnly,
 	loopRoundText,
@@ -43,6 +43,10 @@ export interface RunDetail {
 	workspace: string;
 	worktreeBranch: string | null;
 	worktreeCommitted: boolean;
+	/** 任务工作树的只读状态；dirty = null 表示服务端没能确认。旧服务端没有这个字段。 */
+	worktree?: { path: string; exists: boolean; dirty: boolean | null; uncommitted: number } | null;
+	/** 集群绑定（白名单字段）；pinned = 任务固定了一份集群配置快照。 */
+	clusterBinding?: { status?: string; context?: string | null } | null;
 	plannerOutput: string;
 	plan: string;
 	summary: string;
@@ -109,6 +113,75 @@ function DiffBlock({ text }: { text: string }) {
 	);
 }
 
+/** 停止待确认时还在等什么：取最近一次停止核对写进过程记录的未确认项。 */
+export function stopWaitsOf(detail: Pick<RunDetail, "journal">, t: Translate): string {
+	const last = [...detail.journal].reverse().find((j) => j.event === "stop-requested" || j.event === "stop-confirmed");
+	const items: string[] = [];
+	if (last?.event === "stop-requested") {
+		const turn = last.turn as { inFlight?: boolean; abortError?: string | null } | undefined;
+		const blocked = (last.cancellation as { blockedReasons?: unknown[] } | undefined)?.blockedReasons?.length ?? 0;
+		const legacy = Array.isArray(last.legacyUnverified) ? last.legacyUnverified : [];
+		if (turn?.inFlight) items.push(t("runDeleteWaitTurn"));
+		if (turn?.abortError) items.push(t("runDeleteWaitAbortError", { error: String(turn.abortError) }));
+		if (blocked) items.push(t("runDeleteWaitOps", { count: blocked }));
+		if (legacy.length) items.push(t("runDeleteWaitLegacy", { pids: legacy.join(", ") }));
+	}
+	return items.length ? items.join(" · ") : t("runDeleteWaitGeneric");
+}
+
+/** 删除前的界面侧拦截：停止待确认、运行中、工作树有未提交改动或状态不明；null = 可以删。 */
+export function deleteBlockOf(
+	detail: RunDetail,
+	t: Translate,
+): { reason: string; keep?: { hint: string; command: string } } | null {
+	if ((detail.stopRequestedAt && !detail.stopConfirmedAt) || detail.stage === "stopping")
+		return { reason: t("runDeleteWaitStop", { at: clock(detail.stopRequestedAt), waits: stopWaitsOf(detail, t) }) };
+	if (detail.status === "active") return { reason: t("runDeleteActive") };
+	const tree = detail.worktree;
+	if (tree?.exists && tree.dirty === null) return { reason: t("runDeleteTreeUnknown", { path: tree.path }) };
+	if (tree?.exists && tree.dirty) {
+		const message = t("runDeleteKeepCommitMsg");
+		return {
+			reason: t("runDeleteDirty", { path: tree.path, count: tree.uncommitted }),
+			keep: {
+				hint: t("runDeleteKeepHint", { branch: detail.worktreeBranch || "—" }),
+				command: `git -C "${tree.path}" add -A && git -C "${tree.path}" commit -m "${message}"`,
+			},
+		};
+	}
+	return null;
+}
+
+/** 删除接口的失败响应（server/loop/extension.ts 的 DeleteLoopRunResult）→ 给用户看的原因。 */
+export function deleteFailureText(
+	r: {
+		ok: boolean;
+		data: { code?: string; error?: string; worktreeRemoved?: boolean; checkpointRefsRemoved?: string[] } | null;
+	} | null,
+	t: Translate,
+): string {
+	if (!r) return t("runDeleteNetwork");
+	const code = r.data?.code || "error";
+	const error = r.data?.error || "";
+	const reason =
+		code === "active"
+			? t("runDeleteRejectActive", { code })
+			: code === "missing"
+				? t("runDeleteRejectMissing", { code })
+				: code === "cleanup-error"
+					? t("runDeleteRejectCleanup", { code, error })
+					: t("runDeleteRejectOther", { code, error: error || "—" });
+	const parts = [
+		...(r.data?.worktreeRemoved ? [t("runDeletePartWorktree")] : []),
+		...(r.data?.checkpointRefsRemoved?.length
+			? [t("runDeletePartRefs", { count: r.data.checkpointRefsRemoved.length })]
+			: []),
+	];
+	return (
+		t("runDeleteFailed", { reason }) + (parts.length ? " " + t("runDeletePartial", { parts: parts.join(" · ") }) : "")
+	);
+}
+
 function Section({ title, children }: { title: string; children: ReactNode }) {
 	return (
 		<>
@@ -133,6 +206,11 @@ export const RunDetailModal = memo(function RunDetailModal({ currentLoop }: Prop
 	const [detail, setDetail] = useState<RunDetail | null | undefined>(undefined);
 	const [stopping, setStopping] = useState(false);
 	const [actionMessage, setActionMessage] = useState("");
+	const intent = useCockpit("runDetailIntent");
+	const [deleteOpen, setDeleteOpen] = useState(false);
+	const [deleting, setDeleting] = useState(false);
+	const [deleteFailure, setDeleteFailure] = useState("");
+	const deleteRef = useRef<HTMLDivElement>(null);
 	const [reload, setReload] = useState(0);
 	const view = useRef({});
 	const owned = !!runId && currentLoop?.kind === "run" && currentLoop.runId === runId;
@@ -148,11 +226,24 @@ export const RunDetailModal = memo(function RunDetailModal({ currentLoop }: Prop
 		setDetail(undefined);
 		setStopping(false);
 		setActionMessage("");
+		setDeleting(false);
+		setDeleteFailure("");
 		view.current = {};
 		return () => {
 			view.current = {};
 		};
 	}, [runId]);
+
+	// 任务台的「删除」：打开详情时直接展开删除确认
+	useEffect(() => {
+		setDeleteOpen(intent === "delete");
+	}, [runId, intent]);
+
+	// 确认页在长详情的末尾：展开时滚到它
+	const hasDetail = !!detail;
+	useEffect(() => {
+		if (deleteOpen && hasDetail) deleteRef.current?.scrollIntoView?.({ block: "start" });
+	}, [deleteOpen, hasDetail]);
 
 	useEffect(() => {
 		if (!runId || stopping) return;
@@ -239,6 +330,45 @@ export const RunDetailModal = memo(function RunDetailModal({ currentLoop }: Prop
 		setReload((value) => value + 1);
 	};
 
+	// 删除前在界面上拦下：运行中、停止待确认、工作树有未提交改动（或状态不明）都不发删除请求
+	const tree = detail?.worktree ?? null;
+	const deleteBlock = detail ? deleteBlockOf(detail, t) : null;
+	const remove = async () => {
+		if (!detail || deleteBlock || deleting) return;
+		const scope = view.current;
+		setDeleting(true);
+		setDeleteFailure("");
+		// 发请求前重拉详情：确认页打开之后，工作树或停止状态可能已经变了
+		const fresh = await mhGet<RunDetail>(`runs/${encodeURIComponent(detail.runId)}/detail`);
+		if (view.current !== scope) return;
+		if (fresh) {
+			setDetail(fresh);
+			if (deleteBlockOf(fresh, t)) {
+				setDeleting(false);
+				return;
+			}
+		}
+		const response = await mhPost<{
+			ok: boolean;
+			code?: string;
+			error?: string;
+			worktreeRemoved?: boolean;
+			checkpointRefsRemoved?: string[];
+		}>("runs/delete", { runId: detail.runId });
+		if (view.current !== scope) return;
+		setDeleting(false);
+		if (response?.ok && response.data?.ok) {
+			bumpRunsVersion();
+			// 任务工作树已移除：首页工作树横幅重新读取
+			appSend({ type: "refresh_worktree" });
+			closeRunDetail();
+			return;
+		}
+		// 删除失败：记录留在原处，重拉详情显示当前状态
+		setDeleteFailure(deleteFailureText(response, t));
+		setReload((value) => value + 1);
+	};
+
 	const title = (
 		<span className="run-detail-head">
 			<span>{t("runDetailTitle")}</span>
@@ -261,6 +391,65 @@ export const RunDetailModal = memo(function RunDetailModal({ currentLoop }: Prop
 					<div className="task-desk-empty run-detail-missing">{t("runDetailMissing")}</div>
 				) : (
 					<DetailBody detail={detail} />
+				)}
+				{detail && deleteOpen && (
+					<div ref={deleteRef} className="run-detail-delete" role="region" aria-label={t("runDeleteTitle")}>
+						<div className="run-detail-delete-title">{t("runDeleteTitle")}</div>
+						<div className="run-detail-delete-sub">{t("runDeleteWillRemove")}</div>
+						<ul className="run-detail-delete-list">
+							<li>{t("runDeleteItemRecord")}</li>
+							{tree?.exists && <li>{t("runDeleteItemWorktree", { path: tree.path })}</li>}
+							<li>{t("runDeleteItemRefs", { runId: detail.runId })}</li>
+							{detail.clusterBinding?.status === "pinned" && (
+								<li>{t("runDeleteItemCluster", { context: detail.clusterBinding.context || "—" })}</li>
+							)}
+						</ul>
+						<div className="run-detail-delete-sub">
+							{detail.worktreeBranch
+								? t("runDeleteKeepsBranch", { branch: detail.worktreeBranch, workspace: detail.workspace })
+								: t("runDeleteKeepsWorkspace", { workspace: detail.workspace })}
+						</div>
+						{deleteBlock ? (
+							<div className="run-detail-delete-block" role="status">
+								<div>{deleteBlock.reason}</div>
+								{deleteBlock.keep && (
+									<>
+										<div>{deleteBlock.keep.hint}</div>
+										<pre className="run-detail-pre run-detail-delete-cmd">{deleteBlock.keep.command}</pre>
+									</>
+								)}
+								{!active && !stopPending && (
+									<button
+										type="button"
+										className="btn sm run-detail-delete-recheck"
+										onClick={() => setReload((value) => value + 1)}
+									>
+										{t("runDeleteRecheck")}
+									</button>
+								)}
+							</div>
+						) : (
+							<div className="run-detail-delete-sub">{t("runDeleteIrreversible")}</div>
+						)}
+						{deleteFailure && (
+							<div className="run-detail-delete-error" role="alert">
+								{deleteFailure}
+							</div>
+						)}
+						<div className="cockpit-row run-detail-delete-acts">
+							<button
+								type="button"
+								className="btn sm danger run-detail-delete-confirm"
+								disabled={!!deleteBlock || deleting}
+								onClick={() => void remove()}
+							>
+								{deleting ? t("runDeleteSending") : t("runDeleteConfirm")}
+							</button>
+							<button type="button" className="btn sm" disabled={deleting} onClick={() => setDeleteOpen(false)}>
+								{t("cancel")}
+							</button>
+						</div>
+					</div>
 				)}
 				<div className="cockpit-row run-detail-acts">
 					{actionMessage && (
@@ -316,6 +505,19 @@ export const RunDetailModal = memo(function RunDetailModal({ currentLoop }: Prop
 					{detail && !active && !stopPending && (
 						<button type="button" className="btn run-detail-restart" onClick={restart}>
 							{t("runDetailRestart")}
+						</button>
+					)}
+					{detail && !deleteOpen && (
+						<button
+							type="button"
+							className="btn sm run-detail-delete-open"
+							onClick={() => {
+								setDeleteFailure("");
+								setDeleteOpen(true);
+								setReload((value) => value + 1);
+							}}
+						>
+							{t("runDelete")}
 						</button>
 					)}
 					<button type="button" className="btn" onClick={closeRunDetail}>

@@ -11,6 +11,7 @@
  *
  * PI_WEB_TOKEN 鉴权由 index.ts 的全局中间件覆盖，这里只做入参校验。
  */
+import { execFileSync } from "node:child_process";
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { Express, NextFunction, Request, Response } from "express";
@@ -177,6 +178,8 @@ export interface LoopRunDetail {
 	workspace: string;
 	worktreeBranch: string | null;
 	worktreeCommitted: boolean;
+	/** 任务工作树的只读状态（删除确认用）；dirty = null 表示 git 没能给出结论。 */
+	worktree: { path: string; exists: boolean; dirty: boolean | null; uncommitted: number } | null;
 	plannerOutput: string;
 	plan: string;
 	summary: string;
@@ -240,6 +243,23 @@ function readTextSafe(file: string, maxBytes: number): string {
 }
 
 /** 一个 run 的完整详情；run 不存在返回 null。 */
+/** 任务工作树是否还在、有没有未提交改动（含未跟踪文件）；只读，git 失败时 dirty = null。 */
+function worktreeStateOf(dir: string | null | undefined): LoopRunDetail["worktree"] {
+	if (!dir) return null;
+	if (!existsSync(dir)) return { path: dir, exists: false, dirty: false, uncommitted: 0 };
+	try {
+		const out = execFileSync("git", ["-C", dir, "status", "--porcelain"], {
+			encoding: "utf8",
+			timeout: 5000,
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+		const uncommitted = out.split("\n").filter((line) => line.trim()).length;
+		return { path: dir, exists: true, dirty: uncommitted > 0, uncommitted };
+	} catch {
+		return { path: dir, exists: true, dirty: null, uncommitted: 0 };
+	}
+}
+
 export function collectRunDetail(runId: string): LoopRunDetail | null {
 	const st = loadLoopState(runId);
 	if (!st) return null;
@@ -306,6 +326,7 @@ export function collectRunDetail(runId: string): LoopRunDetail | null {
 		workspace: ws,
 		worktreeBranch: st.worktreeBranch ?? null,
 		worktreeCommitted: Boolean(st.worktreeCommitted),
+		worktree: worktreeStateOf(st.worktreeDir),
 		plannerOutput: clipTail(st.plannerOutput, DETAIL_TEXT_MAX),
 		plan: clipTail(st.plan, DETAIL_TEXT_MAX),
 		summary: clipTail(st.summary, DETAIL_TEXT_MAX),

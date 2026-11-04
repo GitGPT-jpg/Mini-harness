@@ -58,6 +58,10 @@ interface CockpitState {
 	taskDeskOpen: boolean;
 	/** 任务详情面板正在看的 runId；null = 关着。 */
 	runDetail: string | null;
+	/** 打开详情时直接展开的操作：delete = 删除确认（任务台的「删除」走这里）。 */
+	runDetailIntent: "delete" | null;
+	/** 任务被删除后加一，任务台据此立即重拉列表。 */
+	runsVersion: number;
 	cluster: ClusterStatus | null;
 	/** 有集群探测在途（首次加载 / 打开面板 / 刷新 / 导入 / 清除）。 */
 	clusterChecking: boolean;
@@ -69,6 +73,8 @@ let state: CockpitState = {
 	clusterOpen: false,
 	taskDeskOpen: false,
 	runDetail: null,
+	runDetailIntent: null,
+	runsVersion: 0,
 	cluster: null,
 	clusterChecking: false,
 };
@@ -110,8 +116,10 @@ export const openCluster = (): void => patch({ clusterOpen: true });
 export const closeCluster = (): void => patch({ clusterOpen: false });
 export const openTaskDesk = (): void => patch({ taskDeskOpen: true });
 export const closeTaskDesk = (): void => patch({ taskDeskOpen: false });
-export const openRunDetail = (runId: string): void => patch({ runDetail: runId });
-export const closeRunDetail = (): void => patch({ runDetail: null });
+export const openRunDetail = (runId: string, intent: "delete" | null = null): void =>
+	patch({ runDetail: runId, runDetailIntent: intent });
+export const closeRunDetail = (): void => patch({ runDetail: null, runDetailIntent: null });
+export const bumpRunsVersion = (): void => patch({ runsVersion: state.runsVersion + 1 });
 
 export function mhUrl(path: string): string {
 	return withToken(appUrl(`/api/mini-harness/${path}`));

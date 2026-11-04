@@ -13650,6 +13650,63 @@
         color: var(--text-dim);
     }
 
+    /* 任务详情的删除确认：说明移除 / 保留什么，被拦下时给原因与保留改动的办法 */
+    .run-detail-delete {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin-top: 12px;
+        padding: 10px 12px;
+        border: 1px solid color-mix(in srgb, var(--red) 35%, transparent);
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--red) 5%, transparent);
+        color: var(--text);
+        font-size: 12px;
+        line-height: 1.55;
+        min-width: 0;
+        overflow-wrap: anywhere;
+    }
+
+    .run-detail-delete-title {
+        font-weight: 600;
+    }
+
+    .run-detail-delete-sub {
+        color: var(--text-dim);
+    }
+
+    .run-detail-delete-list {
+        margin: 0;
+        padding-left: 18px;
+    }
+
+    .run-detail-delete-block,
+    .run-detail-delete-error {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
+        padding: 7px 9px;
+        border-radius: 7px;
+        border: 1px solid color-mix(in srgb, var(--amber) 40%, transparent);
+        background: color-mix(in srgb, var(--amber) 8%, transparent);
+    }
+
+    .run-detail-delete-error {
+        border-color: color-mix(in srgb, var(--red) 45%, transparent);
+        background: color-mix(in srgb, var(--red) 8%, transparent);
+    }
+
+    .run-detail-delete-cmd {
+        align-self: stretch;
+        white-space: pre-wrap;
+        user-select: all;
+    }
+
+    .run-detail-delete-acts {
+        justify-content: flex-end;
+    }
+
     /* The review-result card inserted into the message flow. */
     .msg-goal-review {
         border-left: 3px solid var(--amber);

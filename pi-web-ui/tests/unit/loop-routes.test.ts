@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import express from "express";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -209,6 +210,35 @@ describe("/api/mini-harness/*", () => {
 		expect(cleanupError.status).toBe(500);
 		expect(await cleanupError.json()).toMatchObject({ ok: false, code: "cleanup-error" });
 		rmSync(join(LOOP_RUNS_ROOT, malformedCleanup.runId), { recursive: true, force: true });
+	});
+
+	it("run detail 只读给出任务工作树状态：干净 / 有未提交改动 / 目录已不在 / git 给不出结论", async () => {
+		const run: any = createLoopRun({ sessionId: `route-tree-${Date.now()}`, cwd: dataDir, goal: "tree state" });
+		expect(run.ok).toBe(true);
+		const tree = mkdtempSync(join(tmpdir(), "loop-routes-tree-"));
+		const git = (...args: string[]) => execFileSync("git", ["-C", tree, ...args], { stdio: "ignore" });
+		git("init", "-q");
+		git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init");
+		const writeState = (worktreeDir: string) =>
+			writeFileSync(
+				join(LOOP_RUNS_ROOT, run.runId, "state.json"),
+				JSON.stringify({ ...run.st, status: "stopped", stage: "stopped", worktreeDir }),
+			);
+		const treeOf = async () =>
+			(await (await fetch(`${base}/api/mini-harness/runs/${run.runId}/detail`)).json()).worktree;
+		writeState(tree);
+		expect(await treeOf()).toEqual({ path: tree, exists: true, dirty: false, uncommitted: 0 });
+		writeFileSync(join(tree, "draft.txt"), "keep me");
+		expect(await treeOf()).toEqual({ path: tree, exists: true, dirty: true, uncommitted: 1 });
+		expect(existsSync(join(tree, "draft.txt"))).toBe(true);
+		const plain = mkdtempSync(join(tmpdir(), "loop-routes-plain-"));
+		writeState(plain);
+		expect(await treeOf()).toMatchObject({ exists: true, dirty: null });
+		writeState(join(plain, "gone"));
+		expect(await treeOf()).toMatchObject({ exists: false, dirty: false });
+		rmSync(join(LOOP_RUNS_ROOT, run.runId), { recursive: true, force: true });
+		rmSync(tree, { recursive: true, force: true });
+		rmSync(plain, { recursive: true, force: true });
 	});
 
 	it("cluster：未配置时报 not-configured；空 kubeconfig 拒绝；clear 幂等", async () => {
