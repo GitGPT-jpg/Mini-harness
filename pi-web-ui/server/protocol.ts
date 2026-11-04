@@ -794,7 +794,12 @@ export type ClientMessage =
 	 *  subsequent turn; `false` clears it after the next turn (single-shot).
 	 *  `reviewModel` ("provider/id", optional) is remembered as the goal WIZARD
 	 *  model; the reviewer is the main conversation itself (no separate model).
-	 *  `execModel` ("provider/id", optional) picks the executor's model. */
+	 *  `execModel` ("provider/id", optional) picks the executor's model.
+	 *  `reviewerModel` ("provider/id", optional; empty = the main conversation
+	 *  reviews, the original default) runs each review round in an isolated
+	 *  read-only reviewer conversation on that model; the main chat model is
+	 *  untouched. Executor and reviewer must resolve to different families —
+	 *  the server rejects the goal before anything runs otherwise. */
 	| {
 			type: "set_goal";
 			goal: string;
@@ -803,6 +808,8 @@ export type ClientMessage =
 			locked: boolean;
 			/** 执行者模型（"provider/id"；空 = 跟随主对话）。 */
 			execModel?: string;
+			/** 审查者模型（"provider/id"；空 = 主对话审查）。 */
+			reviewerModel?: string;
 	  }
 	| { type: "clear_goal" }
 	/** 暂停目标：停掉执行者当前回合，保留目标与产物，不再自动派下一轮。 */
@@ -827,6 +834,8 @@ export type ClientMessage =
 			locked?: boolean;
 			/** 执行者模型偏好（"provider/id"；空 = 跟随），全局记忆。 */
 			execModel?: string;
+			/** 审查者模型偏好（"provider/id"；空 = 主对话审查），全局记忆。 */
+			reviewerModel?: string;
 	  }
 	// -- mini-harness Loop（受控代码/LLM Loop，server/loop/）------------------
 	/** 启动受控 Loop（D-12-2 结构化启动）：服务端先建 run 落盘（绑定本会话，快照 loop
@@ -1727,8 +1736,10 @@ export interface GoalStatus {
 	history?: GoalHistoryEntry[];
 	/** 2.0：执行者模型（"provider/id"；null = 跟随主对话）。 */
 	execModel?: string | null;
-	/** 2.0：角色对话（审查者就是主对话，故这里只有 executor）。 */
-	roles?: { executor?: GoalRoleRef };
+	/** 审查者模型（"provider/id"；null = 主对话审查）。服务端恒下发该键：前端以键存在判定可选。 */
+	reviewerModel?: string | null;
+	/** 2.0：角色对话（默认审查者是主对话；显式 reviewerModel 时另有只读审查对话）。 */
+	roles?: { executor?: GoalRoleRef; reviewer?: GoalRoleRef };
 }
 
 /** Progress of the collaborative target wizard (see GoalStatus.wizard). */

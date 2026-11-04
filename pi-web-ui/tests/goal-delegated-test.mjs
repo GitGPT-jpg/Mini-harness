@@ -11,7 +11,7 @@ import { portUp } from "./lib/port-utils.mjs";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
 import { spawn } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,6 +20,24 @@ import { setTimeout as sleep } from "node:timers/promises";
 const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
 const PORT = Number(process.argv[2] || 8907);
 const dataDir = mkdtempSync(join(tmpdir(), "pi-web-goal-delegated-"));
+// 隔离的模型目录：执行与审查必须属于不同家族，主对话 glm-mock（zhipu）审查、执行用 gpt-mock（openai）。
+// 端口 9 无服务：模型请求必败，本测只验角色对话接线（零 token）。
+const agentDir = mkdtempSync(join(tmpdir(), "pi-web-goal-delegated-agent-"));
+const mockModel = (id) => ({ id, name: id, input: ["text"], contextWindow: 32000, maxTokens: 4096 });
+writeFileSync(join(agentDir, "auth.json"), JSON.stringify({ mock: { type: "api_key", key: "mock-key" } }));
+writeFileSync(
+	join(agentDir, "models.json"),
+	JSON.stringify({
+		providers: {
+			mock: {
+				api: "openai-completions",
+				baseUrl: "http://127.0.0.1:9",
+				apiKey: "mock-key",
+				models: [mockModel("glm-mock"), mockModel("gpt-mock")],
+			},
+		},
+	}),
+);
 
 let failures = 0;
 const check = (name, ok, extra = "") => {
@@ -34,6 +52,7 @@ const server = spawn("node", ["dist/server/index.js"], {
 		PI_WEB_PORT: String(PORT),
 		PI_WEB_DATA_DIR: dataDir,
 		PI_WEB_CWD: REPO_ROOT,
+		PI_CODING_AGENT_DIR: agentDir,
 		// 角色轮等待上限跟着工具看门狗走：压小它，免在无凭据环境里等模型的整轮重试。
 		PI_WEB_TOOL_TIMEOUT_MS: "12000",
 	},
@@ -83,11 +102,14 @@ try {
 	const mainId = snapshot?.conversationId;
 	check("主对话已就绪", typeof mainId === "string" && mainId.length > 0, mainId ?? "(none)");
 
+	send({ type: "set_model", modelId: "mock/glm-mock" });
+	await waitFor(() => snapshot?.model?.id === "glm-mock", "main model glm-mock");
 	send({
 		type: "set_goal",
 		goal: "把 README 的安装说明补全",
 		maxRounds: 1,
 		locked: true,
+		execModel: "mock/gpt-mock",
 	});
 	await waitFor(
 		() => goalStatus?.goal === "把 README 的安装说明补全" && !!goalStatus?.roles?.executor?.convId,
@@ -99,7 +121,12 @@ try {
 		goalStatus?.reviewMode === undefined,
 		String(goalStatus?.reviewMode),
 	);
-	check("execModel 字段存在（新后端标志）", goalStatus?.execModel === null, String(goalStatus?.execModel));
+	check("execModel 按请求生效（新后端标志）", goalStatus?.execModel === "mock/gpt-mock", String(goalStatus?.execModel));
+	check(
+		"reviewerModel 键恒下发（null = 主对话审查）",
+		goalStatus?.reviewerModel === null,
+		String(goalStatus?.reviewerModel),
+	);
 	const execId = goalStatus?.roles?.executor?.convId;
 	check("服务端拉起了常驻执行对话", typeof execId === "string" && execId.length > 0, execId ?? "(none)");
 	check(

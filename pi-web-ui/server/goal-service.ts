@@ -37,6 +37,7 @@ import type { ClientStateStore } from "./client-state.js";
 import { getServerString, pick, type ServerLang } from "./i18n.js";
 import { parseModelSpec } from "./attachments.js";
 import type { WebUIContext } from "./webui-context.js";
+import type { RoleResolution } from "./loop/model-roles.js";
 
 /** ClientSession 私有 Conversation 中 goal 家族会触碰的字段（结构化子集）。 */
 export interface GoalConversation {
@@ -71,6 +72,8 @@ export interface GoalConversation {
 	/** 目标模式 2.0（只有委托执行一条路径）：常驻执行者角色对话。
 	 *  非空即表示本轮循环使用委托执行；`generation` 用于角色对话被外部重建后作废旧回调。 */
 	roleExec?: { convId: string; generation: number };
+	/** 显式审查模型时的只读审查角色对话（主对话模型不动）；没有显式审查模型时主对话自己审。 */
+	roleReview?: { convId: string; generation: number };
 	/** 委托执行：服务端已把审查指令交给主对话、正在等它的 verdict（非空 = 审查回合在飞）。 */
 	awaitingVerdict?: { round: number };
 	/** 审查回合里排队的用户插话（steer 进去会污染 verdict，顺延到 verdict 落定后按序发出）。 */
@@ -87,6 +90,8 @@ export interface GoalConversation {
 /** 角色对话一次读取的完整形态（vitals 全可选：缺字段即跳过对应累计/展示，老 host 照常工作）。 */
 export interface RoleAgentRead {
 	text: string;
+	/** 该对话当前实际模型（"provider/id"）；宿主未提供 = 不核对。 */
+	model?: string;
 	errorSnippet?: string;
 	streaming?: boolean;
 	lastTool?: string;
@@ -97,7 +102,13 @@ export interface RoleAgentRead {
 export type RoleWaitOutcome = "done" | "error" | "canceled" | "timeout" | "gone";
 
 /** 委托执行：主对话审查回合的结论（含解析失败 / 超时 / 失联三种显式状态）。 */
-type DelegatedVerdict = { verdict: "pass" | "fail"; feedback: string } | "invalid" | "timeout" | "gone";
+type DelegatedVerdict =
+	| { verdict: "pass" | "fail"; feedback: string }
+	| "invalid"
+	| "timeout"
+	| "gone"
+	/** 显式审查模型在审查前已不可用 / 与执行同家族：按受阻收尾，提示重新选择。 */
+	| { blocked: string };
 
 /** ClientSession 提供给本服务的宿主能力（窄接口）。 */
 export interface GoalHost {
@@ -167,6 +178,12 @@ export interface GoalHost {
 	isGitRepo?: (cwd: string) => Promise<boolean>;
 	/** 角色轮等待上限（毫秒）；缺省 20 分钟（与工具看门狗同口径）。 */
 	roleDeadlineMs?: () => number;
+	/** 「仅模型评审」的角色解析（server/loop/model-roles.ts，与新任务预检同一套规则）：
+	 *  executor / reviewer 为空 = 各自的默认来源。缺席（老 fake host）= 不校验。 */
+	resolveGoalRoles?: (
+		convId: string,
+		req: { planner?: string | null; executor?: string | null; reviewer?: string | null },
+	) => RoleResolution | undefined;
 }
 
 function allBalancedJsonObjects(raw: string): string[] {
@@ -518,6 +535,8 @@ export class GoalService {
 		locked: true,
 		/** 目标模式 2.0：委托执行者模型。 */
 		execModel: null as string | null,
+		/** 审查者模型（null = 主对话审查）。 */
+		reviewerModel: null as string | null,
 	};
 	/** Aborts the currently-running goal wizard (user clicked ✗ / timed out). Drives
 	 *  the in-flight goal_ask dialog to resolve as cancelled and (via the run
@@ -561,6 +580,7 @@ export class GoalService {
 				maxRounds: gPrefs.maxRounds,
 				locked: gPrefs.locked,
 				execModel: gPrefs.execModel ?? null,
+				reviewerModel: gPrefs.reviewerModel ?? null,
 			};
 		}
 	}
@@ -586,6 +606,7 @@ export class GoalService {
 			maxRounds: this.prefs.maxRounds,
 			locked: this.prefs.locked,
 			execModel: this.prefs.execModel,
+			reviewerModel: this.prefs.reviewerModel,
 			phase: "idle",
 			reviewing: false,
 			round: 0,
@@ -620,7 +641,10 @@ export class GoalService {
 			goal.maxRounds = this.prefs.maxRounds;
 			goal.locked = this.prefs.locked;
 			goal.execModel = this.prefs.execModel;
+			goal.reviewerModel = this.prefs.reviewerModel;
 		}
+		// 恒下发 reviewerModel 键（null = 主对话审查）：前端据此判定审查模型可选。
+		if (goal.reviewerModel === undefined) goal.reviewerModel = null;
 		this.host.emit({ type: "goal_status", status: { ...goal } });
 	}
 
@@ -643,6 +667,8 @@ export class GoalService {
 			locked?: boolean;
 			/** 目标模式 2.0：委托执行者模型（"provider/id"；空 = 跟随模板/主对话）。 */
 			execModel?: string;
+			/** 审查者模型（"provider/id"；空 = 主对话审查；undefined = 沿用记忆偏好）。 */
+			reviewerModel?: string;
 			/** Apply the goal to this conversation instead of the active one. */
 			targetConvId?: string;
 			/** Kick the main agent into generating as soon as the goal is set.
@@ -698,6 +724,22 @@ export class GoalService {
 		}
 		const conv = targetConv ?? this.host.activeConv();
 		const goalConversationId = conv.id;
+		// 启动前按实际生效的执行 / 审查模型校验家族（与新任务预检同一套规则）：
+		// 冲突、所选模型已不在目录里都在改动目标状态之前拒绝，不静默换模型、不降级成无审查。
+		const nextExec = opts?.execModel !== undefined ? opts.execModel || null : (conv.goal.execModel ?? null);
+		const nextReviewer =
+			opts?.reviewerModel !== undefined ? opts.reviewerModel || null : (conv.goal.reviewerModel ?? null);
+		const roles = this.host.resolveGoalRoles?.(conv.id, { executor: nextExec, reviewer: nextReviewer });
+		if (roles && !roles.ok) {
+			this.host.emit({
+				type: "notice",
+				level: "warning",
+				text: `目标未设置：${roles.message}`,
+				textEn: `Goal not set: ${roles.messageEn || roles.message}`,
+			});
+			this.emitGoalStatus();
+			return;
+		}
 		conv.goalGeneration += 1;
 		// 上一轮目标可能还留着常驻执行者子代理（委托执行）：先停掉再开新的，
 		// 否则旧循环会在新目标上继续派活（代次已作废，但角色对话得收）。
@@ -718,11 +760,13 @@ export class GoalService {
 		}
 		if (opts?.locked !== undefined) goal.locked = opts.locked;
 		if (opts?.execModel !== undefined) goal.execModel = opts.execModel || null;
+		goal.reviewerModel = nextReviewer;
 		this.prefs = {
 			reviewModel: goal.reviewModel,
 			maxRounds: goal.maxRounds,
 			locked: goal.locked,
 			execModel: goal.execModel ?? null,
+			reviewerModel: goal.reviewerModel,
 		};
 		// Persist the chosen preferences so they survive reload.
 		this.host.stateStore.saveGoalPrefs(this.host.clientId, {
@@ -730,6 +774,7 @@ export class GoalService {
 			maxRounds: goal.maxRounds,
 			locked: goal.locked,
 			execModel: this.prefs.execModel,
+			reviewerModel: this.prefs.reviewerModel,
 		});
 		// Reset the loop for a freshly-set goal (single-shot goals start at 0).
 		this.resetLoopCounters(conv);
@@ -852,12 +897,14 @@ export class GoalService {
 			maxRounds: wgoal.maxRounds,
 			locked: wgoal.locked,
 			execModel: wgoal.execModel ?? null,
+			reviewerModel: wgoal.reviewerModel ?? null,
 		};
 		this.host.stateStore.saveGoalPrefs(this.host.clientId, {
 			reviewModel: wgoal.reviewModel,
 			maxRounds: wgoal.maxRounds,
 			locked: wgoal.locked,
 			execModel: wgoal.execModel ?? null,
+			reviewerModel: wgoal.reviewerModel ?? null,
 		});
 		wgoal.wizard.step = 0;
 		wgoal.wizard.maxSteps = maxSteps;
@@ -1322,6 +1369,7 @@ export class GoalService {
 			locked: wantLocked,
 			// 目标模式 2.0：执行者模型随调研一起带过去（wizard 与目标条共用记忆偏好）。
 			execModel: wgoal.execModel ?? undefined,
+			reviewerModel: wgoal.reviewerModel ?? undefined,
 			// Land the goal on the conversation that launched the survey, even if the
 			// user is looking at another one right now (issue #292).
 			targetConvId: wizardConversationId,
@@ -1329,6 +1377,8 @@ export class GoalService {
 			autoStart: false,
 		});
 		this.wizardCancelled = false;
+		// setGoal 拒绝（如执行与审查同家族）时已发「目标未设置」通知：这里不再宣布目标已设。
+		if (!targetConv.goal.goal) return;
 		this.host.emit({
 			type: "notice",
 			level: "info",
@@ -1355,6 +1405,7 @@ export class GoalService {
 		maxRounds?: number;
 		locked?: boolean;
 		execModel?: string;
+		reviewerModel?: string;
 	}): Promise<void> {
 		if (!this.goalEnabled()) return;
 		const goal = this.host.activeConv().goal;
@@ -1377,17 +1428,22 @@ export class GoalService {
 		} else if (hasExecOpt) {
 			goal.execModel = opts?.execModel || null;
 		}
+		// 审查模型同理：进行中的目标保留启动时的审查者，偏好留给下一个目标。
+		const hasReviewerOpt = opts?.reviewerModel !== undefined;
+		if (hasReviewerOpt && !goal.goal) goal.reviewerModel = opts?.reviewerModel || null;
 		this.prefs = {
 			reviewModel: goal.reviewModel,
 			maxRounds: goal.maxRounds,
 			locked: goal.locked,
 			execModel: hasExecOpt ? opts?.execModel || null : this.prefs.execModel,
+			reviewerModel: hasReviewerOpt ? opts?.reviewerModel || null : this.prefs.reviewerModel,
 		};
 		this.host.stateStore.saveGoalPrefs(this.host.clientId, {
 			reviewModel: goal.reviewModel,
 			maxRounds: goal.maxRounds,
 			locked: goal.locked,
 			execModel: this.prefs.execModel,
+			reviewerModel: this.prefs.reviewerModel,
 		});
 		this.emitGoalStatus();
 	}
@@ -1414,8 +1470,8 @@ export class GoalService {
 		g.status = "已暂停（点继续接着跑）";
 		g.statusEn = "Paused (resume to continue)";
 		this.emitGoalStatus();
-		const execId = conv.roleExec?.convId;
-		if (execId) {
+		for (const execId of [conv.roleExec?.convId, conv.roleReview?.convId]) {
+			if (!execId) continue;
 			try {
 				await this.host.stopRoleAgent?.(execId);
 			} catch {}
@@ -1780,11 +1836,12 @@ export class GoalService {
 
 	/** 摘掉常驻执行者引用并清 roles（停/收由调用方按 sync/async 上下文自行处理，
 	 *  停与收本身都是 best-effort）。返回被摘掉的执行者对话 id（没有则 undefined）。 */
-	private detachRoleExec(conv: GoalConversation): string | undefined {
-		const exec = conv.roleExec;
+	private detachRoleExec(conv: GoalConversation): string[] {
+		const ids = [conv.roleExec?.convId, conv.roleReview?.convId].filter((id): id is string => !!id);
 		conv.roleExec = undefined;
+		conv.roleReview = undefined;
 		conv.goal.roles = {};
-		return exec?.convId;
+		return ids;
 	}
 
 	private stopInflight = new Map<string, Promise<void>>();
@@ -1817,8 +1874,7 @@ export class GoalService {
 			this.verdictWaiters.delete(conv.id);
 			settle("gone");
 		}
-		const execId = this.detachRoleExec(conv);
-		if (execId) {
+		for (const execId of this.detachRoleExec(conv)) {
 			try {
 				await this.host.stopRoleAgent?.(execId);
 			} catch {}
@@ -1843,8 +1899,7 @@ export class GoalService {
 			this.verdictWaiters.delete(conv.id);
 			settle("gone");
 		}
-		const execId = this.detachRoleExec(conv);
-		if (execId) {
+		for (const execId of this.detachRoleExec(conv)) {
 			void this.host.stopRoleAgent?.(execId).catch(() => {});
 			void this.host.dismissRoleAgent?.(execId).catch(() => {});
 		}
@@ -1972,8 +2027,24 @@ export class GoalService {
 			g.status = `审查中（第 ${round}${this.roundsLabel(budget)} 轮）…`;
 			g.statusEn = `Reviewing (round ${round}${this.roundsLabel(budget)})…`;
 			this.emitGoalStatus();
-			const verdict = await this.askDelegatedReview(conv, goalGeneration, round, budget, sample.output, execId);
+			// 显式审查模型 → 独立的只读审查对话（主对话模型不动）；否则主对话自己审（原默认）。
+			const verdict = g.reviewerModel
+				? await this.askRoleReview(
+						conv,
+						goalGeneration,
+						round,
+						budget,
+						sample.output,
+						execId,
+						g.reviewerModel,
+						goalText,
+					)
+				: await this.askDelegatedReview(conv, goalGeneration, round, budget, sample.output, execId);
 			if (!this.isCurrentDelegated(conv, goalGeneration)) return;
+			if (typeof verdict === "object" && "blocked" in verdict) {
+				await this.finishDelegated(conv, goalGeneration, "blocked", round, verdict.blocked, goalText);
+				return;
+			}
 			if (verdict === "invalid" || verdict === "timeout" || verdict === "gone") {
 				await this.finishDelegated(
 					conv,
@@ -2166,6 +2237,118 @@ export class GoalService {
 		// 取样即轮次边界：执行者快照同步刷新（目标条实时进度用）。
 		this.snapshotExecutor(conv, execId, read);
 		return { output, errorSnippet: currentError };
+	}
+
+	/**
+	 * 显式审查模型的审查回合：在常驻的审查角色对话（goal-reviewer，按该模型新建的独立会话，
+	 * 宿主对它恒开审查只读闸门）里审，主对话的模型与配置不动。每轮投递前按当前模型目录
+	 * 复核执行 / 审查家族：所选模型被移除或变成同家族 → 受阻，提示重新选择，不落回主模型。
+	 * 无 JSON 结论允许重试一次（与主对话审查同口径）。
+	 */
+	private async askRoleReview(
+		conv: GoalConversation,
+		goalGeneration: number,
+		round: number,
+		budget: number,
+		execOutput: string,
+		execId: string,
+		reviewerModel: string,
+		goalText: string,
+	): Promise<DelegatedVerdict> {
+		const host = this.host;
+		const check = host.resolveGoalRoles?.(conv.id, { executor: conv.goal.execModel ?? null, reviewer: reviewerModel });
+		if (check && !check.ok) return { blocked: pick(this.lang(), check.message, check.messageEn) };
+		for (let attempt = 0; attempt < 2; attempt++) {
+			const planDesc = host.describePlan?.(conv.id) ?? "";
+			const text =
+				attempt === 0
+					? this.reviewerRoundPrompt(
+							conv.goal.goal ?? "",
+							round,
+							budget,
+							execOutput,
+							planDesc,
+							this.readExecutorEvidence(execId),
+						)
+					: this.verdictRetryPrompt();
+			await this.pushReviewCard(conv, this.reviewCardText("start", round, this.roundBudget(conv.goal), ""), {
+				phase: "start",
+				round,
+			});
+			if (!this.isCurrentDelegated(conv, goalGeneration)) return "gone";
+			let reviewerId = conv.roleReview?.convId;
+			const alive = !!reviewerId && (host.hasConv ? host.hasConv(reviewerId) : true);
+			const before = alive ? host.readRoleAgent?.(reviewerId!)?.usage : undefined;
+			try {
+				if (!alive) {
+					// 审查对话无状态，失联就重建（设计文档 §4.6 失效矩阵：reviewer 槽重建一次）。
+					reviewerId = await host.spawnRoleAgent!({
+						role: "reviewer",
+						prompt: text,
+						cwd: conv.cwd,
+						model: reviewerModel,
+						parentId: conv.id,
+						title: this.reviewerConvTitle(goalText),
+					});
+					if (conv.goalGeneration !== goalGeneration) {
+						void host.stopRoleAgent?.(reviewerId).catch(() => {});
+						return "gone";
+					}
+					conv.roleReview = { convId: reviewerId, generation: (conv.roleReview?.generation ?? 0) + 1 };
+					conv.goal.roles = { ...conv.goal.roles, reviewer: { convId: reviewerId, spawned: true } };
+					this.emitGoalStatus();
+					// 宿主换模型失败会沿用默认模型继续跑：那样的结论不可信，当场停下并提示重新选择。
+					const actual = host.readRoleAgent?.(reviewerId)?.model;
+					if (actual && actual !== reviewerModel) {
+						await host.stopRoleAgent?.(reviewerId).catch(() => {});
+						return {
+							blocked: pick(
+								this.lang(),
+								`审查对话没能切换到所选模型 ${reviewerModel}（实际为 ${actual}），本轮审查已停止。请检查该模型的服务商配置，或重新选择审查模型。`,
+								`The reviewer conversation could not switch to ${reviewerModel} (it is on ${actual}); this review round was stopped. Check that model's provider settings or pick another reviewer model.`,
+							),
+						};
+					}
+				} else if (!(await host.sendRoleAgent!(reviewerId!, text))) {
+					return "gone";
+				}
+			} catch {
+				return "gone";
+			}
+			const outcome = await host.waitRoleAgent!(reviewerId!, this.roleDeadline());
+			if (!this.isCurrentDelegated(conv, goalGeneration)) return "gone";
+			const read = host.readRoleAgent?.(reviewerId!);
+			if (read?.usage && (before || !alive)) {
+				const base = before ?? { input: 0, output: 0 };
+				conv.goalUsage = {
+					input: (conv.goalUsage?.input ?? 0) + Math.max(0, read.usage.input - base.input),
+					output: (conv.goalUsage?.output ?? 0) + Math.max(0, read.usage.output - base.output),
+				};
+			}
+			if (outcome === "timeout") {
+				await host.stopRoleAgent?.(reviewerId!).catch(() => {});
+				return "timeout";
+			}
+			if (outcome === "gone" || outcome === "canceled") return "gone";
+			const verdict = outcome === "done" ? parseReviewerVerdict(read?.text ?? "") : undefined;
+			if (verdict) return verdict;
+		}
+		return "invalid";
+	}
+
+	private reviewerConvTitle(goalText: string): string {
+		const brief = goalText.replace(/\s+/g, " ").trim().slice(0, 40);
+		const withTail = goalText.trim().length > 40 ? "…" : "";
+		return pick(
+			this.lang(),
+			`[目标审查] ${brief}${withTail}`,
+			`[Goal reviewer] ${brief}${withTail}`,
+			"goal.role.review_title",
+			{
+				brief,
+				withTail,
+			},
+		);
 	}
 
 	/** 审查：把审查指令交给主对话，等 verdict；无 JSON 允许重试一次。 */
@@ -2416,8 +2599,7 @@ export class GoalService {
 		// （用户正看着执行对话时 dismiss 是 no-op，它会暂留，用户可自行关闭。）
 		// 与 stopDelegated 共用 detachRoleExec；这里 await 是为了收尾顺序确定，
 		// 那边 fire-and-forget 是因为调它的都是同步上下文。
-		const execId = this.detachRoleExec(conv);
-		if (execId) {
+		for (const execId of this.detachRoleExec(conv)) {
 			await this.host.stopRoleAgent?.(execId).catch(() => {});
 			await this.host.dismissRoleAgent?.(execId).catch(() => {});
 		}

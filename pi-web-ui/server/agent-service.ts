@@ -187,6 +187,7 @@ import { PlanManager } from "./plan-manager.js";
 import { buildPlanModePrompt, planModeDenial, planModeNoticeText, PLAN_MODE_BLOCKED_TOOL_NAMES } from "./plan-mode.js";
 import { DELEGATION_SYSTEM_PROMPT, delegateNoticeText } from "./delegate-mode.js";
 import { goalReviewDenial, shouldDeferPromptForReview } from "./goal-review-gate.js";
+import { resolveTaskRoles } from "./loop/model-roles.js";
 import { readPlanModeFromSession, readPlanFromSession } from "./permission-preset.js";
 import { readDelegateModeFromSession } from "./permission-preset.js";
 
@@ -2538,8 +2539,10 @@ export class ClientSession {
 				} catch {
 					usage = undefined;
 				}
+				const m = conv.session.model as { provider?: string; id?: string } | undefined;
 				return {
 					text,
+					model: m?.id ? (m.provider ? `${m.provider}/${m.id}` : m.id) : undefined,
 					errorSnippet: extractErrorSnippetFromSession(conv.session, text),
 					streaming,
 					lastTool,
@@ -2603,6 +2606,28 @@ export class ClientSession {
 			},
 			hasConv: (convId) => this.convs.has(convId),
 			roleDeadlineMs: () => this.getBaseToolWatchdogTimeoutMs(),
+			// 「仅模型评审」的角色解析：模型目录与 spawnRoleAgent 换模型用的是同一个 sharedModelRuntime；
+			// 执行默认 = 子代理默认模型（设置）→ 主对话模型，与 spawnSubagentConversation 的回落同序。
+			resolveGoalRoles: (convId, req) => {
+				const conv = this.convs.get(convId);
+				const runtime = this.sharedModelRuntime;
+				if (!conv?.session || !runtime) return undefined;
+				const main = conv.session.model as { provider?: string; id: string } | undefined;
+				return resolveTaskRoles(
+					{
+						find: (provider, id) => runtime.getModel(provider, id),
+						getAll: () => [...runtime.getModels()],
+						getAvailable: () => [...runtime.getAvailableSnapshot()],
+					},
+					main ?? null,
+					{
+						mode: "llm",
+						planner: req.planner ?? null,
+						executor: req.executor || this.settingsSvc.current.subagentDefaultModel || null,
+						reviewer: req.reviewer ?? null,
+					},
+				);
+			},
 		});
 
 		this.modelAdmin = new ModelAdminService({
@@ -6890,7 +6915,11 @@ export class ClientSession {
 	 *  缺省才回退活动对话 —— 与 planModeOf / delegateModeOf 同口径。 */
 	private goalReviewTurnOf(ownerId: string | undefined): boolean {
 		const id = ownerId ?? this.activeId;
-		return (this.convs.get(id) as unknown as GoalConversation | undefined)?.awaitingVerdict != null;
+		const conv = this.convs.get(id);
+		// 显式审查模型的审查角色对话（spawnRoleAgent role=reviewer）整个生命周期都只读：
+		// subagentType 在首回合之前就已写入，不存在「首个工具调用早于闸门」的窗口。
+		if (conv?.subagentType === "goal-reviewer") return true;
+		return (conv as unknown as GoalConversation | undefined)?.awaitingVerdict != null;
 	}
 
 	/** 等待该会话正在并发生成的影子快照完成，确保写操作发生在快照完成之后。 */
@@ -12337,6 +12366,8 @@ export class ClientSession {
 			locked?: boolean;
 			/** 目标模式 2.0：执行者模型。 */
 			execModel?: string;
+			/** 审查者模型（空 = 主对话审查）。 */
+			reviewerModel?: string;
 			autoStart?: boolean;
 		},
 	): Promise<void> {
@@ -12915,6 +12946,7 @@ export class ClientSession {
 		maxRounds?: number;
 		locked?: boolean;
 		execModel?: string;
+		reviewerModel?: string;
 	}): Promise<void> {
 		return this.goalSvc.setGoalPrefs(opts);
 	}

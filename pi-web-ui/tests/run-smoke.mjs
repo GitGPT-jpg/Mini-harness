@@ -61,6 +61,8 @@ const ALL = [
 	"goal-test",
 	// 目标模式 2.0「委托执行」（Plan A）：角色对话接线（拉起/左栏可见/清目标收回，零 token）。
 	"goal-delegated-test",
+	// 仅模型评审的显式审查模型：审查请求用所选模型、主对话聊天模型不变、同家族直接请求被拒（替身 provider）。
+	"goal-reviewer-model-test",
 	// 计划模式（只规划不实施）：开关快照 + 写类/非常规 bash 硬闸门 + 关闭后恢复（零 token）。
 	"plan-mode-test",
 	// 审查者模式（自动委派）：开关快照 + prompt 自动转给常驻执行对话 + 关闭后恢复（零 token）。

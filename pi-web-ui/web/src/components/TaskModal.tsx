@@ -172,7 +172,7 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 		if (!open) return;
 		setLlmPlanner(goalStatus.reviewModel ?? "");
 		setExecModel(goalStatus.execModel ?? "");
-		setLlmReviewer((goalStatus as { reviewerModel?: string | null }).reviewerModel ?? "");
+		setLlmReviewer(goalStatus.reviewerModel ?? "");
 		setLlmRounds(goalStatus.maxRounds > 0 ? goalStatus.maxRounds : 0);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [open]);

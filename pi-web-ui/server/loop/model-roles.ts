@@ -40,8 +40,9 @@ export interface RoleResolution {
 	suggestion: { role: TaskRole; provider?: string; id: string; family: string } | null;
 	/** 仅模型评审：审查角色不可选（旧服务端）时，改执行模型是唯一的页面内修正方式。 */
 	executorSuggestion?: { role: "executor"; provider?: string; id: string; family: string } | null;
-	/** 给人看的固定文案（中文）；前端按结构化字段本地化。 */
+	/** 给人看的固定文案（中文 / 英文）；前端按结构化字段本地化，服务端拒绝启动时用它发通知。 */
 	message: string;
+	messageEn: string;
 }
 
 /** 与 SDK ModelRegistry / loop 的 ctx.modelRegistry 同形的最小接口。 */
@@ -61,6 +62,7 @@ export interface RoleRequest {
 const PREFER_FAMILIES = ["openai", "anthropic", "zhipu", "deepseek", "moonshot", "google", "xai", "minimax", "alibaba"];
 
 const ROLE_NAME: Record<TaskRole, string> = { planner: "规划", executor: "执行", reviewer: "审查" };
+const ROLE_NAME_EN: Record<TaskRole, string> = { planner: "planner", executor: "executor", reviewer: "reviewer" };
 
 /** "provider/id" 或裸 id → 注册表里的模型（与 loop 运行时 resolveModel 同规则）。 */
 export function findModel(
@@ -114,10 +116,12 @@ export function resolveTaskRoles(
 			error: null,
 			suggestion: null,
 			message: "",
+			messageEn: "",
 			...extra,
 		};
 		r.ok = !r.error && r.conflicts.length === 0;
 		if (!r.message) r.message = describeResolution(r);
+		if (!r.messageEn) r.messageEn = describeResolutionEn(r);
 		return r;
 	};
 	const pick = (role: TaskRole, spec: string | null | undefined, fallback: RoleModel | null) => {
@@ -214,5 +218,24 @@ export function describeResolution(r: RoleResolution): string {
 	const c = r.conflicts[0];
 	if (c)
 		return `${ROLE_NAME[c.roles[0]]}模型 ${c.models[0]} 与${ROLE_NAME[c.roles[1]]}模型 ${c.models[1]} 同属 ${c.family} 家族，请为其中一个角色换一个不同家族的模型。`;
+	return "";
+}
+
+/** describeResolution 的英文版（服务端通知的 textEn）。 */
+export function describeResolutionEn(r: RoleResolution): string {
+	if (r.error?.code === "unresolved")
+		return `The ${ROLE_NAME_EN[r.error.role]} model can't be resolved: it is not in the current model catalog. Pick another one.`;
+	if (r.error?.code === "no-main") return "The main chat has no model yet: pick one below the input box.";
+	if (r.error?.code === "no-candidate")
+		return `No ${ROLE_NAME_EN[r.error.role]} model available: add a model from a family other than ${[
+			r.roles.executor,
+			r.roles.planner,
+		]
+			.filter(Boolean)
+			.map((m) => m!.family)
+			.join("/")} under Models & providers, with its key.`;
+	const c = r.conflicts[0];
+	if (c)
+		return `The ${ROLE_NAME_EN[c.roles[0]]} model ${c.models[0]} and the ${ROLE_NAME_EN[c.roles[1]]} model ${c.models[1]} are both ${c.family}: pick a model from another family for one of them.`;
 	return "";
 }

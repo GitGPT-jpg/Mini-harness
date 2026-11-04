@@ -1210,6 +1210,7 @@ export interface DispatchSession {
 			locked?: boolean;
 			/** 目标模式 2.0：执行者模型（DSH 引擎不接委托执行，忽略）。 */
 			execModel?: string;
+			reviewerModel?: string;
 		},
 	): Promise<void>;
 	clearGoal(): Promise<void>;
@@ -1221,6 +1222,7 @@ export interface DispatchSession {
 		maxRounds?: number;
 		locked?: boolean;
 		execModel?: string;
+		reviewerModel?: string;
 	}): Promise<void>;
 	startLoop?(msg: {
 		goal: string;

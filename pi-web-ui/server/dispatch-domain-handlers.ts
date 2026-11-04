@@ -396,6 +396,7 @@ export function handlePlanAndGoalMessage(msg: ClientMessage, cs: DispatchSession
 				maxRounds: msg.maxRounds,
 				locked: msg.locked,
 				execModel: msg.execModel,
+				reviewerModel: msg.reviewerModel,
 			});
 			return true;
 		case "clear_goal":
@@ -420,6 +421,7 @@ export function handlePlanAndGoalMessage(msg: ClientMessage, cs: DispatchSession
 				maxRounds: msg.maxRounds,
 				locked: msg.locked,
 				execModel: msg.execModel,
+				reviewerModel: msg.reviewerModel,
 			});
 			return true;
 		case "loop_start_request":

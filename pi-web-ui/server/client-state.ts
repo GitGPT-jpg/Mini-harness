@@ -534,6 +534,8 @@ export interface ClientState {
 		locked: boolean;
 		/** 目标模式 2.0：执行者模型（"provider/id"；null/缺省 = 跟随）。 */
 		execModel?: string | null;
+		/** 审查者模型（"provider/id"；null/缺省 = 主对话自己审，即原默认语义）。 */
+		reviewerModel?: string | null;
 	};
 	/** Settings-panel state (system prompt mode/text + disabled skills/
 	 *  extensions) so toggles survive a reload. */
@@ -939,6 +941,7 @@ export class ClientStateStore {
 			maxRounds: s.goalPrefs.maxRounds ?? 0,
 			locked: s.goalPrefs.locked ?? true,
 			execModel: s.goalPrefs.execModel ?? null,
+			reviewerModel: s.goalPrefs.reviewerModel ?? null,
 		};
 	}
 
@@ -987,6 +990,7 @@ export class ClientStateStore {
 			maxRounds: prefs?.maxRounds ?? 0,
 			locked: prefs?.locked ?? true,
 			execModel: prefs?.execModel ?? null,
+			reviewerModel: prefs?.reviewerModel ?? null,
 		};
 		this.save();
 	}
