@@ -188,6 +188,7 @@ import { buildPlanModePrompt, planModeDenial, planModeNoticeText, PLAN_MODE_BLOC
 import { DELEGATION_SYSTEM_PROMPT, delegateNoticeText } from "./delegate-mode.js";
 import { goalReviewDenial, shouldDeferPromptForReview } from "./goal-review-gate.js";
 import { resolveTaskRoles } from "./loop/model-roles.js";
+import { activeClusterConfig } from "./loop/cluster-config.js";
 import { readPlanModeFromSession, readPlanFromSession } from "./permission-preset.js";
 import { readDelegateModeFromSession } from "./permission-preset.js";
 
@@ -880,6 +881,36 @@ export class ClientSession {
 		return (conversationId ? this.convs.get(conversationId) : this.convs.get(this.activeId))?.cwd ?? this.cwd;
 	}
 
+	/** 会话 sessionId → 绑定了集群配置的代码 loop run（startLoop / 续跑时登记；run 不再 active 即失效）。
+	 *  访问处用 ?.：单测会把 startLoop / resumeLoop 挂到不带实例字段的替身 this 上调用。 */
+	private readonly loopRunBySession = new Map<string, string>();
+
+	/**
+	 * 该会话里 Agent 起的子进程（Bash / 终端）该用的环境：属于运行中任务（代码 loop 的执行会话、
+	 * 目标的执行与审查对话）时换成任务绑定的集群配置，其余照当前配置（server/loop/cluster-config.ts）。
+	 */
+	private clusterEnvForConversation(convId: string | undefined, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+		const cc = activeClusterConfig();
+		const conv = convId ? this.convs.get(convId) : undefined;
+		if (!cc || !conv) return env;
+		if ((conv.subagentType === "goal-executor" || conv.subagentType === "goal-reviewer") && conv.parentId) {
+			return cc.envForTask(`goal:${conv.parentId}`, env);
+		}
+		const sid = conv.session?.sessionId;
+		const runId = sid ? this.loopRunBySession?.get(sid) : undefined;
+		if (runId) {
+			let active = false;
+			try {
+				active = loadLoopState(runId)?.status === "active";
+			} catch {
+				// 状态读不出来时按仍在运行处理：宁可用绑定的配置，也不落到当前全局配置上。
+				active = true;
+			}
+			if (active) return cc.envForTask(`run:${runId}`, env);
+		}
+		return env;
+	}
+
 	private makeTerminalManager(conversationId: string, cwd: string): TerminalManager {
 		const mgr = new TerminalManager(
 			(msg) => this.emitTerminal(conversationId, msg),
@@ -887,6 +918,11 @@ export class ClientSession {
 			// issue #91：终端输入错误按客户端 UI 语言出中英（英文默认）。
 			() => this.getLang(),
 		);
+		// 属于运行中任务的会话：终端起的 PTY 同样用任务绑定的集群配置。
+		mgr.envFor = (env) => {
+			const out = this.clusterEnvForConversation(conversationId, env);
+			return Object.fromEntries(Object.entries(out).filter((e): e is [string, string] => typeof e[1] === "string"));
+		};
 		// 终端活力检测：AI 触碰过的终端静默 ≥ 阈值（PI_WEB_TERMINAL_IDLE_MS，
 		// 默认 15s）且该对话正在运行时，注入一条 steer 消息唤醒 AI 去检查。
 		mgr.onAgentIdle = (terminalId, idleMs, title, lastLines) =>
@@ -2608,6 +2644,10 @@ export class ClientSession {
 			roleDeadlineMs: () => this.getBaseToolWatchdogTimeoutMs(),
 			// 「仅模型评审」的角色解析：模型目录与 spawnRoleAgent 换模型用的是同一个 sharedModelRuntime；
 			// 执行默认 = 子代理默认模型（设置）→ 主对话模型，与 spawnSubagentConversation 的回落同序。
+			bindGoalCluster: async (convId) => {
+				await activeClusterConfig()?.bindTask(`goal:${convId}`);
+			},
+			releaseGoalCluster: (convId) => activeClusterConfig()?.releaseTask(`goal:${convId}`),
 			resolveGoalRoles: (convId, req) => {
 				const conv = this.convs.get(convId);
 				const runtime = this.sharedModelRuntime;
@@ -3158,7 +3198,12 @@ export class ClientSession {
 							withWorkspaceSnapshotGate(
 								makeAdaptiveBashTool(
 									// issue #91：bash 返回按客户端 UI 语言出中英（英文默认）。
-									makeKillableBashTool(effectiveCwd, this.bashKills, () => this.getLang()),
+									makeKillableBashTool(
+										effectiveCwd,
+										this.bashKills,
+										() => this.getLang(),
+										(env) => this.clusterEnvForConversation(ownerId, env),
+									),
 									makeTerminalBashTool(terminals, {
 										cwd: effectiveCwd,
 										// 设置开 = 用终端；此分支里 persist 未显式给时默认一次性（false）。
@@ -12562,6 +12607,9 @@ export class ClientSession {
 			return;
 		}
 		const st = created.st;
+		// 任务启动即绑定当前实际使用的集群配置（首个命令之前）；之后导入 / 清除不影响本 run。
+		await activeClusterConfig()?.bindTask(`run:${st.runId}`);
+		if (conv.session?.sessionId) this.loopRunBySession?.set(conv.session.sessionId, st.runId);
 		conv.loop = loopUiFromState(st);
 		this.flushSnapshot();
 		const lines = [
@@ -12672,6 +12720,7 @@ export class ClientSession {
 			if (!re.ok) throw new Error(re.error || "run 会话重绑失败");
 			// 执行者会话也接入回合取消：任务台/API 停止要能取消该子代理的模型回合。
 			this.registerLoopTurnControl(st.runId, execConv);
+			this.loopRunBySession?.set(execConv.session.sessionId, st.runId);
 			// 执行者会话 cwd 就是 workspace：工具/终端天然落 workspace，提示词不再需要「先 cd」兜底。
 			const kickPrompt = `${prompt}\n${workspaceNote}`;
 			execConv.kickoff = execConv.session.sendUserMessage(kickPrompt).catch((err) => {
@@ -12826,6 +12875,8 @@ export class ClientSession {
 				const fresh = loadLoopState(runId);
 				if (fresh) cur = fresh;
 			}
+			// 续跑沿用该 run 启动时的集群绑定（跨重启时按持久记录核实，核实不了即受阻）。
+			if (cur.sessionId) this.loopRunBySession?.set(cur.sessionId, runId);
 			conv.loop = loopUiFromState(cur);
 			this.flushSnapshot();
 			// 恢复摘要只含：已确认完成步骤+证据、仍在运行实体、当前代码配置、失效/未知部分、下一步动作。

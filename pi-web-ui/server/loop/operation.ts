@@ -27,6 +27,7 @@ import {
 	type ExecutionResult,
 	type RunnerHandshake,
 } from "./operation-runner.js";
+import { activeClusterConfig } from "./cluster-config.js";
 export { operationIntentDigest } from "./operation-runner.js";
 
 export interface ControlOptions {
@@ -552,6 +553,8 @@ export async function runCommandPersistent(
 				detached: true,
 				stdio: ["ignore", fd, fd],
 				cwd: rec.cwd,
+				// precheck / validator 用该 run 启动时绑定的集群配置（runner → group → 命令一路继承）。
+				env: activeClusterConfig()?.envForTask(`run:${rec.runId}`, process.env) ?? process.env,
 			});
 		});
 		if (!started.ok) throw new Error(started.error);

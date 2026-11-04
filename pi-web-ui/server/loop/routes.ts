@@ -436,6 +436,15 @@ export function registerLoopRoutes(app: Express, opts: LoopRoutesOptions): void 
 	// 启动即按优先级对齐服务进程的 KUBECONFIG（新派生的 bash/终端/validator 继承它）。
 	const cluster = new ClusterConfig({ dataDir: opts.dataDir, ...opts.cluster });
 	setActiveClusterConfig(cluster);
+	// 上次进程留下的 run 绑定：run 记录还在就保留（续跑 / 恢复时按快照核实），不在了就释放。
+	cluster.pruneBindings((key) => {
+		if (!key.startsWith("run:")) return false;
+		try {
+			return !!loadLoopState(key.slice(4));
+		} catch {
+			return true;
+		}
+	});
 
 	app.get("/api/mini-harness/runs", (req, res) => {
 		try {
@@ -462,7 +471,8 @@ export function registerLoopRoutes(app: Express, opts: LoopRoutesOptions): void 
 			res.status(404).json({ error: "run not found" });
 			return;
 		}
-		res.json(detail);
+		// 集群绑定只给白名单标识（来源 / 状态 / context / 代次），不含路径与凭据。
+		res.json({ ...detail, clusterBinding: cluster.taskBinding(`run:${id}`) });
 	});
 	app.post("/api/mini-harness/runs/:runId/recover", (req, res) => {
 		const id = String(req.params.runId ?? "");
@@ -504,13 +514,16 @@ export function registerLoopRoutes(app: Express, opts: LoopRoutesOptions): void 
 		}
 	});
 	app.post("/api/mini-harness/runs/delete", (req, res) => {
-		const deleted = deleteLoopRun(String(req.body?.runId ?? ""));
+		const runId = String(req.body?.runId ?? "");
+		const deleted = deleteLoopRun(runId);
 		if (!deleted.ok) {
 			const status =
 				deleted.code === "invalid" ? 400 : deleted.code === "missing" ? 404 : deleted.code === "active" ? 409 : 500;
 			res.status(status).json(deleted);
 			return;
 		}
+		// 记录已删：不存在接续引用，释放它的集群绑定（删快照 / 回收导入版本）。
+		cluster.releaseTask(`run:${runId}`);
 		res.status(200).json(deleted);
 	});
 

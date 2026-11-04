@@ -993,6 +993,9 @@ export class TerminalManager {
 	 *  noteAgentActivity）。宿主自行判断会话是否在运行并决定是否注入。 */
 	onAgentIdle: ((terminalId: string, idleMs: number, title: string, lastLines: string) => void) | null = null;
 
+	/** 宿主回调：每次起 PTY 前调整环境（运行中任务的集群绑定）；null = 原样用 shellEnv()。 */
+	envFor: ((env: Record<string, string>) => Record<string, string>) | null = null;
+
 	constructor(
 		private emit: (msg: ServerMessage) => void,
 		private readonly workspaceRoot: string,
@@ -1245,7 +1248,7 @@ export class TerminalManager {
 					cols: Math.max(2, Math.floor(cols) || 80),
 					rows: Math.max(2, Math.floor(rows) || 24),
 					cwd: abs,
-					env: shellEnv(),
+					env: this.envFor ? this.envFor(shellEnv()) : shellEnv(),
 				});
 			}
 		} catch (err) {

@@ -173,21 +173,22 @@ describe("ClusterConfig：来源优先级与新任务配置", () => {
 		expect(sb.env.KUBECONFIG).toBeUndefined();
 	});
 
-	it("再次导入写新版本、不覆盖：已绑定旧版本的任务保持原目标，释放后才回收", () => {
+	it("再次导入写新版本、不覆盖：已绑定旧版本的任务保持原目标，释放后才回收", async () => {
 		const sb = sandbox();
 		const c = sb.make();
 		c.save("first");
-		const bound = c.bind("run-1");
+		const first = c.target().kubeconfig!;
+		expect(await c.bindTask("run-1")).toMatchObject({ source: "app", status: "pinned" });
 		c.save("second");
 		const next = c.target();
-		expect(next.kubeconfig).not.toBe(bound.kubeconfig);
-		expect(readFileSync(bound.kubeconfig!, "utf8")).toBe("first");
-		expect(c.envFor(bound).KUBECONFIG).toBe(bound.kubeconfig);
+		expect(next.kubeconfig).not.toBe(first);
+		expect(readFileSync(first, "utf8")).toBe("first");
+		expect(c.envForTask("run-1", {}).KUBECONFIG).toBe(first);
 		expect(c.clear()).toEqual({ ok: true, retainedForTasks: 1 });
-		expect(readFileSync(bound.kubeconfig!, "utf8")).toBe("first");
+		expect(readFileSync(first, "utf8")).toBe("first");
 		expect(existsSync(next.kubeconfig!)).toBe(false);
-		c.release("run-1");
-		expect(existsSync(bound.kubeconfig!)).toBe(false);
+		c.releaseTask("run-1");
+		expect(existsSync(first)).toBe(false);
 	});
 
 	it("写入失败：返回 write-failed，原配置不变且不留半截文件", () => {

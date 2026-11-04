@@ -24,6 +24,7 @@ function makeHarness(opts: { catalog?: M[]; reviewerActual?: (requested: string 
 	const dismissed: string[] = [];
 	const saved: unknown[] = [];
 	const mainModelChanges: unknown[] = [];
+	const clusterEvents: string[] = [];
 	const models = new Map<string, string>();
 	const convs = new Map<string, GoalConversation>();
 	const registry = {
@@ -53,8 +54,11 @@ function makeHarness(opts: { catalog?: M[]; reviewerActual?: (requested: string 
 		lang: () => "zh",
 		isGitRepo: async () => true,
 		roleDeadlineMs: () => 1000,
+		bindGoalCluster: async (convId) => void clusterEvents.push(`bind:${convId}`),
+		releaseGoalCluster: (convId) => void clusterEvents.push(`release:${convId}`),
 		spawnRoleAgent: async ({ role, prompt, model }) => {
 			const id = `${role}-${spawned.length + 1}`;
+			clusterEvents.push(`spawn:${role}`);
 			spawned.push({ id, role, model, prompt });
 			models.set(id, role === "reviewer" ? (opts.reviewerActual?.(model) ?? model ?? "") : (model ?? "oneapi/glm-5.3"));
 			return id;
@@ -106,6 +110,7 @@ function makeHarness(opts: { catalog?: M[]; reviewerActual?: (requested: string 
 		dismissed,
 		saved,
 		mainModelChanges,
+		clusterEvents,
 		notices,
 		removeModel: (id: string) => (catalog = catalog.filter((m) => m.id !== id)),
 	};
@@ -218,5 +223,31 @@ describe("仅模型评审：显式审查模型", () => {
 		expect(h.svc.makeGoalStatus().reviewerModel).toBe("oneapi/gpt-5");
 		await h.svc.setGoalPrefs({ reviewerModel: "" });
 		expect(h.conv.goal.reviewerModel).toBeNull();
+	});
+
+	it("集群绑定：目标在派出执行者前绑定、收尾后释放；被拒的目标不绑定；清除目标释放", async () => {
+		const h = makeHarness();
+		await h.svc.setGoal("同家族", { maxRounds: 1, locked: true, execModel: "oneapi/glm-5.3" });
+		expect(h.clusterEvents).toEqual([]);
+		await h.svc.setGoal("写发布说明", {
+			maxRounds: 1,
+			locked: true,
+			execModel: "oneapi/gpt-5",
+			reviewerModel: "oneapi/deepseek-v4",
+		});
+		await h.svc.whenDelegatedSettled("conv-a");
+		expect(h.clusterEvents).toEqual([
+			"release:conv-a",
+			"bind:conv-a",
+			"spawn:executor",
+			"spawn:reviewer",
+			"release:conv-a",
+		]);
+		h.clusterEvents.length = 0;
+		await h.svc.setGoal("再来一个", { maxRounds: 5, locked: true, execModel: "oneapi/gpt-5" });
+		await h.svc.clearGoal();
+		expect(h.clusterEvents[0]).toBe("release:conv-a");
+		expect(h.clusterEvents[1]).toBe("bind:conv-a");
+		expect(h.clusterEvents.at(-1)).toBe("release:conv-a");
 	});
 });

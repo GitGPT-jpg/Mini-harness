@@ -180,6 +180,9 @@ export interface GoalHost {
 	roleDeadlineMs?: () => number;
 	/** 「仅模型评审」的角色解析（server/loop/model-roles.ts，与新任务预检同一套规则）：
 	 *  executor / reviewer 为空 = 各自的默认来源。缺席（老 fake host）= 不校验。 */
+	/** 目标启动时绑定当前集群配置（执行 / 审查对话的子进程用它）；收尾 / 清除时释放。缺席 = 不绑定。 */
+	bindGoalCluster?: (convId: string) => Promise<void>;
+	releaseGoalCluster?: (convId: string) => void;
 	resolveGoalRoles?: (
 		convId: string,
 		req: { planner?: string | null; executor?: string | null; reviewer?: string | null },
@@ -746,6 +749,8 @@ export class GoalService {
 		// await 到 dismiss 完全落定：后面的 spawn 名额检查才不会数到还在收尾的
 		// 旧执行者而误报上限（issue #464；stopDelegated 自身已按会话串行化）。
 		await this.stopDelegated(conv);
+		// 新目标在派出执行者之前绑定当前集群配置：执行 / 审查对话之后起的进程都用它。
+		await this.host.bindGoalCluster?.(conv.id);
 		const goal = conv.goal;
 		goal.reviewing = false;
 		goal.conversationId = goalConversationId;
@@ -1883,6 +1888,8 @@ export class GoalService {
 				await this.host.dismissRoleAgent?.(execId);
 			} catch {}
 		}
+		// 执行 / 审查对话已停下并移出：释放本目标的集群绑定。
+		this.host.releaseGoalCluster?.(conv.id);
 		conv.goal.phase = "idle";
 	}
 
@@ -1899,10 +1906,15 @@ export class GoalService {
 			this.verdictWaiters.delete(conv.id);
 			settle("gone");
 		}
-		for (const execId of this.detachRoleExec(conv)) {
-			void this.host.stopRoleAgent?.(execId).catch(() => {});
-			void this.host.dismissRoleAgent?.(execId).catch(() => {});
-		}
+		const gen = conv.goalGeneration;
+		const stops = this.detachRoleExec(conv).flatMap((execId) => [
+			this.host.stopRoleAgent?.(execId).catch(() => {}),
+			this.host.dismissRoleAgent?.(execId).catch(() => {}),
+		]);
+		// 角色对话停下后再释放集群绑定；期间若已设了新目标（代次变了）就不动新绑定。
+		void Promise.allSettled(stops).then(() => {
+			if (conv.goalGeneration === gen) this.host.releaseGoalCluster?.(conv.id);
+		});
 		conv.goal.phase = "idle";
 	}
 
@@ -2603,6 +2615,7 @@ export class GoalService {
 			await this.host.stopRoleAgent?.(execId).catch(() => {});
 			await this.host.dismissRoleAgent?.(execId).catch(() => {});
 		}
+		this.host.releaseGoalCluster?.(conv.id);
 
 		if (kind === "pass") {
 			g.verdict = "pass";

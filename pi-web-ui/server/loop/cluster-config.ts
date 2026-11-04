@@ -15,10 +15,10 @@
  * 固定文案和白名单元数据（来源、context 名、服务端版本号、路径个数）。
  */
 import { execFile } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
 
 export type ClusterSource = "app" | "env" | "default" | "none";
 export type ClusterCode =
@@ -60,6 +60,51 @@ export interface ClusterTarget {
 	generation: number;
 	kubeconfig: string | null;
 }
+
+/**
+ * 运行中任务的集群绑定（对外只有这些标识，不含凭据）。
+ *  - pinned：已固定。app 来源绑定不可变的导入版本；env / default 来源在绑定时用
+ *    `kubectl config view --raw --flatten` 存一份自包含快照（0600），之后外部改写原文件不影响任务；
+ *  - none：绑定时没有任何配置，任务里的 kubectl 一律失败，不会捡到之后导入的配置；
+ *  - blocked：没法固定（缺 kubectl / 快照失败）或旧绑定已不可核实（快照缺失 / 被改动）。
+ * none / blocked 时任务子进程的 KUBECONFIG 指向一个必然连不上的占位配置，而不是当前全局配置。
+ */
+export interface ClusterBinding {
+	key: string;
+	source: ClusterSource;
+	generation: number;
+	status: "pinned" | "none" | "blocked";
+	context: string | null;
+	reason: "no-kubectl" | "snapshot-failed" | "snapshot-missing" | "snapshot-changed" | null;
+	createdAt: string;
+}
+
+interface BindingRecord extends ClusterBinding {
+	/** 固定用的配置文件（应用版本或快照）；仅存在本模块的 0600 存储里。 */
+	file: string | null;
+	sha256: string | null;
+}
+
+const BLOCKED_KUBECONFIG = [
+	"apiVersion: v1",
+	"kind: Config",
+	"clusters:",
+	"- name: harness-cluster-binding-blocked",
+	"  cluster:",
+	"    server: https://harness-cluster-binding-blocked.invalid",
+	"contexts:",
+	"- name: harness-cluster-binding-blocked",
+	"  context:",
+	"    cluster: harness-cluster-binding-blocked",
+	"    user: harness-cluster-binding-blocked",
+	"users:",
+	"- name: harness-cluster-binding-blocked",
+	"  user: {}",
+	"current-context: harness-cluster-binding-blocked",
+	"",
+].join("\n");
+
+const sha256Of = (text: string | Buffer) => createHash("sha256").update(text).digest("hex");
 
 export interface ClusterConfigOptions {
 	dataDir: string;
@@ -163,8 +208,8 @@ export class ClusterConfig {
 	/** 启动时继承的 KUBECONFIG（指向应用保存文件的不算，那是旧启动脚本导出的 app 来源）。 */
 	private readonly inherited: string | null;
 	private appFile: string | null;
-	/** 已运行任务绑定的应用配置版本：bindKey → 文件路径（回收时保留）。 */
-	private readonly bound = new Map<string, string>();
+	/** 运行中任务的绑定（持久化在 kubeconfig.d/bindings.json；回收时保留它们引用的文件）。 */
+	private readonly bindings = new Map<string, BindingRecord>();
 	private cache: { key: string; at: number; status: ClusterStatus } | null = null;
 	private inflight: { key: string; promise: Promise<ClusterStatus> } | null = null;
 
@@ -175,8 +220,43 @@ export class ClusterConfig {
 		this.legacy = join(opts.dataDir, "kubeconfig");
 		const raw = this.env.KUBECONFIG?.trim() || null;
 		this.inherited = raw && !splitPaths(raw).every((p) => this.isAppPath(p)) ? raw : null;
+		this.loadBindings();
 		this.appFile = this.loadAppFile();
 		this.applyEnv();
+	}
+
+	private bindingsFile(): string {
+		return join(this.dir, "bindings.json");
+	}
+
+	/** 读回上次进程留下的绑定：目标任务（goal:）不跨重启，丢弃并删快照；其余等调用方按任务是否还在裁剪。 */
+	private loadBindings(): void {
+		let raw: Record<string, BindingRecord> = {};
+		try {
+			raw = JSON.parse(readFileSync(this.bindingsFile(), "utf8")) as Record<string, BindingRecord>;
+		} catch {
+			return;
+		}
+		for (const [key, rec] of Object.entries(raw ?? {})) {
+			if (!rec || typeof rec !== "object" || rec.key !== key) continue;
+			this.bindings.set(key, rec);
+		}
+		// 构造期还没读当前导入版本：只摘记录、删快照，不做版本回收（否则会误删当前配置）。
+		let dropped = false;
+		for (const key of [...this.bindings.keys()]) {
+			if (key.startsWith("goal:")) dropped = this.dropBinding(key) || dropped;
+		}
+		if (dropped) this.saveBindings();
+	}
+
+	private saveBindings(): void {
+		try {
+			mkdirSync(this.dir, { recursive: true, mode: 0o700 });
+			writeFileSync(this.bindingsFile(), JSON.stringify(Object.fromEntries(this.bindings), null, 2), { mode: 0o600 });
+			chmodSync(this.bindingsFile(), 0o600);
+		} catch {
+			// 写不进去：本进程内的绑定照常生效，只是跨重启时按「无记录」处理。
+		}
 	}
 
 	private isAppPath(p: string): boolean {
@@ -365,7 +445,9 @@ export class ClusterConfig {
 
 	/** 回收不再使用的应用配置版本（当前版本与任务绑定的版本除外）。 */
 	private gc(): { retained: number; failed: number } {
-		const keep = new Set([this.appFile, ...this.bound.values()].filter((p): p is string => !!p));
+		const keep = new Set(
+			[this.appFile, ...[...this.bindings.values()].map((b) => b.file)].filter((p): p is string => !!p),
+		);
 		let retained = 0;
 		let failed = 0;
 		for (const f of [...this.versions(), ...(existsSync(this.legacy) ? [this.legacy] : [])]) {
@@ -382,16 +464,155 @@ export class ClusterConfig {
 		return { retained, failed };
 	}
 
-	/** 任务启动时绑定当前配置；返回值交给 envFor() 生成该任务子进程的环境。 */
-	bind(key: string): ClusterTarget {
+	/**
+	 * 任务启动时绑定当前实际使用的配置（同一个 key 重复绑定 = 先释放旧的）。
+	 * 绑定在任务的首个命令之前完成；之后任务的 Bash / validator / 任务终端都经 envForTask 取环境。
+	 */
+	async bindTask(key: string): Promise<ClusterBinding> {
+		if (this.bindings.has(key)) this.releaseTask(key);
 		const t = this.target();
-		if (t.source === "app" && t.kubeconfig) this.bound.set(key, t.kubeconfig);
-		return t;
+		const base = { key, source: t.source, generation: t.generation, createdAt: new Date().toISOString() };
+		let rec: BindingRecord;
+		if (t.source === "none") {
+			rec = { ...base, status: "none", context: null, reason: null, file: null, sha256: null };
+		} else if (t.source === "app" && t.kubeconfig) {
+			let sha: string | null = null;
+			try {
+				sha = sha256Of(readFileSync(t.kubeconfig));
+			} catch {
+				sha = null;
+			}
+			rec = sha
+				? { ...base, status: "pinned", context: this.cachedContext(t), reason: null, file: t.kubeconfig, sha256: sha }
+				: { ...base, status: "blocked", context: null, reason: "snapshot-missing", file: null, sha256: null };
+		} else {
+			rec = await this.snapshotBinding(t, base);
+		}
+		this.bindings.set(key, rec);
+		this.saveBindings();
+		return publicBinding(rec);
 	}
 
-	release(key: string): void {
-		if (this.bound.delete(key)) this.gc();
+	private cachedContext(t: ClusterTarget): string | null {
+		const st = this.cache?.status;
+		return st && st.generation === t.generation && st.source === t.source ? st.context : null;
 	}
+
+	/** env / default 来源：按 kubectl 正常解析得到当前 context 的自包含快照，之后不受原文件改写影响。 */
+	private async snapshotBinding(
+		t: ClusterTarget,
+		base: Pick<BindingRecord, "key" | "source" | "generation" | "createdAt">,
+	): Promise<BindingRecord> {
+		const kubectl = this.opts.kubectl ?? "kubectl";
+		const env = this.envFor(t, { ...this.env, ...(this.opts.home ? { HOME: this.opts.home } : {}) });
+		let res = await run(kubectl, ["config", "view", "--raw", "--flatten", "--minify"], env, 5000);
+		// 没有 current-context 时 --minify 会失败：退回整份展开（多 context 也一并固定）。
+		if (res.err && res.err.code !== "ENOENT")
+			res = await run(kubectl, ["config", "view", "--raw", "--flatten"], env, 5000);
+		const blocked = (reason: BindingRecord["reason"]): BindingRecord => ({
+			...base,
+			status: "blocked",
+			context: null,
+			reason,
+			file: null,
+			sha256: null,
+		});
+		if (res.err) return blocked(res.err.code === "ENOENT" ? "no-kubectl" : "snapshot-failed");
+		if (!/^\s*apiVersion:/m.test(res.stdout) || !/^\s*clusters:/m.test(res.stdout)) return blocked("snapshot-failed");
+		const file = join(this.dir, `bound-${Date.now()}-${randomBytes(3).toString("hex")}.yaml`);
+		try {
+			mkdirSync(this.dir, { recursive: true, mode: 0o700 });
+			chmodSync(this.dir, 0o700);
+			writeFileSync(file, res.stdout, { mode: 0o600, flag: "wx" });
+		} catch {
+			return blocked("snapshot-failed");
+		}
+		const ctx = /^current-context:\s*"?([^"\n]+?)"?\s*$/m.exec(res.stdout)?.[1] ?? "";
+		return {
+			...base,
+			status: "pinned",
+			context: safeContext(ctx),
+			reason: null,
+			file,
+			sha256: sha256Of(res.stdout),
+		};
+	}
+
+	/** 任务子进程的环境：有绑定 → 绑定的配置（核实不了就指向占位配置）；没有绑定 → 当前配置。 */
+	envForTask(key: string, base: NodeJS.ProcessEnv = this.env): NodeJS.ProcessEnv {
+		const rec = this.bindings.get(key);
+		if (!rec) return this.envFor(this.target(), base);
+		return { ...base, KUBECONFIG: this.verifiedFile(rec) ?? this.blockedFile() };
+	}
+
+	/** 绑定的文件是否仍是绑定时那份（缺失 / 内容变了 → 改记为 blocked，不再放行）。 */
+	private verifiedFile(rec: BindingRecord): string | null {
+		if (rec.status !== "pinned" || !rec.file) return null;
+		let sha: string | null = null;
+		try {
+			sha = sha256Of(readFileSync(rec.file));
+		} catch {
+			sha = null;
+		}
+		if (sha && sha === rec.sha256) return rec.file;
+		rec.status = "blocked";
+		rec.reason = sha ? "snapshot-changed" : "snapshot-missing";
+		this.saveBindings();
+		return null;
+	}
+
+	private blockedFile(): string {
+		const file = join(this.dir, "blocked.yaml");
+		try {
+			if (!existsSync(file)) {
+				mkdirSync(this.dir, { recursive: true, mode: 0o700 });
+				writeFileSync(file, BLOCKED_KUBECONFIG, { mode: 0o600 });
+			}
+		} catch {
+			// 写不了占位文件：指向一个不存在的路径同样不会落到全局配置上。
+		}
+		return file;
+	}
+
+	taskBinding(key: string): ClusterBinding | null {
+		const rec = this.bindings.get(key);
+		if (!rec) return null;
+		if (rec.status === "pinned") this.verifiedFile(rec);
+		return publicBinding(rec);
+	}
+
+	/** 任务真正结束（记录删除 / 目标收尾）后释放：删快照，回收不再被引用的导入版本。 */
+	releaseTask(key: string): void {
+		if (!this.dropBinding(key)) return;
+		this.saveBindings();
+		this.gc();
+	}
+
+	/** 摘掉一条绑定并删它独占的快照文件（导入版本留给 gc 按引用回收）。 */
+	private dropBinding(key: string): boolean {
+		const rec = this.bindings.get(key);
+		if (!rec) return false;
+		this.bindings.delete(key);
+		const stillUsed = [...this.bindings.values()].some((b) => b.file === rec.file);
+		if (rec.file && !stillUsed && basename(rec.file).startsWith("bound-")) {
+			try {
+				rmSync(rec.file, { force: true });
+			} catch {
+				// 删不掉的快照留给下次回收。
+			}
+		}
+		return true;
+	}
+
+	/** 启动后按任务是否还存在裁剪绑定（keep 返回 false 的键释放）。 */
+	pruneBindings(keep: (key: string) => boolean): void {
+		for (const key of [...this.bindings.keys()]) if (!keep(key)) this.releaseTask(key);
+	}
+}
+
+function publicBinding(rec: BindingRecord): ClusterBinding {
+	const { file: _file, sha256: _sha, ...pub } = rec;
+	return pub;
 }
 
 let active: ClusterConfig | null = null;
