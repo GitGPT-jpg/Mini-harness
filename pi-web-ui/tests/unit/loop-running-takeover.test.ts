@@ -10,15 +10,18 @@ import { afterAll, describe, expect, it } from "vitest";
 const RUNS_ROOT = mkdtempSync(join(tmpdir(), "loop-running-takeover-"));
 process.env.MINI_HARNESS_RUNTIME_ROOT = RUNS_ROOT;
 const ext = await import("../../server/loop/extension.js");
-const { createLoopRun, recoverRun, stopLeaseHeartbeat } = ext;
+const { createLoopRun, recoverRun, stopLeaseHeartbeat, stopRunExternal } = ext;
 const op = await import("../../server/loop/operation.js");
 const { runCommandPersistent, listOperations } = op;
 
-const CWD = "/tmp/loop-test-work";
+const CWD = mkdtempSync(join(tmpdir(), "loop-running-workspace-"));
 let seq = 0;
 const SID = () => "running-takeover-" + seq++;
 
-afterAll(() => rmSync(RUNS_ROOT, { recursive: true, force: true }));
+afterAll(() => {
+	rmSync(RUNS_ROOT, { recursive: true, force: true });
+	rmSync(CWD, { recursive: true, force: true });
+});
 
 function waitFor(fn: () => boolean, ms = 8000, step = 20): Promise<void> {
 	return new Promise((resolve, reject) => {
@@ -42,8 +45,9 @@ describe("在途执行接续（孤儿租约 + 在运行实体 → 接管并可�
 
 		// 「旧服务」启动一个长 validator 后立刻退出（不 await 结果，只留 operation.json）。
 		runCommandPersistent("bash", ["-lc", "sleep 30; echo long-validator"], {
-			cwd: RUNS_ROOT,
+			cwd: CWD,
 			runId,
+			attemptId: created.st.attemptId,
 			stage: "validate",
 			round: 1,
 		}).catch(() => {});
@@ -54,15 +58,19 @@ describe("在途执行接续（孤儿租约 + 在运行实体 → 接管并可�
 		const nowIso = new Date().toISOString();
 		writeFileSync(
 			join(RUNS_ROOT, runId, "lease.json"),
-			JSON.stringify({
-				owner: "old-service@host",
-				pid: 999999, // 已死的服务进程 pid
-				generation: 1,
-				startedAt: nowIso,
-				heartbeatAt: nowIso,
-				remoteJobId: null,
-				taskPid: runningOp.pid, // 本地 validator 仍在跑
-			}, null, 2),
+			JSON.stringify(
+				{
+					owner: "old-service@host",
+					pid: 999999, // 已死的服务进程 pid
+					generation: 1,
+					startedAt: nowIso,
+					heartbeatAt: nowIso,
+					remoteJobId: null,
+					taskPid: runningOp.pid, // 本地 validator 仍在跑
+				},
+				null,
+				2,
+			),
 		);
 
 		const rec = recoverRun(runId, "b@host");
@@ -76,9 +84,7 @@ describe("在途执行接续（孤儿租约 + 在运行实体 → 接管并可�
 		expect(after.owner).toBe("b@host");
 		expect(after.generation).toBe(2);
 		stopLeaseHeartbeat(runId);
-		// 清理：杀掉仍在跑的 detached 进程组（bash wrapper + sleep 30），不残留后台进程。
-		try {
-			process.kill(-runningOp.pid!, "SIGKILL");
-		} catch {}
+		// 清理由持久身份核验后的产品入口执行，不能把 runner PID 当作 PGID。
+		expect(stopRunExternal(runId).ok).toBe(true);
 	}, 30_000);
 });

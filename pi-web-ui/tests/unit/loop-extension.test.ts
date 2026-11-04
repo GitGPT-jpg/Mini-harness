@@ -40,7 +40,7 @@ const {
 	loadLoopState,
 	setLoopExecForTest,
 } = ext;
-const CWD = "/tmp/loop-test-work";
+const CWD = mkdtempSync(join(tmpdir(), "loop-test-work-"));
 
 type ToolEntry = { name: string; execute: (id: string, p: any, s: any, u: any, ctx: any) => Promise<any> };
 
@@ -233,7 +233,7 @@ describe("mini-harness loop extension", () => {
 		await h.tools.get("loop_done")!.execute("t", { summary: "s" }, undefined, undefined, h.ctx);
 		// agent_end 进入 reviewer（complete 挂起），期间用户停止
 		const pending = h.handlers.get("agent_end")![0](undefined, h.ctx);
-		await new Promise((r) => setTimeout(r, 30));
+		await waitFor(() => !!h.resolveReview);
 		await h.tools.get("loop_stop")!.execute("t", { reason: "user" }, undefined, undefined, h.ctx);
 		expect(loadRun(runId).status).toBe("stopped");
 		// 迟到的 reviewer 通过结论到达 —— 不得翻转 stopped
@@ -511,6 +511,54 @@ describe("mini-harness loop extension", () => {
 		rmSync(wt, { recursive: true, force: true });
 	});
 
+	it("人工收下在 git add 后失权，不再启动 commit 或提交 done", async () => {
+		const wt = mkdtempSync(join(tmpdir(), "loop-accept-fence-"));
+		const git = (...args: string[]) =>
+			execFileSync("git", ["-C", wt, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+		try {
+			git("init", "-q");
+			git("config", "user.email", "t@example.com");
+			git("config", "user.name", "t");
+			writeFileSync(join(wt, "a.txt"), "x");
+			const h = makeHarness(SID(), { review: "这不是 JSON" });
+			const start = await h.tools
+				.get("loop_start")!
+				.execute("t", { goal: "g", validateCmd: "true" }, undefined, undefined, h.ctx);
+			const runId = start.details.runId;
+			patchRun(runId, { worktreeDir: wt, worktreeBranch: `mini-harness/${runId}` });
+			await h.tools.get("loop_done")!.execute("t", { summary: "s" }, undefined, undefined, h.ctx);
+			await h.handlers.get("agent_end")![0](undefined, h.ctx);
+			const filter = join(wt, ".git", "expire-lease.cjs");
+			const lease = join(RUNS_ROOT, runId, "lease.json");
+			writeFileSync(
+				filter,
+				`
+				const fs = require("node:fs");
+				const file = ${JSON.stringify(lease)};
+				const value = JSON.parse(fs.readFileSync(file, "utf8"));
+				value.heartbeatAt = new Date(0).toISOString();
+				fs.writeFileSync(file + ".test-expiry", JSON.stringify(value));
+				fs.renameSync(file + ".test-expiry", file);
+				process.stdout.write(fs.readFileSync(0));
+			`,
+			);
+			const quote = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
+			git("config", "filter.fence.clean", `${quote(process.execPath)} ${quote(filter)}`);
+			git("config", "filter.fence.required", "true");
+			writeFileSync(join(wt, ".gitattributes"), "a.txt filter=fence\n");
+			expect(acceptRunValidatorOnly(runId)).toMatchObject({ ok: false });
+			expect(loadRun(runId)).toMatchObject({
+				status: "stopped",
+				stopReason: "reviewer-error",
+				worktreeCommitted: false,
+				acceptance: null,
+			});
+			expect(() => git("rev-parse", "--verify", "HEAD")).toThrow();
+		} finally {
+			rmSync(wt, { recursive: true, force: true });
+		}
+	});
+
 	it("Checkpoint 快照：连续两轮不提交也各有可恢复 ref（回归#9）", async () => {
 		const repo = mkdtempSync(join(tmpdir(), "loop-snap-"));
 		const git = (...args: string[]) =>
@@ -567,12 +615,13 @@ describe("mini-harness loop extension", () => {
 			.execute("t", { goal: "g", validateCmd: "true", maxRounds: 3 }, undefined, undefined, h.ctx);
 		const runId = start.details.runId;
 		// 模拟 worktree：run 的 workspace 与会话 cwd（CWD）不同
-		patchRun(runId, { workspace: "/tmp/loop-test-worktree-target" });
+		const target = mkdtempSync(join(tmpdir(), "loop-test-worktree-target-"));
+		patchRun(runId, { workspace: target });
 		await h.tools.get("loop_done")!.execute("t", { summary: "s" }, undefined, undefined, h.ctx);
 		await h.handlers.get("agent_end")![0](undefined, h.ctx);
 		// validator（validateCmd="true" → bash -lc true）必须在 patch 后的 workspace 里跑
 		const validateCall = h.execCalls.find((c) => c.cmd === "bash" && c.args[1] === "true");
-		expect(validateCall?.cwd).toBe("/tmp/loop-test-worktree-target");
+		expect(validateCall?.cwd).toBe(target);
 		expect(validateCall?.cwd).not.toBe(CWD);
 	});
 
@@ -693,16 +742,16 @@ describe("D-12：评审掉线的两条路 / 服务端结构化启动", () => {
 			.execute("t", { goal: "g", validateCmd: "true", maxRounds: 3 }, undefined, undefined, h.ctx);
 		const runId = start.details.runId;
 		await h.tools.get("loop_done")!.execute("t", { summary: "s" }, undefined, undefined, h.ctx);
-		// 两路评审同时在途：模型手动 loop_validate（A）+ 回合结束 agent_end（B）
+		// 手动验收与 agent_end 并发时只允许一个评审请求。
 		const pA = h.tools.get("loop_validate")!.execute("t", {}, undefined, undefined, h.ctx);
 		await waitFor(() => h.reviewResolvers.length === 1);
 		const pB = h.handlers.get("agent_end")![0](undefined, h.ctx);
-		await waitFor(() => h.reviewResolvers.length === 2);
-		// B 先回来，两次都不是 JSON → 评审出错停下
-		h.reviewResolvers[1]("不是 JSON");
-		await waitFor(() => h.reviewResolvers.length === 3);
-		h.reviewResolvers[2]("还不是 JSON");
 		await pB;
+		expect(h.reviewResolvers).toHaveLength(1);
+		h.reviewResolvers[0]("不是 JSON");
+		await waitFor(() => h.reviewResolvers.length === 2);
+		h.reviewResolvers[1]("还不是 JSON");
+		await pA;
 		let st = loadRun(runId);
 		expect(st).toMatchObject({ status: "stopped", stage: "review-error", stopReason: "reviewer-error" });
 		const stoppedEpoch = st.epoch;
@@ -710,17 +759,13 @@ describe("D-12：评审掉线的两条路 / 服务端结构化启动", () => {
 		const r = reactivateForReview(runId);
 		expect(r.ok).toBe(true);
 		st = loadRun(runId);
-		expect(st).toMatchObject({ status: "active", stage: "validate", validatedRound: 0, epoch: stoppedEpoch + 1 });
+		expect(st).toMatchObject({ status: "active", stage: "validate", validatedRound: 1, epoch: stoppedEpoch + 1 });
 		expect(st.stopReason).toBeUndefined();
 		expect(journalEvents(runId)).toContain("retry-review");
 		expect(reactivateForReview(runId).ok).toBe(false); // 只有 reviewer-error 的 run 能重试
 
-		// A（旧代次）迟到的「通过」不得把重新激活的 run 直接判完成
-		h.reviewResolvers[0]('{"verdict":"pass","reasons":["late"]}');
-		await pA;
 		st = loadRun(runId);
 		expect(st).toMatchObject({ status: "active", stage: "validate", acceptance: null });
-		expect(journalEvents(runId)).toContain("late-callback-dropped");
 
 		// 重新验收（模型没调 loop_validate 时回合结束的 agent_end 补跑）：这次评审通过
 		h.deferReview = false;

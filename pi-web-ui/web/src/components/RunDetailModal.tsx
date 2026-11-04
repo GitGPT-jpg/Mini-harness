@@ -1,4 +1,4 @@
-import { memo, useEffect, useState, type ReactNode } from "react";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { FiFileText } from "react-icons/fi";
 import type { LoopUiState } from "../types";
 import { useT } from "../i18n";
@@ -25,9 +25,12 @@ export interface RunDetail {
 	round: number;
 	maxRounds: number;
 	stopReason: string | null;
+	stopRequestedAt?: string | null;
+	stopConfirmedAt?: string | null;
 	acceptance: string | null;
 	setupError: string | null;
 	validator: {
+		started?: boolean;
 		precheckCmd?: string | null;
 		cmd: string | null;
 		verdict: string | null;
@@ -116,7 +119,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 }
 
 interface Props {
-	/** 当前对话快照里的 loop：runId 相同 = 本对话发起的 run，才给停止 / 重试评审 / 按代码验证收下。 */
+	/** 当前对话归属仅限制重试评审/按代码验证收下；恢复和停止由服务端校验控制权。 */
 	currentLoop: LoopUiState | null;
 }
 
@@ -128,6 +131,10 @@ export const RunDetailModal = memo(function RunDetailModal({ currentLoop }: Prop
 	const t = useT();
 	// undefined = 加载中；null = 拿不到（400 / 404 / 网络），画友好的空状态
 	const [detail, setDetail] = useState<RunDetail | null | undefined>(undefined);
+	const [stopping, setStopping] = useState(false);
+	const [actionMessage, setActionMessage] = useState("");
+	const [reload, setReload] = useState(0);
+	const view = useRef({});
 	const owned = !!runId && currentLoop?.kind === "run" && currentLoop.runId === runId;
 	// 本对话的 run：快照里状态一变（停止 / 重试评审 / 收下 / 进下一轮）就立刻重拉，不等轮询
 	const liveKey =
@@ -139,10 +146,16 @@ export const RunDetailModal = memo(function RunDetailModal({ currentLoop }: Prop
 
 	useEffect(() => {
 		setDetail(undefined);
+		setStopping(false);
+		setActionMessage("");
+		view.current = {};
+		return () => {
+			view.current = {};
+		};
 	}, [runId]);
 
 	useEffect(() => {
-		if (!runId) return;
+		if (!runId || stopping) return;
 		let alive = true;
 		let timer: ReturnType<typeof setTimeout> | null = null;
 		const schedule = () => {
@@ -155,20 +168,25 @@ export const RunDetailModal = memo(function RunDetailModal({ currentLoop }: Prop
 		async function load() {
 			const d = await mhGet<RunDetail>(`runs/${encodeURIComponent(runId ?? "")}/detail`);
 			if (!alive) return;
-			setDetail(d);
-			if (d?.status === "active") schedule();
+			if (d) setDetail(d);
+			else setDetail((previous) => previous ?? null);
+			if (!d || d.status === "active" || (d.stopRequestedAt && !d.stopConfirmedAt) || d.stage === "stopping") {
+				schedule();
+			}
 		}
 		void load();
 		return () => {
 			alive = false;
 			if (timer) clearTimeout(timer);
 		};
-	}, [runId, liveKey]);
+	}, [runId, liveKey, reload, stopping]);
 
 	if (!runId) return null;
 
 	const st = detail ? loopStatus(detail, t) : null;
 	const active = detail?.status === "active";
+	const stopPending =
+		!!detail && ((!!detail.stopRequestedAt && !detail.stopConfirmedAt) || detail.stage === "stopping");
 	const reviewerDown = detail?.status === "stopped" && detail.stopReason === "reviewer-error";
 	const canAccept =
 		!!detail &&
@@ -189,6 +207,36 @@ export const RunDetailModal = memo(function RunDetailModal({ currentLoop }: Prop
 				reviewerEnabled: detail.review?.enabled ?? null,
 			}),
 		);
+	};
+	const stop = async () => {
+		if (stopping || !window.confirm(t("runDetailStopConfirm"))) return;
+		const scope = view.current;
+		setStopping(true);
+		setActionMessage("");
+		const response = await mhPost<{
+			ok: boolean;
+			error?: string;
+			stopRequestedAt?: string | null;
+			stopConfirmedAt?: string | null;
+		}>(`runs/${encodeURIComponent(runId)}/stop`, {});
+		if (view.current !== scope) return;
+		if (!response?.ok || !response.data?.ok) {
+			setActionMessage(response?.data?.error || t("runDetailControlFailed"));
+		} else {
+			const result = response.data;
+			// Only the server's confirmed timestamp permits a stopped label.
+			setDetail(
+				(previous) =>
+					previous && {
+						...previous,
+						stopRequestedAt: result.stopRequestedAt ?? previous.stopRequestedAt,
+						stopConfirmedAt: result.stopConfirmedAt ?? previous.stopConfirmedAt,
+						...(result.stopConfirmedAt ? { status: "stopped", stage: "stopped" } : {}),
+					},
+			);
+		}
+		setStopping(false);
+		setReload((value) => value + 1);
 	};
 
 	const title = (
@@ -215,15 +263,35 @@ export const RunDetailModal = memo(function RunDetailModal({ currentLoop }: Prop
 					<DetailBody detail={detail} />
 				)}
 				<div className="cockpit-row run-detail-acts">
-					{detail && !owned && (active || reviewerDown) && (
+					{actionMessage && (
+						<span className="run-detail-hint" role="status">
+							{actionMessage}
+						</span>
+					)}
+					{detail && !owned && reviewerDown && !stopPending && (
 						<span className="run-detail-hint">{t("runDetailNotMine")}</span>
 					)}
-					{detail && owned && active && (
-						<button type="button" className="btn sm danger" onClick={() => appSend({ type: "loop_stop", runId })}>
-							{t("runDetailStop")}
+					{detail && active && !stopPending && (
+						<button
+							type="button"
+							className="btn"
+							disabled={stopping}
+							onClick={() => {
+								setActionMessage(
+									appSend({ type: "loop_resume", runId }) ? t("runDetailResumeRequested") : t("runDetailControlFailed"),
+								);
+								setReload((value) => value + 1);
+							}}
+						>
+							{t("runDetailResume")}
 						</button>
 					)}
-					{detail && owned && reviewerDown && (
+					{detail && (active || stopPending) && (
+						<button type="button" className="btn sm danger" disabled={stopping} onClick={() => void stop()}>
+							{stopping ? t("runDetailStopSending") : stopPending ? t("runDetailStopRecheck") : t("runDetailStop")}
+						</button>
+					)}
+					{detail && owned && reviewerDown && !stopPending && (
 						<>
 							<button
 								type="button"
@@ -245,7 +313,7 @@ export const RunDetailModal = memo(function RunDetailModal({ currentLoop }: Prop
 							)}
 						</>
 					)}
-					{detail && !active && (
+					{detail && !active && !stopPending && (
 						<button type="button" className="btn run-detail-restart" onClick={restart}>
 							{t("runDetailRestart")}
 						</button>
@@ -270,7 +338,13 @@ function DetailBody({ detail }: { detail: RunDetail }) {
 	const t = useT();
 	const [distilling, setDistilling] = useState(false);
 	const [distilledPath, setDistilledPath] = useState<string | null>(null);
-	const vl = validatorLine(detail, t);
+	const vl =
+		detail.mode !== "llm" && detail.validator?.started && !detail.validator.verdict
+			? {
+					text: detail.stopConfirmedAt ? t("runDetailValidatorStopped") : t("runDetailValidatorUnfinished"),
+					tone: "warn",
+				}
+			: validatorLine(detail, t);
 	const rl = reviewerLine(detail, t);
 	const reasons = detail.review?.reasons ?? [];
 	const rounds = detail.rounds ?? [];
@@ -302,6 +376,16 @@ function DetailBody({ detail }: { detail: RunDetail }) {
 			)}
 
 			<div className="run-detail-accept">
+				{detail.stopRequestedAt && (
+					<div className="run-detail-meta" data-stop-requested-at={detail.stopRequestedAt}>
+						{t("runDetailStopRequestedAt", { at: detail.stopRequestedAt })}
+					</div>
+				)}
+				{detail.stopConfirmedAt && (
+					<div className="run-detail-meta" data-stop-confirmed-at={detail.stopConfirmedAt}>
+						{t("runDetailStopConfirmedAt", { at: detail.stopConfirmedAt })}
+					</div>
+				)}
 				<div className={`run-detail-line tone-${vl.tone}`}>{t("runDetailValidatorLine", { v: vl.text })}</div>
 				<div className={`run-detail-line tone-${rl.tone}`}>{t("runDetailReviewerLine", { v: rl.text })}</div>
 				{reasons.length > 0 && (

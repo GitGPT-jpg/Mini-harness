@@ -6,19 +6,28 @@
  *  - A.5 generation 单调、旧代次 mutate 永久失效。
  *
  * 与 loop-recovery-process.test.ts 的「空目录双进程」不同：这里覆盖的是「检查→接管」整个操作的原子性，
- * 而不是只用 O_EXCL 独占创建文件。
+ * 生产锁为每 run SQLite BEGIN IMMEDIATE，屏障只存在于 fixture。
  */
 import { execFile, spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync, existsSync, readdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
-import { acquireLease, getLease, heartbeat, mutateLease, releaseLease, LEASE_TTL_MS, type Lease } from "../../server/loop/recovery.js";
+import {
+	acquireLease,
+	getLease,
+	heartbeat,
+	mutateLease,
+	releaseLease,
+	withRunLockSync,
+	LEASE_TTL_MS,
+	type Lease,
+} from "../../server/loop/recovery.js";
 
 const execFileP = promisify(execFile);
-const TSBIN = join(process.cwd(), "node_modules", ".bin", "tsx");
 const RACE = join(import.meta.dirname, "..", "fixtures", "lease-race.ts");
+const CONTENDER = join(import.meta.dirname, "..", "fixtures", "lease-contender.ts");
 
 const DIRS: string[] = [];
 function tmpDir(): string {
@@ -38,46 +47,66 @@ function writeLeaseFile(dir: string, lease: Lease): void {
 	writeFileSync(join(dir, "lease.json"), JSON.stringify(lease, null, 2));
 }
 
-async function waitFor(fn: () => boolean, ms = 8000, step = 20): Promise<void> {
-	const t0 = Date.now();
-	while (Date.now() - t0 < ms) {
-		if (fn()) return;
-		await new Promise((r) => setTimeout(r, step));
-	}
-	throw new Error("waitFor timeout");
-}
-
 describe("租约接管原子性（过期接管竞争）", () => {
+	it("真实进程的 owner nonce 各自唯一，模块重新加载仍保持同一实例身份", async () => {
+		const results = await Promise.all(
+			[0, 1].map(() => execFileP(process.execPath, ["--import", "tsx", CONTENDER, "--identity"], { timeout: 8000 })),
+		);
+		const identities = results.map((result) => JSON.parse(result.stdout));
+		for (const identity of identities) {
+			expect(identity.again).toBe(identity.owner);
+			expect(identity.reloaded).toBe(identity.owner);
+			const [pid, host, nonce] = identity.owner.split("@");
+			expect(Number(pid)).toBeGreaterThan(0);
+			expect(host).toBe(hostname());
+			expect(nonce).toMatch(/^[a-f0-9]{32}$/);
+		}
+		expect(identities[0].owner.split("@")[2]).not.toBe(identities[1].owner.split("@")[2]);
+	});
+
 	it("两个真实进程竞争同一过期租约：只有一个成功（A 判过期后暂停、B 先接管、A 再继续）", async () => {
 		const dir = tmpDir();
-		const barrierDir = tmpDir();
-		// 预置一份过期租约（old，gen1，10 分钟前心跳）
+		// 初始化新版存储后，再预置过期数据；不冒充旧活进程离线迁移。
+		expect(withRunLockSync(dir, () => true)).toEqual({ ok: true, value: true });
 		writeLeaseFile(dir, leaseOf("old@host", 1, new Date(Date.now() - LEASE_TTL_MS - 60_000).toISOString()));
 
-		// A：带 CAS 屏障。它会在「判定过期」后暂停，等 barrierDir/go 出现才继续放置。
-		const aChild = spawn(TSBIN, [RACE, dir, "a@host", "2"], {
-			env: { ...process.env, MINI_HARNESS_CAS_BARRIER_DIR: barrierDir },
-			stdio: ["ignore", "pipe", "pipe"],
+		const aChild = spawn(process.execPath, ["--import", "tsx", RACE, dir, "a@host", "2", "observe-before-lock"], {
+			stdio: ["ignore", "pipe", "pipe", "ipc"],
 		});
 		let aOut = "";
+		let aErr = "";
+		const messages: unknown[] = [];
 		aChild.stdout!.on("data", (c: Buffer) => (aOut += c.toString()));
-		aChild.stderr!.on("data", (c: Buffer) => (aOut += c.toString()));
+		aChild.stderr!.on("data", (c: Buffer) => (aErr += c.toString()));
+		aChild.on("message", (message) => messages.push(message));
 		const aExit = new Promise<number | null>((res) => aChild.on("close", res));
-		// 等 A 进入屏障（tsx 会再派生子进程，pid 与 aChild.pid 不同；屏障目录里任何 ready.* 都来自 A）。
-		await waitFor(() => existsSync(join(barrierDir, "go")) || readdirSync(barrierDir).some((f) => f.startsWith("ready.")), 8000);
-
-		// B：无屏障，先完成接管（gen2）。
-		const b = await execFileP(TSBIN, [RACE, dir, "b@host", "2"]);
-		expect(b.stdout.trim()).toBe("WIN:b@host");
-
-		// 放行 A：它应当发现 lease.json 已被 B 重建（link EEXIST），判负且不覆盖 B。
-		writeFileSync(join(barrierDir, "go"), "go");
-		await aExit;
-		expect(aOut.trim()).toBe("LOSE:a@host");
-
-		// 最终只有一个赢家：B 的 gen2 租约仍在。
-		expect(getLease(dir)?.owner).toBe("b@host");
-		expect(getLease(dir)?.generation).toBe(2);
+		try {
+			await expect
+				.poll(() => messages, { timeout: 8000 })
+				.toContainEqual({
+					type: "observed-expired",
+					generation: 1,
+					owner: "old@host",
+				});
+			// B 在 A 的锁外观察之后完成真实事务，随后 A 必须在锁内重读。
+			const b = await execFileP(process.execPath, ["--import", "tsx", RACE, dir, "b@host", "2"], { timeout: 8000 });
+			expect(b.stdout.trim()).toBe("WIN:b@host");
+			await new Promise<void>((resolve, reject) => {
+				aChild.send("continue", (error) => (error ? reject(error) : resolve()));
+			});
+			expect(await aExit, aErr).toBe(0);
+			expect(aOut.trim()).toBe("LOSE:a@host");
+			expect(messages).toContainEqual({
+				type: "checked",
+				lease: { owner: "b@host", generation: 2 },
+				acquired: false,
+			});
+			expect(getLease(dir)?.owner).toBe("b@host");
+			expect(getLease(dir)?.generation).toBe(2);
+		} finally {
+			if (aChild.exitCode === null && aChild.signalCode === null) aChild.kill("SIGKILL");
+			await aExit;
+		}
 	}, 30_000);
 
 	it("A.3 旧 owner 心跳不得覆盖新 owner 租约", () => {
@@ -97,7 +126,7 @@ describe("租约接管原子性（过期接管竞争）", () => {
 		expect(acquireLease(dir, leaseOf("a@host", 1))).toBe(true);
 		writeLeaseFile(dir, leaseOf("a@host", 1, new Date(Date.now() - LEASE_TTL_MS - 60_000).toISOString()));
 		expect(acquireLease(dir, leaseOf("b@host", 2))).toBe(true);
-		expect(releaseLease(dir, "a@host")).toBe(false); // 旧 owner 释放被拒
+		expect(releaseLease(dir, "a@host", 1)).toBe(false); // 旧 owner 释放被拒
 		expect(getLease(dir)?.owner).toBe("b@host");
 		expect(getLease(dir)?.generation).toBe(2);
 	});
@@ -112,7 +141,7 @@ describe("租约接管原子性（过期接管竞争）", () => {
 		expect(mutateLease(dir, { owner: "a@host", generation: 0 }, (cur) => ({ ...cur, taskPid: 0 }))).toBe(false);
 		expect(getLease(dir)?.taskPid).toBe(42);
 		// 释放后重新取得：generation 继续（此处断言新取得者显式给了 gen3，旧 gen1 token 仍失效）
-		expect(releaseLease(dir, "a@host")).toBe(true);
+		expect(releaseLease(dir, "a@host", 1)).toBe(true);
 		expect(acquireLease(dir, leaseOf("b@host", 3))).toBe(true);
 		expect(mutateLease(dir, { owner: "a@host", generation: 1 }, (cur) => ({ ...cur, taskPid: 7 }))).toBe(false);
 		expect(getLease(dir)?.owner).toBe("b@host");

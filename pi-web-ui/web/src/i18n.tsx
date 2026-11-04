@@ -109,8 +109,8 @@ export const zh = {
 	hostMemory: "RAM",
 	hostResourcesTip:
 		"运行 训推引擎组 Harness 服务的主机 · CPU 为约 10 秒平均" +
-			"（2 秒采样），" +
-			"与任务管理器采样时刻不同会有几秒偏差",
+		"（2 秒采样），" +
+		"与任务管理器采样时刻不同会有几秒偏差",
 
 	/* chat input */
 	folderRef: "文件夹引用：{path}",
@@ -371,8 +371,8 @@ export const zh = {
 	updateTabTitle: "更新 训推引擎组 Harness",
 	updateTerminalHint:
 		"点击后会在可见终端中运行 npm i -g pi-web-ui@latest；" +
-			"完成后重启 " +
-			"训推引擎组 Harness 服务生效（pi-web-ui server restart）。",
+		"完成后重启 " +
+		"训推引擎组 Harness 服务生效（pi-web-ui server restart）。",
 	updatesAllTitle: "全部组件更新",
 	updatesAllBadge: "{n} 个更新",
 	updatesAllUpToDate: "全部组件均为最新",
@@ -391,21 +391,21 @@ export const zh = {
 	piCoreSplitRun: "服务运行 v{running}",
 	piSdkSplitNote:
 		"本服务运行的是 pi v{running}；机器上装有更新的全局 pi " +
-			"v{installed}。" +
-			"重启服务即可跟上（默认自动选用更新的那份）；设了 PI_WEB_SDK=bundled 时会一直用自带副本，" +
-			"升级 训推引擎组 Harness 也可让自带副本跟上。",
+		"v{installed}。" +
+		"重启服务即可跟上（默认自动选用更新的那份）；设了 PI_WEB_SDK=bundled 时会一直用自带副本，" +
+		"升级 训推引擎组 Harness 也可让自带副本跟上。",
 	piSdkBundledNote:
 		"当前使用随包自带的 pi 引擎 v{running}" +
-			"（随 训推引擎组 Harness 更新）。" +
-			"安装全局引擎后重启服务即可自动切换（服务默认跟随版本更高的那份）。",
+		"（随 训推引擎组 Harness 更新）。" +
+		"安装全局引擎后重启服务即可自动切换（服务默认跟随版本更高的那份）。",
 	installGlobalEngineBtn: "安装全局引擎",
 	installGlobalEngineTabTitle: "安装全局 pi 引擎",
 	restartService: "重启服务",
 	restartingService: "重启中…",
 	restartServiceTip:
 		"重启 训推引擎组 Harness 服务（{name}）：本实例由系统服务托管" +
-			"（launchd/systemd/" +
-			"Windows watchdog），进程退出后会被自动拉起，本页会自动重连；更新完成后用它生效",
+		"（launchd/systemd/" +
+		"Windows watchdog），进程退出后会被自动拉起，本页会自动重连；更新完成后用它生效",
 
 	/* right panel */
 	computer: "此电脑",
@@ -510,8 +510,8 @@ export const zh = {
 		"当前地址不是安全上下文（非 localhost 的 http 访问），浏览器不提供通知接口 —— 请改用 127.0.0.1 或 HTTPS 打开，或将本机地址加入浏览器白名单。",
 	notifyWindowsHint:
 		"Windows 额外一层系统开关：请允许浏览器" +
-			"（或已安装的 训推引擎组 Harness 应用）" +
-			"在「设置 → 系统 → 通知」里推送，并关闭专注助手/勿扰；关窗后进程结束也不会再提醒。",
+		"（或已安装的 训推引擎组 Harness 应用）" +
+		"在「设置 → 系统 → 通知」里推送，并关闭专注助手/勿扰；关窗后进程结束也不会再提醒。",
 	notifyTest: "发送测试通知",
 	notifyTestBody: "能看到这条系统通知，就说明浏览器和 Windows 都放行了。",
 	notifyTestSent: "已发送（通道：{path}）",
@@ -883,9 +883,7 @@ export const zh = {
 	goalBarExecModelTip: "执行对话的模型；空 = 跟随当前对话",
 	goalBarOpenExec: "执行对话",
 	goalBarOpenExecTip: "打开执行者对话（左栏可随时点开；执行期间在本对话发送的消息会自动同步给执行者）",
-	goalBarStaleBackend:
-		"⚠️ 服务端版本较旧（进程未重启）：目标模式 2.0 不会生效，" +
-			"请重启 训推引擎组 Harness 服务",
+	goalBarStaleBackend: "⚠️ 服务端版本较旧（进程未重启）：目标模式 2.0 不会生效，" + "请重启 训推引擎组 Harness 服务",
 	goalBarStop: "停止目标（并停掉执行对话）",
 
 	goalBarReviewing: "审查中…",
@@ -918,6 +916,7 @@ export const zh = {
 	loopStReviewBlocked: "评审没通过",
 	loopStViewReasons: "查看理由",
 	loopStStopped: "已停止",
+	loopStStopping: "已请求停止，退出尚未确认",
 	loopStStoppedWhy: "已停止：{reason}",
 	loopStRuntimeError: "运行出错",
 	loopStViewLog: "查看记录",
@@ -970,8 +969,18 @@ export const zh = {
 	runDetailBranch: "分支 {name}",
 	runDetailCommitted: "已提交",
 	runDetailStop: "停止",
+	runDetailStopConfirm: "请求停止这个任务及其执行进程？产物和证据会保留，退出确认后才显示已停止。",
+	runDetailStopSending: "正在请求停止…",
+	runDetailStopRecheck: "核对停止结果",
+	runDetailStopRequestedAt: "停止请求已受理：{at}",
+	runDetailStopConfirmedAt: "执行退出已确认：{at}",
+	runDetailResume: "恢复任务",
+	runDetailResumeRequested: "已发送恢复请求，服务端将核对控制权和执行现场；请查看后续状态或通知。",
+	runDetailControlFailed: "请求未成功，请检查连接或服务端通知后重试。",
+	runDetailValidatorStopped: "已启动后停止，未形成验收结论",
+	runDetailValidatorUnfinished: "已启动，验收结论尚未确认",
 	runDetailRestart: "用同一目标重新开始",
-	runDetailNotMine: "这个任务不是当前对话发起的：停止、重试评审等操作请到发起它的对话里进行。",
+	runDetailNotMine: "这个任务不是当前对话发起的：重试评审、按代码验证收下请到发起它的对话里进行。",
 	runDetailMissing: "找不到这个任务的记录（可能已被删除）。",
 	goalSameModelWarn: "执行模型与评审模型相同（自己审自己），建议给「执行模型」选另一家的模型。",
 	goalWizardStep: "第 {n} 题",
@@ -1258,8 +1267,8 @@ export const zh = {
 	projectTitle: "标题显示项目名",
 	projectTitleDesc:
 		"开启：浏览器标签页标题为「项目目录名 — " +
-			"训推引擎组 Harness」，" +
-			"切项目即时更新（多标签页开多个项目时好区分）；关闭：固定显示应用名",
+		"训推引擎组 Harness」，" +
+		"切项目即时更新（多标签页开多个项目时好区分）；关闭：固定显示应用名",
 	terminalBashTakeover: "终端接管 bash",
 	terminalBashTakeoverDesc:
 		"此开关决定 bash 是否覆盖为终端版：关 = 原生 SDK bash（纯进程、不开终端）；开 = 跑进可见终端，且 persist 参数在本开关的基础上决定一次性（false，命令跑完进程退出、输出留档）还是持久（true，shell 状态跨调用保留、静默自动转后台并通知 AI）",
@@ -1783,8 +1792,8 @@ export const en: Record<keyof typeof zh, string> = {
 	hostMemory: "RAM",
 	hostResourcesTip:
 		"Host running 训推引擎组 Harness · CPU is a ~10s average " +
-			"(2s samples); " +
-			"a few seconds of skew vs Task Manager is normal",
+		"(2s samples); " +
+		"a few seconds of skew vs Task Manager is normal",
 
 	/* chat input */
 	folderRef: "Folder reference: {path}",
@@ -2057,8 +2066,8 @@ export const en: Record<keyof typeof zh, string> = {
 	updateTabTitle: "Update 训推引擎组 Harness",
 	updateTerminalHint:
 		"Clicking runs npm i -g pi-web-ui@latest in a visible terminal; " +
-			"restart the " +
-			"训推引擎组 Harness service afterwards to take effect (pi-web-ui server restart).",
+		"restart the " +
+		"训推引擎组 Harness service afterwards to take effect (pi-web-ui server restart).",
 	updatesAllTitle: "Component updates",
 	updatesAllBadge: "{n} updates",
 	updatesAllUpToDate: "All components up to date",
@@ -2077,21 +2086,21 @@ export const en: Record<keyof typeof zh, string> = {
 	piCoreSplitRun: "service runs v{running}",
 	piSdkSplitNote:
 		"This service runs pi v{running}; a newer global pi " +
-			"v{installed} is installed. " +
-			"Restart the service to catch up (the newest copy is followed by default); " +
-			"PI_WEB_SDK=bundled pins the bundled copy — upgrading 训推引擎组 Harness refreshes it too.",
+		"v{installed} is installed. " +
+		"Restart the service to catch up (the newest copy is followed by default); " +
+		"PI_WEB_SDK=bundled pins the bundled copy — upgrading 训推引擎组 Harness refreshes it too.",
 	piSdkBundledNote:
 		"Currently using the bundled pi engine v{running} " +
-			"(updated with 训推引擎组 Harness). " +
-			"Install the global engine and restart the service to switch to it (the newest copy is followed by default).",
+		"(updated with 训推引擎组 Harness). " +
+		"Install the global engine and restart the service to switch to it (the newest copy is followed by default).",
 	installGlobalEngineBtn: "Install global engine",
 	installGlobalEngineTabTitle: "Install global pi engine",
 	restartService: "Restart service",
 	restartingService: "Restarting…",
 	restartServiceTip:
 		"Restart the 训推引擎组 Harness service ({name}): " +
-			"this instance is supervised " +
-			"(launchd/systemd/Windows watchdog), so it comes back automatically and the page reconnects — run it after an update",
+		"this instance is supervised " +
+		"(launchd/systemd/Windows watchdog), so it comes back automatically and the page reconnects — run it after an update",
 
 	/* right panel */
 	computer: "This PC",
@@ -2197,9 +2206,9 @@ export const en: Record<keyof typeof zh, string> = {
 		"This address is not a secure context (plain http on a non-localhost host), so the browser withholds the notification API — open the app via 127.0.0.1 or HTTPS.",
 	notifyWindowsHint:
 		"Windows adds an OS-level gate: allow the browser " +
-			"(or the installed 训推引擎组 " +
-			"Harness app) under Settings → System → Notifications and turn off Focus assist, " +
-			"otherwise toasts stay silent; closing the window also ends the process, so nothing can be delivered after that.",
+		"(or the installed 训推引擎组 " +
+		"Harness app) under Settings → System → Notifications and turn off Focus assist, " +
+		"otherwise toasts stay silent; closing the window also ends the process, so nothing can be delivered after that.",
 	notifyTest: "Send test notification",
 	notifyTestBody:
 		"If you can see this OS notification, both the browser and Windows are letting notifications through.",
@@ -2577,8 +2586,8 @@ export const en: Record<keyof typeof zh, string> = {
 		"Open the executor conversation (also reachable from the left panel; messages sent here while executing are forwarded to the executor)",
 	goalBarStaleBackend:
 		"⚠️ Stale server build (process not restarted): goal mode 2.0 " +
-			"will not take effect — " +
-			"restart the 训推引擎组 Harness service",
+		"will not take effect — " +
+		"restart the 训推引擎组 Harness service",
 	goalBarStop: "Stop goal (also stops the executor conversation)",
 	goalBarReviewing: "Reviewing…",
 	goalBarExecuting: "Executing…",
@@ -2610,6 +2619,7 @@ export const en: Record<keyof typeof zh, string> = {
 	loopStReviewBlocked: "Review rejected",
 	loopStViewReasons: "View reasons",
 	loopStStopped: "Stopped",
+	loopStStopping: "Stop requested; exit unconfirmed",
 	loopStStoppedWhy: "Stopped: {reason}",
 	loopStRuntimeError: "Run error",
 	loopStViewLog: "View log",
@@ -2663,8 +2673,21 @@ export const en: Record<keyof typeof zh, string> = {
 	runDetailBranch: "Branch {name}",
 	runDetailCommitted: "committed",
 	runDetailStop: "Stop",
+	runDetailStopConfirm:
+		"Request this task and its processes to stop? Artifacts and evidence are kept; stopped is shown only after exit is confirmed.",
+	runDetailStopSending: "Requesting stop…",
+	runDetailStopRecheck: "Check stop result",
+	runDetailStopRequestedAt: "Stop request accepted: {at}",
+	runDetailStopConfirmedAt: "Execution exit confirmed: {at}",
+	runDetailResume: "Recover task",
+	runDetailResumeRequested:
+		"Recovery request sent. The server will check ownership and execution evidence; watch for status updates or notices.",
+	runDetailControlFailed: "The request did not succeed. Check the connection or server notice before retrying.",
+	runDetailValidatorStopped: "Started, then stopped without an acceptance verdict",
+	runDetailValidatorUnfinished: "Started; acceptance verdict not yet confirmed",
 	runDetailRestart: "Start again with the same goal",
-	runDetailNotMine: "This run was started in another conversation; stop and retry review are available there.",
+	runDetailNotMine:
+		"This run was started in another conversation; retry review and accept by code validation are available there.",
 	runDetailMissing: "No record of this run (it may have been deleted).",
 	goalSameModelWarn:
 		"The executor and reviewer use the same model (it reviews its own work); pick an executor model from another vendor.",
@@ -2973,8 +2996,8 @@ export const en: Record<keyof typeof zh, string> = {
 	projectTitle: "Show project name in title",
 	projectTitleDesc:
 		"On: the browser tab title becomes “<project folder> — " +
-			"训推引擎组 Harness” and " +
-			"updates when you switch projects (handy with several tabs open); Off: always show the app name",
+		"训推引擎组 Harness” and " +
+		"updates when you switch projects (handy with several tabs open); Off: always show the app name",
 	terminalBashTakeover: "Terminal-backed bash",
 	terminalBashTakeoverDesc:
 		"This switch decides whether bash is overridden to a terminal version: OFF = native SDK bash (process spawn, no terminal); ON = runs in a visible terminal, where the persist parameter decides (on top of the switch) one-shot (false — process exits when the command finishes, output retained) vs persistent (true — shell state retained across calls, silent commands move to the background and notify the AI)",

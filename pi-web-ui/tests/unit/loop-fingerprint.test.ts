@@ -13,7 +13,7 @@ import { afterAll, describe, expect, it } from "vitest";
 const RUNS_ROOT = mkdtempSync(join(tmpdir(), "loop-fingerprint-"));
 process.env.MINI_HARNESS_RUNTIME_ROOT = RUNS_ROOT;
 const ext = await import("../../server/loop/extension.js");
-const { createLoopRun, recoveryInfoOf, stopLeaseHeartbeat } = ext;
+const { createLoopRun, recoveryInfoOf, recoverRun, stopLeaseHeartbeat } = ext;
 
 const DIRS: string[] = [];
 afterAll(() => {
@@ -47,7 +47,9 @@ describe("恢复指纹含未提交改动", () => {
 		expect(recoveryInfoOf(runId)?.environmentChanged).toBe(false);
 		// 改一个文件（未提交）→ 指纹必须变化（回归：旧代码 gitHead ?? "" + "|" + out 会把 out 丢掉）
 		writeFileSync(join(repo, "a.txt"), "v2\n");
-		expect(recoveryInfoOf(runId)?.environmentChanged).toBe(true);
+		// 列表只读投影不扫描 Git；明确恢复核对必须重新读取实际内容。
+		expect(recoverRun(runId).classification?.needRecheck).toBe(true);
+		expect(recoverRun(runId).resumeEligible).toBe(false);
 		stopLeaseHeartbeat(runId);
 	});
 });

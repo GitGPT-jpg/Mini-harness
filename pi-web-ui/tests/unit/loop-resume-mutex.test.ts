@@ -10,6 +10,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 
 // agent-service 加载 extension.ts，其 run root 在模块初始化时固定，必须在 import 前指到临时目录。
 const LOOP_RUNS_ROOT = mkdtempSync(join(tmpdir(), "loop-resume-runs-"));
+const WORKSPACE = mkdtempSync(join(tmpdir(), "loop-resume-workspace-"));
 const prev = process.env.MINI_HARNESS_RUNTIME_ROOT;
 process.env.MINI_HARNESS_RUNTIME_ROOT = LOOP_RUNS_ROOT;
 const { ClientSession } = await import("../../server/agent-service.js");
@@ -19,6 +20,7 @@ else process.env.MINI_HARNESS_RUNTIME_ROOT = prev;
 
 afterAll(() => {
 	rmSync(LOOP_RUNS_ROOT, { recursive: true, force: true });
+	rmSync(WORKSPACE, { recursive: true, force: true });
 });
 
 describe("resumeLoop 在途互斥（Task 4）", () => {
@@ -34,7 +36,12 @@ describe("resumeLoop 在途互斥（Task 4）", () => {
 		const execSessionId = "sess-exec-" + Date.now();
 		const mainSessionId = "sess-main-" + Date.now();
 		let resolveSend: (() => void) | null = null;
-		const sendUserMessage = vi.fn(() => new Promise<void>((res) => { resolveSend = res; }));
+		const sendUserMessage = vi.fn(
+			() =>
+				new Promise<void>((res) => {
+					resolveSend = res;
+				}),
+		);
 		const execSession = { sessionId: execSessionId, sendUserMessage };
 		const mainSession = { sessionId: mainSessionId, sendUserMessage: vi.fn() };
 		const mainConv: any = { id: "main", session: mainSession, isSubagent: false };
@@ -45,7 +52,7 @@ describe("resumeLoop 在途互斥（Task 4）", () => {
 		// run 绑在 worktree 执行者会话上（sessionId = execSessionId），触发 executor 分支。
 		const created = createLoopRun({
 			sessionId: execSessionId,
-			cwd: LOOP_RUNS_ROOT,
+			cwd: WORKSPACE,
 			goal: "验证续跑互斥",
 			validateCmd: "true",
 		});

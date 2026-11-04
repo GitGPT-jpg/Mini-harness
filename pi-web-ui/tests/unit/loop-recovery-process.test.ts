@@ -1,6 +1,6 @@
 /**
  * 真实本地跨进程恢复验证（Task B §13.2 / §13.3）：
- *  - 两个真实独立进程并发争抢同一租约，只有一个 WIN（O_EXCL 原子互斥，不是写后读回）；
+ *  - 两个真实独立进程并发争抢同一租约，只有一个 WIN（SQLite run 锁互斥，不是写后读回）；
  *  - 真实长任务子进程中途「服务退出」，新进程按真实 pid 重新核对现场：仍在跑 → 重新跟踪不重跑；
  *    进程已死且无产物 → 结果未知，保持受阻，不盲目重放副作用。
  */
@@ -47,18 +47,54 @@ describe("跨进程执行所有权（§6.1 原子互斥）", () => {
 		expect(getLease(dir)?.owner).toBe(wins[0]!.replace("WIN:", ""));
 	});
 
-	it("他人持权（未过期）时第二个进程不接管；过期后可接管且原 owner 不能续租", async () => {
+	it("他人持权（未过期）时第二个进程不接管；显式释放后新 generation 可获取", async () => {
 		const dir = tmpDir();
 		const nowIso = new Date().toISOString();
-		expect(acquireLease(dir, { owner: "a@host", pid: process.pid, generation: 1, startedAt: nowIso, heartbeatAt: nowIso, remoteJobId: null })).toBe(true);
-		expect(acquireLease(dir, { owner: "b@host", pid: process.pid, generation: 1, startedAt: nowIso, heartbeatAt: nowIso, remoteJobId: null })).toBe(false);
+		expect(
+			acquireLease(dir, {
+				owner: "a@host",
+				pid: process.pid,
+				generation: 1,
+				startedAt: nowIso,
+				heartbeatAt: nowIso,
+				remoteJobId: null,
+			}),
+		).toBe(true);
+		expect(
+			acquireLease(dir, {
+				owner: "b@host",
+				pid: process.pid,
+				generation: 1,
+				startedAt: nowIso,
+				heartbeatAt: nowIso,
+				remoteJobId: null,
+			}),
+		).toBe(false);
 		expect(getLease(dir)?.owner).toBe("a@host");
 
 		const past = new Date(Date.now() - LEASE_TTL_MS - 1000).toISOString();
-		expect(acquireLease(dir, { owner: "b@host", pid: process.pid, generation: 2, startedAt: past, heartbeatAt: past, remoteJobId: null })).toBe(false);
+		expect(
+			acquireLease(dir, {
+				owner: "b@host",
+				pid: process.pid,
+				generation: 2,
+				startedAt: past,
+				heartbeatAt: past,
+				remoteJobId: null,
+			}),
+		).toBe(false);
 		// 未过期，仍被 a 持有，不能直接覆盖；b 只能等过期。
-		releaseLease(dir, "a@host");
-		expect(acquireLease(dir, { owner: "b@host", pid: process.pid, generation: 2, startedAt: nowIso, heartbeatAt: nowIso, remoteJobId: null })).toBe(true);
+		expect(releaseLease(dir, "a@host", 1)).toBe(true);
+		expect(
+			acquireLease(dir, {
+				owner: "b@host",
+				pid: process.pid,
+				generation: 2,
+				startedAt: nowIso,
+				heartbeatAt: nowIso,
+				remoteJobId: null,
+			}),
+		).toBe(true);
 		expect(getLease(dir)?.owner).toBe("b@host");
 	});
 });
@@ -81,7 +117,13 @@ describe("本地长任务跨重启恢复（§13.2 真实子进程 + 持久化 pi
 		// 服务「崩溃」：租约过期，但真实任务 pid 仍在 → 分类 = running（重新跟踪，不启动第二份）。
 		const clsRunning = classifyRecovery(
 			{ status: "active" },
-			{ leaseHeld: false, environmentChanged: false, pidAlive: pidAlive(taskPid), lastRoundPassed: false, inFlight: true },
+			{
+				leaseHeld: false,
+				environmentChanged: false,
+				pidAlive: pidAlive(taskPid),
+				lastRoundPassed: false,
+				inFlight: true,
+			},
 		);
 		expect(clsRunning.unit).toBe("running");
 		expect(clsRunning.canResume).toBe(true);
@@ -90,7 +132,9 @@ describe("本地长任务跨重启恢复（§13.2 真实子进程 + 持久化 pi
 		try {
 			process.kill(-taskPid, "SIGKILL");
 		} catch {
-			try { process.kill(taskPid, "SIGKILL"); } catch {}
+			try {
+				process.kill(taskPid, "SIGKILL");
+			} catch {}
 		}
 		for (let i = 0; i < 50 && pidAlive(taskPid); i++) await new Promise((r) => setTimeout(r, 50));
 		expect(pidAlive(taskPid)).toBe(false);

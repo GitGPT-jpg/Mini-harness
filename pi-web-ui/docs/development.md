@@ -109,3 +109,13 @@ spawn 后记录 `server.pid`，测试收尾（含异常 catch 路径）用 `proc
 **Playwright 脚本**：Chrome 路径不再写死——`tests/lib/chrome.mjs` 逐平台探测（`PI_WEB_CHROME` 可覆盖）。跨平台两条硬规则：① 脚本里取仓库根用 `fileURLToPath(new URL("..", import.meta.url))`，`URL.pathname` 在 Windows 上是 `/E:/...`，`spawn` 的 cwd/脚本参数都会 ENOENT；② 服务端进程清理在 win32 用 `tests/lib/port-utils.mjs` 的 `freePort(port)`（Windows 没有负数 PID 的进程组，`process.kill(-pid)` 静默失败会留下监听进程）。
 
 **测试脚本里禁止在 try 块内直接 `process.exit`**：`process.exit` 会跳过 `finally`，spawn 的 server 永远不会被杀 → 每次运行泄漏一个进程，下次跑同端口测试报 "port busy — abort"（steer-queue-smoke 踩过，已修：设 ok 标志 + finally 里杀进程并等端口释放再 exit）。
+
+### 本地恢复闭环回归
+
+存储协议、迁移备份和受阻处理见 [本地恢复存储与升级](loop-recovery-storage.md)。新增基础测试为
+`loop-storage-f1`、`loop-operation-f3`、`loop-fingerprint-f4`、`loop-inputs-f5`；
+它们使用本地临时资源，operation 测试包含独立宿主 SIGKILL，不能等同真实模型或集群验证。
+
+构建后执行 `node tests/loop-recovery-ui-test.mjs`，以独立 data/agent/workspace/runtime 及随机空闲端口，
+验证真实 TaskModal → 鉴权 HTTP discover 的命令原文、预览更新及冲突拒绝。使用源码后端时可加
+`--source`（仍需先构建前端）。脚本打印证据目录，保留页面截图、服务日志和检查结果；仅清理自己启动的服务与浏览器。

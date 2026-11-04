@@ -46,6 +46,7 @@ import { startControlServer } from "./control-socket.js";
 import { scheduleUploadCleanup } from "./uploads.js";
 import { configureGoalLog } from "./goal-history-log.js";
 import { registerLoopRoutes } from "./loop/routes.js";
+import { migrateMissingLoopStates } from "./loop/extension.js";
 import { ensureWindowsBash, windowsBashDir } from "./ensure-bash.js";
 import { listThemes, readThemeCss, resolveThemeFile } from "./themes.js";
 import { isManaged, managedRefusal } from "./managed.js";
@@ -419,6 +420,9 @@ const TABS = parseTabs();
 registerFileTransferRoutes(app, (clientId) => service.get(clientId)?.cwd);
 // Loop 任务台 / 代码 loop 表单 / 连接集群（/api/mini-harness/*，token 鉴权由上方中间件覆盖）。
 configureGoalLog(DATA_DIR);
+for (const migration of migrateMissingLoopStates()) {
+	if (migration.error) console.warn(`[loop migration] ${migration.runId}: ${migration.error}`);
+}
 registerLoopRoutes(app, { dataDir: DATA_DIR, agentDir: getAgentDir() });
 
 app.get("/api/health", (_req, res) => {
@@ -1239,7 +1243,14 @@ export interface DispatchSession {
 		metricThresholdOp?: "lt" | "lte" | "gt" | "gte";
 		metricTolerance?: number;
 		metricScenario?: string;
-		hardConstraints?: Array<{ name: string; metric: string; op: "lt" | "lte" | "gt" | "gte"; value: number; unit?: string; scenario?: string }>;
+		hardConstraints?: Array<{
+			name: string;
+			metric: string;
+			op: "lt" | "lte" | "gt" | "gte";
+			value: number;
+			unit?: string;
+			scenario?: string;
+		}>;
 		packId?: string;
 		workspace?: string;
 		inputs?: Record<string, string>;

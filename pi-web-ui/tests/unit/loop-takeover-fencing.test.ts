@@ -14,21 +14,18 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 const RUNS_ROOT = mkdtempSync(join(tmpdir(), "loop-takeover-fencing-"));
 process.env.MINI_HARNESS_RUNTIME_ROOT = RUNS_ROOT;
 const ext = await import("../../server/loop/extension.js");
-const {
-	createLoopExtension,
-	createLoopRun,
-	recoverRun,
-	setLoopExecForTest,
-	stopLeaseHeartbeat,
-} = ext;
+const { createLoopExtension, createLoopRun, recoverRun, setLoopExecForTest, stopLeaseHeartbeat } = ext;
 const recovery = await import("../../server/loop/recovery.js");
 const { getLease, LEASE_TTL_MS } = recovery;
 
-const CWD = "/tmp/loop-test-work";
+const CWD = mkdtempSync(join(tmpdir(), "loop-fencing-workspace-"));
 let seq = 0;
 const SID = () => "takeover-fencing-" + seq++;
 
-afterAll(() => rmSync(RUNS_ROOT, { recursive: true, force: true }));
+afterAll(() => {
+	rmSync(RUNS_ROOT, { recursive: true, force: true });
+	rmSync(CWD, { recursive: true, force: true });
+});
 
 function loadRun(runId: string): any {
 	return JSON.parse(readFileSync(join(RUNS_ROOT, runId, "state.json"), "utf8"));
@@ -77,7 +74,13 @@ describe("接管代际隔离（旧 owner 迟到回调不得覆盖新代次）", 
 			const r = await pi.exec(cmd, args, opts);
 			return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.code ?? null, killed: false };
 		});
-		const created = createLoopRun({ sessionId: sid, cwd: CWD, goal: "g", validateCmd: "validator_cmd", useReviewer: false });
+		const created = createLoopRun({
+			sessionId: sid,
+			cwd: CWD,
+			goal: "g",
+			validateCmd: "validator_cmd",
+			useReviewer: false,
+		});
 		if (!created.ok) throw new Error(created.error);
 		const runId = created.runId;
 		const before = loadRun(runId);

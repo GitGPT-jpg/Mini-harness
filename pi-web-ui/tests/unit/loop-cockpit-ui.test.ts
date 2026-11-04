@@ -705,24 +705,30 @@ describe("任务详情面板（D-12-3）", () => {
 		expect(btnTexts(modal.querySelector(".run-detail-acts")!)).toEqual(["关闭"]);
 	});
 
-	it("进行中（本对话）：停止 → loop_stop；每 3s 刷新一次详情，关掉就不再请求", async () => {
+	it("失联任务：恢复走 WS，确认停止走 HTTP；202 继续轮询，关掉就不再请求", async () => {
 		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 		const flushMicro = () =>
 			act(async () => {
 				for (let i = 0; i < 20; i++) await Promise.resolve();
 			});
-		const calls = detailFetch({
-			[RUN_ERR]: detailOf({
-				status: "active",
-				stage: "run",
-				round: 2,
-				stopReason: null,
-				validator: { cmd: "npm test", verdict: "fail", code: 1, evidenceTail: "1 failed" },
-				review: { enabled: true, verdict: null, reasons: [] },
-			}),
+		let detail = detailOf({
+			status: "active",
+			stage: "run",
+			round: 2,
+			stopReason: null,
+			validator: { cmd: "npm test", verdict: "fail", code: 1, evidenceTail: "1 failed" },
+			review: { enabled: true, verdict: null, reasons: [] },
+		});
+		const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+		const calls = stubFetch((url) => {
+			if (url.endsWith(`/runs/${RUN_ERR}/stop`)) {
+				detail = { ...detail, status: "stopped", stage: "stopping", stopRequestedAt: AT };
+				return { status: 202, body: { ok: true, status: "stopping", stopRequestedAt: AT } };
+			}
+			return { body: detail };
 		});
 		const detailCalls = () => calls.filter((u) => u.includes("/detail")).length;
-		mount(runDetail(loopRun({ round: 2 })));
+		mount(runDetail(null));
 		await act(async () => {
 			openRunDetail(RUN_ERR);
 		});
@@ -735,19 +741,35 @@ describe("任务详情面板（D-12-3）", () => {
 			"模型评审：未运行",
 		]);
 		expect(btn("用同一目标重新开始", modal)).toBeNull();
+		expect(btn("恢复任务", modal)).not.toBeNull();
+		click(btn("恢复任务", modal));
+		await flushMicro();
+		expect(sent).toEqual([{ type: "loop_resume", runId: RUN_ERR }]);
 		click(btn("停止", modal));
-		expect(sent).toEqual([{ type: "loop_stop", runId: RUN_ERR }]);
+		expect(calls.filter((u) => u.endsWith("/stop"))).toHaveLength(0);
+		confirm.mockReturnValue(true);
+		click(btn("停止", modal));
+		await flushMicro();
+		expect(fetch).toHaveBeenCalledWith(
+			expect.stringContaining(`/runs/${RUN_ERR}/stop`),
+			expect.objectContaining({ method: "POST", body: "{}" }),
+		);
+		expect(calls.filter((u) => u.endsWith("/stop"))).toHaveLength(1);
+		expect(modal.querySelector(".run-detail-status")?.textContent).toContain("退出尚未确认");
+		expect(btn("核对停止结果", modal)).not.toBeNull();
+		expect(btn("用同一目标重新开始", modal)).toBeNull();
+		const beforePoll = detailCalls();
 		await act(async () => {
 			vi.advanceTimersByTime(3000);
 		});
 		await flushMicro();
-		expect(detailCalls()).toBe(2);
+		expect(detailCalls()).toBe(beforePoll + 1);
 		act(() => closeRunDetail());
 		await act(async () => {
 			vi.advanceTimersByTime(9000);
 		});
 		await flushMicro();
-		expect(detailCalls()).toBe(2);
+		expect(detailCalls()).toBe(beforePoll + 1);
 	});
 });
 

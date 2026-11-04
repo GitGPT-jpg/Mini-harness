@@ -19,15 +19,7 @@ import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import * as fsPromises from "node:fs/promises";
 import { DEFAULT_PI_CAPABILITIES } from "./engine-capabilities.js";
-import {
-	appendFileSync,
-	existsSync,
-	readFileSync,
-	readdirSync,
-	rmSync,
-	mkdirSync,
-	writeFileSync,
-} from "node:fs";
+import { appendFileSync, existsSync, readFileSync, readdirSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, join, resolve } from "node:path";
 import {
@@ -59,7 +51,9 @@ import {
 	createLoopExtension,
 	createLoopRun,
 	stopRunExternal,
+	canContinueLoop,
 	loadLoopState,
+	loadLoopStateForRecovery,
 	observeRunOperation,
 	reactivateForReview,
 	rebindLoopSession,
@@ -71,7 +65,7 @@ import {
 } from "./loop/extension.js";
 import { modelsConfigHasCredentials } from "./pi-setup-state.js";
 import { getPackKnowledge, resolvePack } from "./loop/packs.js";
-import { renderDiscoverySummary, resolveTaskContext } from "./loop/discovery.js";
+import { normalizeTaskInputs, renderDiscoverySummary, resolveTaskContext } from "./loop/discovery.js";
 import {
 	checkAll as checkAllUpdates,
 	collectTargets,
@@ -12403,7 +12397,14 @@ export class ClientSession {
 		metricThresholdOp?: "lt" | "lte" | "gt" | "gte";
 		metricTolerance?: number;
 		metricScenario?: string;
-		hardConstraints?: Array<{ name: string; metric: string; op: "lt" | "lte" | "gt" | "gte"; value: number; unit?: string; scenario?: string }>;
+		hardConstraints?: Array<{
+			name: string;
+			metric: string;
+			op: "lt" | "lte" | "gt" | "gte";
+			value: number;
+			unit?: string;
+			scenario?: string;
+		}>;
 		packId?: string;
 		/** 用户填写的项目/工作区位置（缺省用会话 cwd）。 */
 		workspace?: string;
@@ -12429,8 +12430,17 @@ export class ClientSession {
 		}
 		const goal = (msg.goal?.trim() || pack?.goal || "").trim();
 		const criteria = (msg.criteria?.trim() || pack?.criteria || "").trim();
-		const precheckCmd = msg.precheckCmd?.trim() || "";
-		let validateCmd = msg.validateCmd?.trim() || "";
+		const normalized = normalizeTaskInputs(msg);
+		if (!normalized.ok) {
+			const reason = normalized.error!;
+			conv.loop = { kind: "request-failed", taskId, goal, reason, createdAt: new Date().toISOString() };
+			this.emitNotice("warning", `Loop 启动失败：${reason}`);
+			this.flushSnapshot();
+			return;
+		}
+		let taskInputs = normalized.inputs;
+		let precheckCmd = normalized.precheckCmd;
+		let validateCmd = normalized.validateCmd;
 		const primaryMetric = msg.primaryMetric ?? pack?.primaryMetric ?? undefined;
 		const metricDirection = msg.metricDirection ?? pack?.metricDirection ?? undefined;
 		const metricPrecision = msg.metricPrecision;
@@ -12450,8 +12460,10 @@ export class ClientSession {
 		const workspaceDiffers = !!workspace && !!sessionCwd && resolve(workspace) !== resolve(sessionCwd);
 		// 上下文发现：只读整理已确认/缺失/冲突，不执行工作区命令；结果注入执行提示词（含 worktree 执行者）。
 		let discoveryLines: string[] = [];
+		let taskContext: ReturnType<typeof resolveTaskContext> | undefined;
 		if (pack) {
-			const ctx = resolveTaskContext(pack.id, workspace, msg.inputs ?? {});
+			const ctx = resolveTaskContext(pack.id, workspace, taskInputs);
+			taskContext = ctx;
 			if (ctx.error) {
 				conv.loop = { kind: "request-failed", taskId, goal, reason: ctx.error, createdAt: new Date().toISOString() };
 				this.emitNotice("warning", `Loop 启动失败：${ctx.error}`);
@@ -12471,13 +12483,14 @@ export class ClientSession {
 				return;
 			}
 			// 已确认的输入（用户显式 + 探测确认）并入启动契约：validator 与发现/补缺用同一份有效契约。
-			const merged = (id: string) => ctx.inputs.find((i) => i.id === id && i.value != null)?.value ?? "";
-			validateCmd = validateCmd || merged("validateCmd");
+			taskInputs = ctx.normalizedInputs ?? taskInputs;
+			validateCmd = taskInputs.validateCmd ?? "";
+			precheckCmd = taskInputs.precheckCmd ?? "";
 			discoveryLines.push("<mini_harness_discovery>");
 			discoveryLines.push(renderDiscoverySummary(ctx));
 			discoveryLines.push("</mini_harness_discovery>");
 		}
-		const created = createLoopRun({
+		const runInput = {
 			sessionId: conv.session.sessionId,
 			cwd: workspace,
 			goal,
@@ -12503,7 +12516,11 @@ export class ClientSession {
 			taskId,
 			packId: msg.packId,
 			packVersion: pack?.version,
-		});
+			// extension 的持久契约接线使用同一份已归一化/已发现对象。
+			inputs: taskInputs,
+			taskContext,
+		};
+		const created = createLoopRun(runInput);
 		if (!created.ok) {
 			// 建不出 run（goal 为空 / 同会话已有活跃 run 等）：明确失败态，不经过模型
 			conv.loop = { kind: "request-failed", taskId, goal, reason: created.error, createdAt: new Date().toISOString() };
@@ -12542,10 +12559,13 @@ export class ClientSession {
 							(m.scenario ? ` 场景=${m.scenario}` : ""),
 					);
 					if (m.hardConstraints?.length) {
-						lines.push("硬约束: " + m.hardConstraints.map((c) => `${c.name}(${c.metric} ${c.op} ${c.value})`).join("; "));
+						lines.push(
+							"硬约束: " + m.hardConstraints.map((c) => `${c.name}(${c.metric} ${c.op} ${c.value})`).join("; "),
+						);
 					}
 				}
-				if (k.entries.length) lines.push("可信入口(候选，须发起者确认后使用): " + k.entries.map((e) => `${e.kind}:${e.path}`).join("; "));
+				if (k.entries.length)
+					lines.push("可信入口(候选，须发起者确认后使用): " + k.entries.map((e) => `${e.kind}:${e.path}`).join("; "));
 				if (k.evidence?.required?.length) lines.push("必要证据: " + k.evidence.required.join("; "));
 				lines.push("</mini_harness_pack_knowledge>");
 			}
@@ -12649,9 +12669,7 @@ export class ClientSession {
 		const conv = this.conv;
 		if (!conv?.session) return false;
 		if (st.sessionId === conv.session.sessionId) return true;
-		return [...this.convs.values()].some(
-			(c) => c.parentId === conv.id && c.session?.sessionId === st.sessionId,
-		);
+		return [...this.convs.values()].some((c) => c.parentId === conv.id && c.session?.sessionId === st.sessionId);
 	}
 
 	/** worktree 执行者会话：run 绑在子代理上时，续跑/评审提示词要发到执行者会话，而不是主对话。 */
@@ -12659,9 +12677,7 @@ export class ClientSession {
 		const conv = this.conv;
 		if (!conv?.session) return undefined;
 		if (st.sessionId === conv.session.sessionId) return conv;
-		return [...this.convs.values()].find(
-			(c) => c.parentId === conv.id && c.session?.sessionId === st.sessionId,
-		);
+		return [...this.convs.values()].find((c) => c.parentId === conv.id && c.session?.sessionId === st.sessionId);
 	}
 
 	/** 停止当前会话的活跃 Loop（与 loop_stop 工具同语义：epoch+1，在途回调失效）。 */
@@ -12674,46 +12690,64 @@ export class ClientSession {
 		}
 		const r = stopRunExternal(target, "user-stop");
 		if (!r.ok) this.emitNotice("warning", `Loop 停止失败：${r.error}`);
+		else if (!r.stopConfirmedAt && r.status !== "done")
+			this.emitNotice("info", "停止请求已受理，执行实体退出尚未确认；可再次停止以核对。");
 	}
 
 	/** 显式续跑：runId 绑定（sessionId 必须匹配本会话）+ 在途互斥（修#2）。
 	 *  评审掉线（stopped + reviewer-error）的 run 走「重试评审」：重新激活后让模型不改代码直接重新验收。 */
 	async resumeLoop(runId: string): Promise<void> {
-		const conv = this.conv;
+		let conv = this.conv;
 		if (!conv?.session) return;
 		if (this.loopResuming.has(runId)) {
 			this.emitNotice("warning", `Loop ${runId} 已在续跑中，忽略重复请求`);
 			return;
 		}
-		// runId 显式绑定：从磁盘读 run 校验 sessionId 归属（不按 cwd 兜底接管）。
-		const st = loadLoopState(runId);
-		if (!st) {
-			this.emitNotice("warning", `Loop 续跑失败：run 不存在（${runId}）`);
-			return;
-		}
-		if (st.sessionId !== conv.session.sessionId && !this.ownsLoopRun(st)) {
-			this.emitNotice("warning", "Loop 续跑失败：该 run 不属于当前会话（显式绑定，不做 cwd 接管）");
-			return;
-		}
-		const retryReview = st.status === "stopped" && st.stopReason === "reviewer-error";
-		if (st.status !== "active" && !retryReview) {
-			this.emitNotice("warning", `Loop 续跑失败：run 已是终态（${st.status}）`);
-			return;
-		}
-		// 恢复核对 + 原子接管：非重试评审时，先核对现场并原子取得执行所有权（generation+1、新 attemptId）。
-		// 环境变化/结果未知/他人持权 → 拒绝继续，不盲目重放副作用。
-		let recovery: ReturnType<typeof recoverRun> | null = null;
-		if (!retryReview && st.status === "active") {
-			recovery = recoverRun(runId);
-			if (!recovery.ok || !recovery.resumeEligible) {
-				const why = recovery?.blockedReason || recovery?.error || "不可恢复";
-				this.emitNotice("warning", `Loop 续跑被拒：${why}`);
-				this.flushSnapshot();
-				return;
-			}
-		}
 		this.loopResuming.add(runId);
 		try {
+			// runId 显式绑定：从磁盘读 run 校验 sessionId 归属（不按 cwd 兜底接管）。
+			let st: LoopState | null;
+			try {
+				st = loadLoopState(runId) ?? loadLoopStateForRecovery(runId);
+			} catch (error) {
+				this.emitNotice("warning", `Loop 存储迁移受阻：${String((error as Error).message)}`);
+				return;
+			}
+			if (!st) {
+				this.emitNotice("warning", `Loop 续跑失败：run 不存在（${runId}）`);
+				return;
+			}
+			if (st.sessionId !== conv.session.sessionId && !this.ownsLoopRun(st)) {
+				// 显式 runId 只能打开原会话，不把陌生 run 重新绑定到当前对话。
+				const sessionFile = await this.resolveSessionPathById(st.sessionId);
+				if (!sessionFile) {
+					this.emitNotice("warning", "Loop 续跑受阻：找不到原会话，未启动模型或重放命令；仍可核对或停止原任务。");
+					return;
+				}
+				await this.switchSession(sessionFile, st.sessionId);
+				conv = this.conv;
+				if (!conv?.session || !this.ownsLoopRun(st)) {
+					this.emitNotice("warning", "Loop 续跑受阻：原会话未成功恢复。");
+					return;
+				}
+			}
+			const retryReview = st.status === "stopped" && st.stopReason === "reviewer-error";
+			if (st.status !== "active" && !retryReview) {
+				this.emitNotice("warning", `Loop 续跑失败：run 已是终态（${st.status}）`);
+				return;
+			}
+			// 恢复核对 + 原子接管；保留原 attempt，generation 递增。
+			// 环境变化/结果未知/他人持权 → 拒绝继续，不盲目重放副作用。
+			let recovery: ReturnType<typeof recoverRun> | null = null;
+			if (!retryReview && st.status === "active") {
+				recovery = recoverRun(runId);
+				if (!recovery.ok || !recovery.resumeEligible) {
+					const why = recovery?.blockedReason || recovery?.error || "不可恢复";
+					this.emitNotice("warning", `Loop 续跑被拒：${why}`);
+					this.flushSnapshot();
+					return;
+				}
+			}
 			let cur = st;
 			if (retryReview) {
 				// 重新激活到 validate（epoch+1，旧代次的迟到回调全部失效）
@@ -12737,23 +12771,50 @@ export class ClientSession {
 			// 接续收集（Prompt 修复④）：仍在运行的本地执行实体 → 等退出并收集退出码/输出，注入续跑提示词。
 			let observedBlock = "";
 			if (!retryReview && recovery?.classification?.unit === "running" && recovery.inFlightOpId) {
-				const observed = await observeRunOperation(runId).catch(() => null);
+				const observed = await observeRunOperation(runId);
+				const fresh = loadLoopState(runId);
+				if (
+					!fresh ||
+					!canContinueLoop(fresh) ||
+					fresh.owner !== cur.owner ||
+					fresh.generation !== cur.generation ||
+					fresh.epoch !== cur.epoch
+				)
+					return;
+				cur = fresh;
+				conv.loop = loopUiFromState(cur);
+				this.flushSnapshot();
+				if (!observed?.record?.result) {
+					this.emitNotice("warning", "原执行结果尚未确认，保持观察，不重新启动命令。");
+					return;
+				}
 				if (observed) {
-					const so = observed.stdout.length > 3000 ? observed.stdout.slice(observed.stdout.length - 3000) : observed.stdout;
-					const se = observed.stderr.length > 1500 ? observed.stderr.slice(observed.stderr.length - 1500) : observed.stderr;
+					const so =
+						observed.stdout.length > 3000 ? observed.stdout.slice(observed.stdout.length - 3000) : observed.stdout;
+					const se =
+						observed.stderr.length > 1500 ? observed.stderr.slice(observed.stderr.length - 1500) : observed.stderr;
 					observedBlock =
 						`\n已接续收集在运行本地执行的最终结果：exit=${observed.code}\n--- stdout ---\n${so}\n--- stderr ---\n${se}\n` +
-						"（据此直接判定本轮验收结果并调用 loop_done，不要重新启动 validator。）\n";
+						"（运行时已消费原始结果；继续既有验收/评审步骤，不要重新启动 validator。）\n";
 				}
 			}
 			const resumePrompt = retryReview
 				? `受控运行 ${runId} 的代码验证已通过，但上次模型评审出错，现在重新验收：` +
-						"不要修改任何代码或文件，直接调用 loop_validate；运行时会重新执行 validator 并让 reviewer 评审。不要向用户提问。"
+					"不要修改任何代码或文件，直接调用 loop_validate；运行时会复用代码验证结果并重试 reviewer。不要向用户提问。"
 				: recoveryBlock +
-						observedBlock +
-						`继续执行当前受控运行（runId: ${runId}）：先查看当前状态，从上次中断处继续，` +
-						"完成后调用 loop_done(summary)。不要重复已完成的步骤，不要向用户提问。";
+					observedBlock +
+					`继续执行当前受控运行（runId: ${runId}）：先查看当前状态，从上次中断处继续，` +
+					"完成后调用 loop_done(summary)。不要重复已完成的步骤，不要向用户提问。";
 			// worktree 执行者会话：续跑提示词发到绑 worktree 的子代理，主对话不跑模型
+			const beforeDispatch = loadLoopState(runId);
+			if (
+				!beforeDispatch ||
+				!canContinueLoop(beforeDispatch) ||
+				beforeDispatch.owner !== cur.owner ||
+				beforeDispatch.generation !== cur.generation ||
+				beforeDispatch.epoch !== cur.epoch
+			)
+				return;
 			const executor = this.loopExecutorConv(cur);
 			if (executor && executor !== conv) {
 				// 修复（Task 4）：await 投递落定后再释放 loopResuming 互斥锁，

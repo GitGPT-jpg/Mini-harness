@@ -17,6 +17,8 @@ export interface LoopStatusInput {
 	round?: number | null;
 	maxRounds?: number | null;
 	stopReason?: string | null;
+	stopRequestedAt?: string | null;
+	stopConfirmedAt?: string | null;
 	acceptance?: string | null;
 	setupPending?: boolean | null;
 	setupError?: string | null;
@@ -33,6 +35,7 @@ export type LoopStatusAction =
 
 export type LoopStatusKind =
 	| "starting"
+	| "stopping"
 	| "preparing"
 	| "planning"
 	| "working"
@@ -97,6 +100,9 @@ export function loopStatus(run: LoopStatusInput, t: Translate): LoopStatus {
 	if (run.kind === "pending") return make("starting", t("loopStStarting"), "", "busy", "none", true);
 
 	const status = run.status ?? "";
+	if (run.stage === "stopping" || (run.stopRequestedAt && !run.stopConfirmedAt)) {
+		return make("stopping", t("loopStStopping"), t("loopStViewEvidence"), "warn", "view-evidence", true);
+	}
 	if (status === "active") {
 		// 服务端刚建 run、还没做完模型准备（家族解析 + 规划）
 		if (run.setupPending || run.stage === "intake")

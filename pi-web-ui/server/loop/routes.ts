@@ -27,9 +27,10 @@ import { basename, join } from "node:path";
 import type { Express } from "express";
 import { deleteGoalLog, listGoalLog } from "../goal-history-log.js";
 import { distillLoopRun } from "./distill.js";
+import { listOperations } from "./operation.js";
 import type { BestRoundRecord, HardConstraint, HarnessMetrics, MetricGateResult } from "./metrics.js";
 import { getPackKnowledge, getPackReference, listCapabilityPacks, listPackReferences } from "./packs.js";
-import { renderDiscoverySummary, resolveTaskContext } from "./discovery.js";
+import { normalizeTaskInputs, renderDiscoverySummary, resolveTaskContext } from "./discovery.js";
 import {
 	deleteLoopRun,
 	familyOf,
@@ -40,6 +41,7 @@ import {
 	reviewBrief,
 	reviewerEnabledOf,
 	runsRoot,
+	stopRunExternal,
 	type LoopAcceptance,
 } from "./extension.js";
 
@@ -170,6 +172,7 @@ export interface LoopRunDetail {
 	acceptance: string | null;
 	setupError: string | null;
 	validator: {
+		started?: boolean;
 		precheckCmd?: string | null;
 		cmd: string | null;
 		verdict: string | null;
@@ -294,6 +297,7 @@ export function collectRunDetail(runId: string): LoopRunDetail | null {
 		acceptance: st.acceptance ?? null,
 		setupError: st.setupError ?? null,
 		validator: {
+			started: listOperations(runId).some((op) => op.stage === "validate" && op.round === st.round && !!op.entity),
 			precheckCmd: st.precheckCmd ?? null,
 			cmd: st.validateCmd ?? null,
 			verdict: st.lastVerdict ?? null,
@@ -442,10 +446,18 @@ export function registerLoopRoutes(app: Express, opts: LoopRoutesOptions): void 
 	if (existsSync(kubeconfig) && !process.env.KUBECONFIG) process.env.KUBECONFIG = kubeconfig;
 
 	app.get("/api/mini-harness/runs", (req, res) => {
-		res.json({ runs: collectRuns(Boolean(req.query.history)) });
+		try {
+			res.json({ runs: collectRuns(Boolean(req.query.history)) });
+		} catch {
+			res.status(503).json({ error: "Run list unavailable: scan budget exceeded or storage requires inspection" });
+		}
 	});
 	app.get("/api/mini-harness/runs/latest", (req, res) => {
-		res.json(collectRuns(Boolean(req.query.history))[0] ?? null);
+		try {
+			res.json(collectRuns(Boolean(req.query.history))[0] ?? null);
+		} catch {
+			res.status(503).json({ error: "Run list unavailable: scan budget exceeded or storage requires inspection" });
+		}
 	});
 	app.get("/api/mini-harness/runs/:runId/detail", (req, res) => {
 		const id = String(req.params.runId ?? "");
@@ -471,7 +483,16 @@ export function registerLoopRoutes(app: Express, opts: LoopRoutesOptions): void 
 			res.status(404).json(r);
 			return;
 		}
-		res.json(r);
+		res.status(r.blockedReason ? 409 : 200).json(r);
+	});
+	app.post("/api/mini-harness/runs/:runId/stop", (req, res) => {
+		const id = String(req.params.runId ?? "");
+		if (!RUN_ID_RE.test(id)) {
+			res.status(400).json({ error: "bad runId" });
+			return;
+		}
+		const result = stopRunExternal(id);
+		res.status(!result.ok ? 409 : result.stopConfirmedAt || result.status === "done" ? 200 : 202).json(result);
 	});
 	app.post("/api/mini-harness/runs/:runId/distill", (req, res) => {
 		const id = String(req.params.runId ?? "");
@@ -528,14 +549,24 @@ export function registerLoopRoutes(app: Express, opts: LoopRoutesOptions): void 
 		res.json(r);
 	});
 	app.post("/api/mini-harness/discover", (req, res) => {
-		const packId = String(req.body?.packId ?? "");
-		const workspace = String(req.body?.workspace ?? "");
-		const inputs = req.body?.inputs && typeof req.body.inputs === "object" && !Array.isArray(req.body.inputs) ? (req.body.inputs as Record<string, string>) : {};
+		const packId = typeof req.body?.packId === "string" ? req.body.packId : "";
+		const workspace = typeof req.body?.workspace === "string" ? req.body.workspace : "";
 		if (!packId || !workspace) {
 			res.status(400).json({ error: "packId and workspace required" });
 			return;
 		}
-		const ctx = resolveTaskContext(packId, workspace, inputs);
+		const normalized = normalizeTaskInputs(req.body ?? {});
+		if (!normalized.ok) {
+			res.status(400).json({
+				error: normalized.error,
+				summary: normalized.error,
+				context: { error: normalized.error, inputConflicts: normalized.conflicts, normalizedInputs: normalized.inputs },
+				conflicts: normalized.conflicts,
+				typeErrors: normalized.typeErrors,
+			});
+			return;
+		}
+		const ctx = resolveTaskContext(packId, workspace, normalized.inputs);
 		if (ctx.error) {
 			res.status(404).json({ error: ctx.error, context: ctx, summary: renderDiscoverySummary(ctx) });
 			return;

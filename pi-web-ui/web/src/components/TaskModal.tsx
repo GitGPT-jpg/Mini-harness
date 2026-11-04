@@ -185,18 +185,26 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 			setDiscovery(null);
 			return;
 		}
+		let alive = true;
 		const id = setTimeout(() => {
-			void mhPost<DiscoveryResult>("discover", { packId, workspace: workspace.trim(), inputs: extraInputs }).then(
-				(r) => {
-					setDiscovering(false);
-					setDiscovery(r?.data ?? null);
-				},
-			);
+			void mhPost<DiscoveryResult>("discover", {
+				packId,
+				workspace: workspace.trim(),
+				inputs: extraInputs,
+				validateCmd: cmd,
+				precheckCmd: precheck,
+			}).then((r) => {
+				if (!alive) return;
+				setDiscovering(false);
+				setDiscovery(r?.data ?? null);
+			});
 		}, 300);
 		setDiscovering(true);
-		return () => clearTimeout(id);
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [packId, workspace]);
+		return () => {
+			alive = false;
+			clearTimeout(id);
+		};
+	}, [packId, workspace, extraInputs, cmd, precheck]);
 
 	if (!open) return null;
 
@@ -210,8 +218,8 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 	const canStart = !!g && !conflict;
 	// 执行模型跟随主对话（空）或就选了主对话那个 = 自己审自己。
 	const sameModel =
-		(!execModel ||
-			(!!mainModel && (execModel === mainModel.id || execModel === `${mainModel.provider}/${mainModel.id}`)));
+		!execModel ||
+		(!!mainModel && (execModel === mainModel.id || execModel === `${mainModel.provider}/${mainModel.id}`));
 
 	/** 下拉项：模型列表；当前值不在列表里（旧偏好 / 列表没读到）时补一项，不悄悄改掉用户的选择。 */
 	const modelOptions = (current: string) => (
@@ -273,8 +281,8 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 				mode: "code",
 				maxRounds: rounds > 0 ? Math.min(rounds, 20) : 5,
 				...(c ? { criteria: c } : {}),
-				...(precheck.trim() ? { precheckCmd: precheck.trim() } : {}),
-				...(cmd.trim() ? { validateCmd: cmd.trim() } : {}),
+				...(precheck.trim() ? { precheckCmd: precheck } : {}),
+				...(cmd.trim() ? { validateCmd: cmd } : {}),
 				...(artifactRoots.length ? { artifactRoots } : {}),
 				...(planner ? { plannerModel: planner } : {}),
 				useReviewer: mode === "code-review",
@@ -338,12 +346,7 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 						<label className="cockpit-label" htmlFor="task-pack">
 							{t("taskPackLabel")}
 						</label>
-						<select
-							id="task-pack"
-							className="cockpit-input"
-							value={packId}
-							onChange={(e) => applyPack(e.target.value)}
-						>
+						<select id="task-pack" className="cockpit-input" value={packId} onChange={(e) => applyPack(e.target.value)}>
 							<option value="">{t("taskPackNone")}</option>
 							{packs!.map((p) => (
 								<option key={p.id} value={p.id} title={p.summary}>
@@ -367,25 +370,21 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 								{discovery.summary}
 							</div>
 						)}
-						{!discovering &&
-							discovery?.context?.missing &&
-							discovery.context.missing.length > 0 && (
-								<div className="task-discovery-missing">
-									{discovery.context.missing.map((m) => (
-										<label key={m.id} className="cockpit-label">
-											{m.label || m.id}
-											<input
-												className="cockpit-input"
-												value={extraInputs[m.id] ?? ""}
-												placeholder={m.sourceOf || m.id}
-												onChange={(e) =>
-													setExtraInputs((prev) => ({ ...prev, [m.id]: e.target.value }))
-												}
-											/>
-										</label>
-									))}
-								</div>
-							)}
+						{!discovering && discovery?.context?.missing && discovery.context.missing.length > 0 && (
+							<div className="task-discovery-missing">
+								{discovery.context.missing.map((m) => (
+									<label key={m.id} className="cockpit-label">
+										{m.label || m.id}
+										<input
+											className="cockpit-input"
+											value={extraInputs[m.id] ?? ""}
+											placeholder={m.sourceOf || m.id}
+											onChange={(e) => setExtraInputs((prev) => ({ ...prev, [m.id]: e.target.value }))}
+										/>
+									</label>
+								))}
+							</div>
+						)}
 					</>
 				)}
 				<label className="cockpit-label" htmlFor="task-goal">

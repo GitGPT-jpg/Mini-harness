@@ -1,40 +1,65 @@
 /**
- * 跨进程租约竞争（可注入 CAS 屏障）：真实独立进程调用 acquireLease，打印 WIN / LOSE。
+ * 跨进程租约竞争：真实独立进程调用 acquireLease，打印 WIN / LOSE。
  * 用于「两个真实进程竞争同一个过期租约，只有一个成功」的确定性交错验证。
  *
- * 用法：tsx lease-race.ts <runDir> <owner> <generation> [expiredHeartbeat]
- *  - expiredHeartbeat 非空：先写一份「已过期」旧租约（owner=old、generation=generation-1），再竞争接管。
- *  - 环境变量 MINI_HARNESS_CAS_BARRIER_DIR 指向目录时，CAS 判定后会暂停等待 <dir>/go（由父进程控制交错）。
+ * 用法：node --import tsx lease-race.ts <runDir> <owner> <generation> [observe-before-lock]
+ * 可选 IPC 屏障仅属于 fixture：锁外报告 observed-expired，收到 continue 后才进入真实 run 锁，
+ * 再报告锁内 checked 记录。生产 acquireLease 不含屏障或故障注入。
  */
-import fs from "node:fs";
-import path from "node:path";
-import { acquireLease } from "../../server/loop/recovery.js";
+import { acquireLease, getLease, leaseExpired, withRunLockSync } from "../../server/loop/recovery.js";
 
-const [dir, owner, generationStr, expiredHeartbeat] = process.argv.slice(2);
+const [dir, owner, generationStr, mode] = process.argv.slice(2);
 const generation = Number(generationStr) || 1;
 
-// 可选：预置一份过期旧租约（供接管竞争；owner 固定 old、generation 固定 1、心跳取 10 分钟前）。
-if (expiredHeartbeat) {
-	fs.mkdirSync(dir, { recursive: true });
-	const oldLease = {
-		owner: "old@host",
-		pid: 99999,
-		generation: 1,
-		startedAt: new Date(Date.now() - 600_000).toISOString(),
-		heartbeatAt: new Date(Date.now() - 600_000).toISOString(),
-		remoteJobId: null,
-	};
-	fs.writeFileSync(path.join(dir, "lease.json"), JSON.stringify(oldLease, null, 2));
+async function beforeLock(): Promise<void> {
+	if (!process.send) throw new Error("fixture requires IPC");
+	const previous = getLease(dir);
+	if (!previous || !leaseExpired(previous)) throw new Error("fixture expected expired lease");
+	await new Promise<void>((resolve, reject) => {
+		const timer = setTimeout(() => finish(new Error("fixture IPC barrier timeout")), 8000);
+		const disconnected = () => finish(new Error("fixture parent disconnected"));
+		const continued = (message: unknown) => {
+			if (message === "continue") finish();
+		};
+		function finish(error?: Error) {
+			clearTimeout(timer);
+			process.off("message", continued);
+			process.off("disconnect", disconnected);
+			if (error) reject(error);
+			else resolve();
+		}
+		process.on("message", continued);
+		process.once("disconnect", disconnected);
+		process.send!({ type: "observed-expired", generation: previous.generation, owner: previous.owner });
+	});
 }
 
-const nowIso = new Date().toISOString();
-const ok = acquireLease(dir, {
-	owner,
-	pid: process.pid,
-	generation,
-	startedAt: nowIso,
-	heartbeatAt: nowIso,
-	remoteJobId: null,
-});
-// 稳定输出供父进程断言
-console.log(ok ? "WIN:" + owner : "LOSE:" + owner);
+try {
+	if (mode === "observe-before-lock") await beforeLock();
+	let checked: { owner: string; generation: number } | null = null;
+	const locked = withRunLockSync(dir, () => {
+		const current = getLease(dir);
+		if (current) checked = { owner: current.owner, generation: current.generation };
+		const nowIso = new Date().toISOString();
+		return acquireLease(dir, {
+			owner,
+			pid: process.pid,
+			generation,
+			startedAt: nowIso,
+			heartbeatAt: nowIso,
+			remoteJobId: null,
+		});
+	});
+	if (!locked.ok) throw new Error(locked.error);
+	if (process.send) {
+		await new Promise<void>((resolve, reject) => {
+			process.send!({ type: "checked", lease: checked, acquired: locked.value }, (error) => {
+				if (error) reject(error);
+				else resolve();
+			});
+		});
+	}
+	console.log(locked.value ? "WIN:" + owner : "LOSE:" + owner);
+} finally {
+	if (process.connected) process.disconnect();
+}
