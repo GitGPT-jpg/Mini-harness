@@ -11,7 +11,7 @@
 //
 // 用法: npm run build:server && node tests/goal-reviewer-model-test.mjs [port]
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -32,6 +32,8 @@ for (const dir of [projDir, dataDir, agentDir]) mkdirSync(dir, { recursive: true
 
 /** 替身 provider 收到的请求：model + 最后一条 user 文本。 */
 const requests = [];
+/** 审查对话第一次回复先尝试写文件（bash touch），第二次带着工具结果给 verdict：用来证明审查只读。 */
+let reviewerToolResult = null;
 const sse = (res, chunks) => {
 	res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
 	for (const chunk of chunks) res.write(`data: ${JSON.stringify(chunk)}\n\n`);
@@ -65,6 +67,25 @@ const mock = createServer(async (req, res) => {
 	const last = textOf(users.at(-1));
 	const review = /"verdict"/.test(last);
 	requests.push({ model: payload.model, review, last: last.slice(0, 80) });
+	const toolMsgs = (payload.messages ?? []).filter((m) => m.role === "tool");
+	const hasBash = (payload.tools ?? []).some((t) => t?.function?.name === "bash");
+	if (review && payload.model === "gpt-mock" && hasBash && toolMsgs.length === 0) {
+		sse(res, [
+			delta(payload.model, {
+				tool_calls: [
+					{
+						index: 0,
+						id: "call_reviewer_write",
+						type: "function",
+						function: { name: "bash", arguments: JSON.stringify({ command: "touch reviewer-wrote.txt" }) },
+					},
+				],
+			}),
+			delta(payload.model, {}, "tool_calls"),
+		]);
+		return;
+	}
+	if (review && payload.model === "gpt-mock" && toolMsgs.length > 0) reviewerToolResult = textOf(toolMsgs.at(-1));
 	const reply = review ? '{"verdict":"pass","feedback":"审查通过"}' : "OK";
 	sse(res, [delta(payload.model, { content: reply }), delta(payload.model, {}, "stop")]);
 });
@@ -170,6 +191,11 @@ try {
 		"审查请求全部用 gpt-mock",
 		reviews.length > 0 && reviews.every((r) => r.model === "gpt-mock"),
 		JSON.stringify(reviews.map((r) => r.model)),
+	);
+	check(
+		"审查对话的写操作被只读闸门拒绝，未落盘",
+		!!reviewerToolResult && !existsSync(join(projDir, "reviewer-wrote.txt")),
+		(reviewerToolResult ?? "(审查对话没有调用工具)").slice(0, 120),
 	);
 	const execs = requests.filter((r) => !r.review);
 	check(
