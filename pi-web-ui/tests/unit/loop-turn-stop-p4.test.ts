@@ -22,6 +22,8 @@ const {
 	stopRunExternal,
 	recoverRun,
 	canResumeLoopDelivery,
+	markRunTurnDispatch,
+	beginLoopTurn,
 } = ext as any;
 const { ClientSession } = await import("../../server/agent-service.js");
 
@@ -115,9 +117,14 @@ describe("停止只取消目标回合并核验退出（P3）", () => {
 		expect(session.interruptRun).not.toHaveBeenCalled(); // 不取消当前聊天 B
 	});
 
-	it("run 绑定当前会话：服务层停止取消目标回合并确认", async () => {
+	it("run 绑定当前会话：停止经回合启动注册的控制器取消目标回合并确认", async () => {
 		const mainSid = "main2-" + Math.random().toString(36).slice(2, 8);
 		const created = createLoopRun({ sessionId: mainSid, cwd: workspace(), goal: "g" });
+		const abort = vi.fn();
+		let idle = false;
+		// 回合启动（before_agent_start）：消费投递登记 → 注册绑定本回合的取消控制器。
+		markRunTurnDispatch(created.runId, mainSid);
+		beginLoopTurn(created.runId, mainSid, { abort, isIdle: () => idle });
 		const conv: any = { id: "main", isSubagent: false, session: { sessionId: mainSid, isIdle: false } };
 		const session: any = Object.create(ClientSession.prototype);
 		session.loopResuming = new Set();
@@ -126,13 +133,15 @@ describe("停止只取消目标回合并核验退出（P3）", () => {
 		session.activeId = "main";
 		session.flushSnapshot = () => {};
 		session.emitNotice = () => {};
-		session.interruptRun = vi.fn(async () => {});
-		session.conversationStreaming = () => true;
 		await session.stopLoop(created.runId);
-		expect(session.interruptRun).toHaveBeenCalledTimes(1);
+		expect(abort).toHaveBeenCalledTimes(1); // 只取消本回合（经回合启动注册的控制器）
 		const st = loadLoopState(created.runId);
 		expect(st.stopRequestedAt).toBeTruthy();
 		expect(st.stopConfirmedAt).toBeFalsy(); // 回合尚未结束 → 待确认
+		// 回合结束后重新核对 → 确认。
+		idle = true;
+		const recheck = stopRunExternal(created.runId);
+		expect(recheck.stopConfirmedAt).toBeTruthy();
 	});
 });
 

@@ -51,7 +51,8 @@ import {
 	canResumeLoopDelivery,
 	createLoopExtension,
 	createLoopRun,
-	registerRunTurnController,
+	markRunTurnDispatch,
+	unmarkRunTurnDispatch,
 	stopRunExternal,
 	canContinueLoop,
 	loadLoopState,
@@ -12592,8 +12593,9 @@ export class ClientSession {
 				"workspace-executor-error",
 			);
 		} else {
-			// 注册回合控制器：停止要能取消该 run 绑定会话的模型回合。
-			this.registerLoopTurnControl(st.runId, conv);
+			// 投递前登记 run 回合：停止要能取消该 run 绑定会话的模型回合（扩展在
+			// before_agent_start 消费登记并注册该回合的取消控制器）。
+			markRunTurnDispatch(st.runId, conv.session.sessionId);
 			await this.prompt(lines.join("\n"));
 		}
 	}
@@ -12639,12 +12641,15 @@ export class ClientSession {
 			if (!execConv?.session) throw new Error("执行者会话创建失败");
 			const re = rebindLoopSession(st.runId, execConv.session.sessionId);
 			if (!re.ok) throw new Error(re.error || "run 会话重绑失败");
-			// 执行者会话也接入回合取消：任务台/API 停止要能取消该子代理的模型回合。
-			this.registerLoopTurnControl(st.runId, execConv);
+			// 投递前登记 run 回合：执行者会话也接入回合取消（扩展在 before_agent_start
+			// 消费登记并注册该回合的取消控制器），任务台/API 停止要能取消该子代理的模型回合。
+			markRunTurnDispatch(st.runId, execConv.session.sessionId);
 			// 执行者会话 cwd 就是 workspace：工具/终端天然落 workspace，提示词不再需要「先 cd」兜底。
 			const kickPrompt = `${prompt}\n${workspaceNote}`;
 			execConv.kickoff = execConv.session.sendUserMessage(kickPrompt).catch((err) => {
 				const reason = `${errorLabel}：${err instanceof Error ? err.message : String(err)}`;
+				// 投递被拒：撤销回合登记（回合从未开始），停止不会因虚假的在途证据卡在未确认。
+				unmarkRunTurnDispatch(st.runId);
 				stopRunExternal(st.runId, stopReason);
 				conv.loop = {
 					kind: "request-failed",
@@ -12657,6 +12662,7 @@ export class ClientSession {
 				this.flushSnapshot();
 			});
 		} catch (err) {
+			unmarkRunTurnDispatch(st.runId);
 			stopRunExternal(st.runId, stopReason);
 			conv.loop = {
 				kind: "request-failed",
@@ -12694,12 +12700,10 @@ export class ClientSession {
 			this.emitNotice("info", "没有可停止的 Loop（当前会话无活跃 run）");
 			return;
 		}
-		// 停止必须能取消该 run 绑定会话（原会话或 worktree 执行者）的在途模型回合，
-		// 而不只是 validator 子进程。只有 run 确实绑定到本对话（含其派生执行者）时才注册
-		// 控制器：找不到目标会话不得回退到当前聊天，否则会误取消无关对话的回合。
-		const st = loadLoopState(target);
-		const boundConv = st ? this.loopExecutorConv(st) : undefined;
-		if (st && boundConv) this.registerLoopTurnControl(target, boundConv);
+		// 停止只取消「回合开始时注册」的控制器（registerRunTurnController 在 before_agent_start
+		// 回合启动时登记，回合结束清理），不在这里临时绑定：临时绑定当前聊天会把无关对话
+		// 的在途回合误取消。没有注册控制器（如回合未启动/已结束）时，停止仅推进 epoch 与
+		// 取消 validator 子进程，回合本身不受影响。
 		const r = stopRunExternal(target, "user-stop");
 		if (!r.ok) this.emitNotice("warning", `Loop 停止失败：${r.error}`);
 		else if (!r.stopConfirmedAt && r.status !== "done")
@@ -12707,25 +12711,11 @@ export class ClientSession {
 	}
 
 	/**
-	 * 把该 run 绑定会话的在途回合接入 stopRunExternal 的取消域：
-	 * abort 触发 interruptRun（含会话 abort 与卡死强制重置），turnEnded 给出可核验的
-	 * 「回合已结束」判定（stopRunExternal 据此决定 stopConfirmedAt）。
+	 * 回合取消控制器由扩展在 before_agent_start 注册（run 回合启动时），并在
+	 * agent_end 只注销属于本会话本回合的控制器。服务层只在投递 run 回合前调用
+	 * markRunTurnDispatch 登记；不得在停止时临时把控制器绑到当前聊天，否则会
+	 * 误取消无关对话的在途回合。
 	 */
-	private registerLoopTurnControl(runId: string, bound: Conversation): void {
-		if (!bound?.session) return;
-		registerRunTurnController(runId, {
-			abort: () => {
-				void this.interruptRun(bound, "已停止").catch(() => {});
-			},
-			turnEnded: () => {
-				try {
-					return !this.conversationStreaming(bound) && bound.session.isIdle !== false;
-				} catch {
-					return true;
-				}
-			},
-		});
-	}
 
 	/** 显式续跑：runId 绑定（sessionId 必须匹配本会话）+ 在途互斥（修#2）。
 	 *  评审掉线（stopped + reviewer-error）的 run 走「重试评审」：重新激活后让模型不改代码直接重新验收。 */
@@ -12855,12 +12845,14 @@ export class ClientSession {
 				return;
 			}
 			const executor = this.loopExecutorConv(cur) ?? conv;
-			// 续跑回合也接入取消域：恢复期间被停止，停止要能取消该回合。
-			this.registerLoopTurnControl(runId, executor);
+			// 续跑回合也接入取消域：投递前登记，恢复期间被停止，停止要能取消该回合。
+			markRunTurnDispatch(runId, executor.session.sessionId);
 			if (executor !== conv) {
 				// 修复（Task 4）：await 投递落定后再释放 loopResuming 互斥锁，
 				// 避免快速重复 resume 在投递尚未完成时再次进入、导致双投递。
 				await executor.session.sendUserMessage(resumePrompt).catch((err) => {
+					// 投递被拒：撤销回合登记（回合从未开始）。
+					unmarkRunTurnDispatch(runId);
 					this.emit({
 						type: "notice",
 						level: "error",

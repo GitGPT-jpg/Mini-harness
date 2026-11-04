@@ -39,7 +39,7 @@ import {
 	type MetricTarget,
 } from "./metrics.js";
 import { createWorkspaceSnapshot } from "../workspace-snapshot.js";
-import { cancelRunOperations, listOperations, observeOperation, runCommandPersistent } from "./operation.js";
+import { cancelRunOperations, listOperations, observeOperation, runCommandPersistent, type OpRecord } from "./operation.js";
 import { withRunLockSync, writeFileAtomicPreserveSync } from "./storage.js";
 import { computeExecutionFingerprint } from "./fingerprint.js";
 import { normalizeTaskInputs, resolveTaskContext, type TaskContext } from "./discovery.js";
@@ -108,26 +108,151 @@ function abortRun(runId: string): void {
  * worktree 执行者）的在途回合，turnEnded 给出可核验的「回合已结束」判定。
  * 宿主消失或会话未加载时没有注册项：不存在可取消的回合，不能据此声称回合仍在运行。
  */
-const runTurnControllers = new Map<string, { abort: () => void; turnEnded: () => boolean }>();
+const runTurnControllers = new Map<
+	string,
+	{ turnId: string; sessionId: string; generation: number | null; abort: () => void; turnEnded: () => boolean }
+>();
 
-/** 服务层注册/注销回合控制器（startLoop/resumeLoop/stopLoop 入口调用）。 */
+/**
+ * 注册回合控制器：绑定用 runId + sessionId + turnId + generation 标识。
+ * generation 取自注册时点的租约：接管/恢复（generation 递增）后旧控制器自动失效，
+ * 停止不得据此取消接管后的实体。由 before_agent_start 在 run 回合启动时注册
+ * （普通聊天回合不注册），agent_end 只注销属于本会话本回合的控制器。
+ */
 export function registerRunTurnController(
 	runId: string,
 	controller: { abort: () => void; turnEnded: () => boolean },
+	turnId: string = crypto.randomUUID(),
+	sessionId = "",
 ): void {
-	runTurnControllers.set(runId, controller);
+	runTurnControllers.set(runId, {
+		...controller,
+		turnId,
+		sessionId,
+		generation: getLease(runDir(runId))?.generation ?? null,
+	});
 }
 export function unregisterRunTurnController(runId: string): void {
 	runTurnControllers.delete(runId);
 }
 
 /**
- * 扩展可见的「本进程有在途回合」标记：before_agent_start 置位、agent_end 清除。
+ * 扩展可见的「本进程有在途回合」标记：run 回合投递/启动时置位、agent_end 清除。
  * 服务层控制器未注册时（例如宿主刚重启、会话尚未恢复）作为回合在途的兜底判断；
  * 已注册时以服务层的 turnEnded 为准（agent_end 可能因强制重置不触发）。
  */
 const runTurnActive = new Set<string>();
 const runTurnSessions = new Map<string, string>();
+/** runId → 最近一次登记的 run 回合 turnId（同会话新回合覆盖旧值）。 */
+const runTurnTurns = new Map<string, string>();
+
+/**
+ * runId → 最近一次「run 回合投递」登记：服务层 startLoop/resumeLoop、扩展内
+ * 下一轮/LLM 复审的 sendUserMessage 之前调用。before_agent_start 据此区分 run
+ * 回合与同会话的普通聊天回合 —— 只有 run 回合置「回合在途」证据并注册控制器，
+ * 普通聊天回合不注册、不被停止取消。
+ */
+const runTurnDispatches = new Map<string, { sessionId: string; turnId: string }>();
+
+/** 登记一次 run 回合投递，返回该回合的 turnId。投递即持久化「回合在途」证据：
+ *  停止在回合排队窗口也能看到有回合在途；before_agent_start 消费登记并注册该回合的控制器。 */
+export function markRunTurnDispatch(runId: string, sessionId: string): string {
+	const turnId = crypto.randomUUID();
+	runTurnDispatches.set(runId, { sessionId, turnId });
+	runTurnTurns.set(runId, turnId);
+	runTurnActive.add(runId);
+	runTurnSessions.set(runId, sessionId);
+	try {
+		const st = loadState(runId);
+		if (st?.owner) {
+			st.turnActive = { owner: st.owner, since: now(), turnId };
+			saveState(st);
+		}
+	} catch {}
+	return turnId;
+}
+
+/** 投递失败（sendUserMessage 拒绝）：撤销投递登记，回合从未开始，不留下虚假的「回合在途」证据。 */
+export function unmarkRunTurnDispatch(runId: string): void {
+	runTurnDispatches.delete(runId);
+	runTurnActive.delete(runId);
+	runTurnSessions.delete(runId);
+	runTurnTurns.delete(runId);
+	try {
+		const st = loadState(runId);
+		if (st?.turnActive) {
+			st.turnActive = null;
+			saveState(st);
+		}
+	} catch {}
+}
+
+/**
+ * run 回合启动（before_agent_start）：消费投递登记并注册该回合的取消控制器。
+ * 没有投递登记（同会话的普通聊天回合）不置位、不注册 —— 停止只取消「已注册且
+ * 对应本回合」的实体。setupPending 的 run（legacy loop_start 路径建在回合中）
+ * 尚未开跑，本轮就是它的首个 run 回合，也注册。
+ */
+export function beginLoopTurn(
+	runId: string,
+	sessionId: string,
+	c: { abort?: () => void; isIdle?: () => boolean } = {},
+): void {
+	const st = loadState(runId);
+	if (!st || st.status !== "active") return;
+	const disp = runTurnDispatches.get(runId);
+	const dispatched = disp?.sessionId === sessionId;
+	if (!dispatched && !st.setupPending) return;
+	runTurnDispatches.delete(runId);
+	const turnId = dispatched ? disp!.turnId : crypto.randomUUID();
+	runTurnActive.add(runId);
+	runTurnSessions.set(runId, sessionId);
+	runTurnTurns.set(runId, turnId);
+	if (st.owner) {
+		try {
+			st.turnActive = { owner: st.owner, since: now(), turnId };
+			saveState(st);
+		} catch {}
+	}
+	// 回合控制器绑定本回合：abort 取消本运行时当前回合，turnEnded 用本运行时 idle 判定。
+	registerRunTurnController(
+		runId,
+		{
+			abort: () => {
+				try {
+					c.abort?.();
+				} catch {}
+			},
+			turnEnded: () => {
+				try {
+					// 只有可核验地 idle 才算回合已结束：拿不到判定（无 isIdle）→ 保持未确认。
+					return c.isIdle?.() === true;
+				} catch {
+					return false;
+				}
+			},
+		},
+		turnId,
+		sessionId,
+	);
+}
+
+/** 回合结束（agent_end）：只清理属于本会话的「回合在途」标记与控制器（清理自己）。 */
+export function endLoopTurnsForSession(sessionId: string): void {
+	for (const [runId, sid] of runTurnSessions) {
+		if (sid === sessionId) {
+			runTurnSessions.delete(runId);
+			runTurnActive.delete(runId);
+			clearPersistedTurnActive(runId);
+		}
+	}
+	// 只注销绑定本会话且仍对应本回合的控制器：别的会话/新回合的取消域不受影响。
+	for (const [runId, ctl] of runTurnControllers) {
+		if (ctl.sessionId === sessionId && ctl.turnId === runTurnTurns.get(runId)) {
+			unregisterRunTurnController(runId);
+		}
+	}
+}
 
 /** 清除落盘的「回合在途」持久证据（回合结束时调用；失败不影响回合已结束的事实）。 */
 function clearPersistedTurnActive(runId: string): void {
@@ -391,9 +516,11 @@ export interface LoopState {
 	stopRequestedAt?: string | null;
 	/** 本地执行（validator/precheck 子进程组）确认退出时间；未确认 = 仍可能在途或远端未知。 */
 	stopConfirmedAt?: string | null;
-	/** 绑定会话的「回合在途」持久证据（owner = 启动回合的宿主身份）。宿主重启后
-	 *  内存标记消失，停止/恢复必须依据这条持久证据判断旧回合是否已随宿主结束。 */
-	turnActive?: { owner: string; since: string } | null;
+	/** 绑定会话的「回合在途」持久证据（owner = 启动回合的宿主身份，turnId 区分回合）。
+	 *  宿主重启后内存标记消失，停止/恢复必须依据这条持久证据判断旧回合是否已随宿主结束。 */
+	turnActive?: { owner: string; since: string; turnId: string } | null;
+	/** 停止请求绑定的回合（发起停止时登记的 turnId）：只等待该回合退出，不取消后来开始的回合。 */
+	stopTurnId?: string | null;
 	/**
 	 * 接管前从旧租约保留的执行实体证据（旧协议 run 可能没有 operation）。
 	 * 只作核对线索：身份未核实时不向该 pid 发信号，也不自动重放任务。
@@ -1797,6 +1924,7 @@ function advanceOrStop(
 		st.reviewStep = undefined;
 		if (!saveState(st, token)) return;
 		journal(st, event, { code: v?.code ?? null, failedRound, nextRound: st.round });
+		markRunTurnDispatch(st.runId, st.sessionId);
 		pi.sendUserMessage(nextRoundPrompt(st, v, feedback), { deliverAs: "followUp" });
 	} else {
 		st.stage = "stopped";
@@ -2229,6 +2357,7 @@ async function handleLlmVerdict(pi: ExtensionAPI, ctx: LoopCtx, st: LoopState) {
 			st.reviewStep = undefined;
 			if (!saveState(st, token)) return;
 			journal(st, "llm-block", { reasons: review.reasons, failedRound, nextRound: st.round });
+			markRunTurnDispatch(st.runId, st.sessionId);
 			pi.sendUserMessage(
 				`【mini-harness · LLM loop 第 ${st.round} 轮】reviewer 否决：\n${review.reasons.join("\n")}\n` +
 					`请修复后再次调用 loop_done(summary)。目标：${st.goal}。不要向用户提问。`,
@@ -3060,16 +3189,13 @@ export function createLoopExtension() {
 			if (!st || st.status !== "active") {
 				return;
 			}
-			// 回合在途标记（内存 + 持久）：停止要能定位并取消该 run 绑定会话的模型回合；
-			// 持久证据供宿主重启后判断旧回合是否随宿主结束。
-			runTurnActive.add(st.runId);
-			runTurnSessions.set(st.runId, sessionIdOf(c));
-			if (st.owner) {
-				try {
-					st.turnActive = { owner: st.owner, since: now() };
-					saveState(st);
-				} catch {}
-			}
+			// 回合在途标记（内存 + 持久）只对「run 回合」置位：服务层/扩展投递 run 回合前
+			// 登记（markRunTurnDispatch），本回合启动时消费并注册取消控制器。同会话的普通
+			// 聊天回合没有登记 → 不置位、不注册，停止不会取消它。持久证据供宿主重启后
+			// 判断旧回合是否随宿主结束。
+			beginLoopTurn(st.runId, sessionIdOf(c), c as LoopCtx & { abort?: () => void; isIdle?: () => boolean });
+			// 重新读取：beginLoopTurn 落盘了「回合在途」证据，后续 setup 的 saveState 要带上它。
+			st = findActiveRun(c) ?? st;
 			// D-12-2：服务端建的 run 在第一次开跑前做模型准备（家族解析 + 规划，原 loop_start 的逻辑）
 			if (st.setupPending && !setupBusy.has(st.runId)) {
 				const runId = st.runId;
@@ -3098,15 +3224,9 @@ export function createLoopExtension() {
 		// ---- 运行结束：自动 validator → 通过则完成；失败则自动下一轮 ----
 		pi.on("agent_end", async (_event, ctx) => {
 			const c = ctx as unknown as LoopCtx;
-			// 本会话的任何回合结束都清除其 run 的「回合在途」标记（含刚被停止的 run）。
-			const endedSid = sessionIdOf(c);
-			for (const [runId, sid] of runTurnSessions) {
-				if (sid === endedSid) {
-					runTurnSessions.delete(runId);
-					runTurnActive.delete(runId);
-					clearPersistedTurnActive(runId);
-				}
-			}
+			// 回合结束事件只清理自己：清除本会话 run 的「回合在途」标记并注销本会话本回合
+			// 的控制器（含刚被停止的 run）；别的会话/新回合的取消域不受影响。
+			endLoopTurnsForSession(sessionIdOf(c));
 			const st = findActiveRun(c);
 			if (!st) {
 				// 修复「启动后无可见记录/无明确失败态」：服务层发启动提示词前会登记挂起请求；
@@ -3271,6 +3391,8 @@ export function stopRunExternal(
 			st.stopReason = reason;
 			st.epoch += 1;
 			st.stopRequestedAt = now();
+			// 停止绑定「发起时登记的回合」：后来开始的普通聊天回合不受取消、不计在途。
+			st.stopTurnId = runTurnControllers.get(runId)?.turnId ?? loadState(runId)?.turnActive?.turnId ?? null;
 			if (!saveState(st)) return { ok: false, error: "停止请求提交冲突" };
 		}
 		const token = tokenOf(st);
@@ -3284,23 +3406,38 @@ export function stopRunExternal(
 				lease.generation === token.generation
 			);
 		};
-		// 先取消绑定会话的模型回合（宿主存活时注册的控制器；含原会话与 worktree 执行者），
+		// 先取消绑定会话的模型回合（回合启动时注册的控制器；含原会话与 worktree 执行者），
 		// 再取消持久 operation。abort 只是请求：回合是否真正结束由 turnEnded 给出可核验结论。
 		const turn = runTurnControllers.get(runId);
+		// 租约代次变化（接管/恢复）→ 旧控制器不再对应本代次的回合：不取消、不据此判定在途。
+		const leaseAtTurn = getLease(runDir(runId));
+		const turnStale =
+			turn && turn.generation != null && leaseAtTurn?.generation != null && turn.generation !== leaseAtTurn.generation;
 		let turnAbortError: string | null = null;
-		if (turn) {
-			try {
-				turn.abort();
-			} catch (error) {
-				turnAbortError = String((error as Error).message);
+		if (turn && !turnStale) {
+			// 停止只取消「发起时登记的回合」：登记回合已更换（后来开始的回合）→ 不取消新回合。
+			const stopTurnId = loadState(runId)?.stopTurnId;
+			if (!stopTurnId || turn.turnId === stopTurnId) {
+				try {
+					turn.abort();
+				} catch (error) {
+					turnAbortError = String((error as Error).message);
+				}
 			}
 		}
 		const turnInFlight = (() => {
-			if (turn) return !turn.turnEnded();
-			// 无控制器（宿主重启/会话未加载）：按持久证据判断。旧宿主进程已死 →
+			// 停止只等待「发起时登记的回合」：当前登记回合已更换（后来开始的回合）
+			// → 旧回合已结束，不计在途、不取消新回合。
+			const stopTurnId = loadState(runId)?.stopTurnId;
+			if (turn && !turnStale) {
+				if (stopTurnId && turn.turnId !== stopTurnId) return false;
+				return !turn.turnEnded();
+			}
+			// 无控制器（宿主重启/会话未加载/回合未登记）：按持久证据判断。旧宿主进程已死 →
 			// 回合随宿主结束，不计在途；旧宿主仍活（同机）→ 无法核验 → 待确认。
 			const active = loadState(runId)?.turnActive;
 			if (!active) return runTurnActive.has(runId);
+			if (stopTurnId && active.turnId !== stopTurnId) return false;
 			const ownerPid = Number(String(active.owner).split("@")[0]);
 			if (Number.isSafeInteger(ownerPid) && ownerPid > 0 && ownerPid !== process.pid) return isPidAlive(ownerPid);
 			return runTurnActive.has(runId);
@@ -3323,6 +3460,7 @@ export function stopRunExternal(
 			fresh.stopConfirmedAt = now();
 			fresh.recoveryState = "cancelled";
 			unregisterRunTurnController(runId);
+			runTurnDispatches.delete(runId);
 		} else {
 			fresh.stage = "stopping";
 			fresh.recoveryState = "stop-unconfirmed";
@@ -3863,10 +4001,7 @@ export function recoverRun(runId: string, requesterOwner?: string): RecoverRunRe
 	const environmentChanged = !fingerprintMatches(st.environmentFingerprint, currentFp);
 	// 在途 = 新协议持久化操作（validator/precheck 已启动但尚未落定）。仅含旧 taskPid 而没有
 	// 对应 operation 的 run 是历史实体证据：不作为在途（不阻止接管），接管后由 stop 侧保持未确认。
-	const ops = listOperations(runId);
-	const pending = ops.find(
-		(op) => op.attemptId === st.attemptId && op.round === st.round && !st.consumedResults?.[op.opId],
-	);
+	const pending = pendingUnconsumedOp(st);
 	const inFlight = !!pending;
 	const cls = classifyRecovery(st, {
 		leaseHeld,
@@ -3934,11 +4069,16 @@ export function recoverRun(runId: string, requesterOwner?: string): RecoverRunRe
 			if (!saveState(st)) throw new Error("恢复状态提交冲突");
 			startLeaseHeartbeat(runId, me, st.generation);
 			journal(st, "recovery-takeover", { owner: me, generation: st.generation, classification: cls.unit });
-			// P1-4：接管允许拿控制权做核对，但旧执行实体身份未核实前阻断续跑投递。
+			// 旧执行实体身份未核实前阻断「续跑投递」，但允许「观察在运行 operation」：
+			// running + inFlightOpId 时放行观察（observe 消费结果），投递新轮仍由
+			// canResumeLoopDelivery 阻断（结果消费后的后续调度过同一门禁）。
 			const unverified = unverifiedLegacyEntities(st);
 			if (unverified.length > 0) {
-				blockedReason =
-					"存在未核实的旧执行实体（pid: " + unverified.map((e) => e.pid).join(", ") + "），先核对现场再续跑";
+				const canObserve = cls.unit === "running" && inFlightOpId != null;
+				if (!canObserve) {
+					blockedReason =
+						"存在未核实的旧执行实体（pid: " + unverified.map((e) => e.pid).join(", ") + "），先核对现场再续跑";
+				}
 			}
 		} else {
 			blockedReason = "接管失败：并发竞争者已取得执行所有权";
@@ -3989,14 +4129,21 @@ export function recoverRun(runId: string, requesterOwner?: string): RecoverRunRe
  * 接续观察一个持久化操作（服务重启后调用）：等待仍在运行的本地执行实体退出，
  * 收集退出码与输出。用于「分类=running」时真正拿到最终结果，而不是只给一个分类标签。
  */
+/** 当前 round/attempt 尚未消费的持久化 operation（恢复观察与接续投递共用同一选择规则）。 */
+export function pendingUnconsumedOp(st: LoopState): OpRecord | null {
+	return (
+		listOperations(st.runId).find(
+			(op) => op.round === st.round && op.attemptId === st.attemptId && !st.consumedResults?.[op.opId],
+		) ?? null
+	);
+}
+
 export async function observeRunOperation(runId: string, timeoutMs = 30 * 60 * 1000) {
 	const st = loadState(runId);
 	if (!st) return null;
 	const token = tokenOf(st);
 	if (!stillCurrent(token)) return null;
-	const pending = listOperations(runId).find(
-		(op) => op.round === st.round && op.attemptId === st.attemptId && !st.consumedResults?.[op.opId],
-	);
+	const pending = pendingUnconsumedOp(st);
 	if (!pending) return null;
 	const observed = await observeOperation(runId, pending.opId, { timeoutMs });
 	if (!stillCurrent(token) || !observed.record?.result) return observed;
@@ -4023,14 +4170,19 @@ export async function observeRunOperation(runId: string, timeoutMs = 30 * 60 * 1
  */
 function unverifiedLegacyEntities(st: LoopState): Array<{ pid: number }> {
 	const ops = listOperations(st.runId);
-	// 存在当前 round/attempt 的未消费持久 operation 时，执行实体身份由 operation 记录，
-	// 旧 taskPid 只是冗余线索（同一执行），不视为「未核实」；取消/核验走 operation 路径。
-	const pending = ops.find(
-		(op) => op.attemptId === st.attemptId && op.round === st.round && !st.consumedResults?.[op.opId],
-	);
-	return (st.legacyExecutionEntities ?? []).filter(
-		(e) => e.pid != null && !ops.some((op) => op.pid === e.pid) && !pending && isPidAlive(e.pid),
-	);
+	// 逐实体判定：只有 PID、宿主与进程启动身份都与既有 operation 证据一致时才算核实；
+	// 同 PID/PID 复用/缺身份都不能单独解除门禁。有可信退出证据的匹配实体也不阻断。
+	const matchesOp = (e: { pid: number; host?: string | null; startId?: string | null }) =>
+		ops.find((op) => {
+			if (op.pid !== e.pid) return false;
+			if (e.host && op.entity?.host && op.entity.host !== e.host) return false;
+			if (e.startId && op.entity?.startId && op.entity.startId !== e.startId) return false;
+			// 必须有可信退出证据（result 已发布）才算核实；仍在运行 = 未核实。
+			return !!op.result;
+		});
+	return (st.legacyExecutionEntities ?? [])
+		.filter((e) => e.pid != null && isPidAlive(e.pid) && !matchesOp(e))
+		.map((e) => ({ pid: e.pid }));
 }
 
 /** 服务投递入口门禁：执行权有效且不存在未核实旧实体时才能实际投递续跑提示词。 */
