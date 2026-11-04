@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import express from "express";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -130,7 +131,8 @@ describe("/api/mini-harness/*", () => {
 		recordGoalEvent(entry("created"), dataDir);
 		const app = express();
 		app.use(express.json());
-		registerLoopRoutes(app, { dataDir, agentDir });
+		// 集群探测用空环境 + 临时 HOME：结果不受本机 KUBECONFIG / ~/.kube/config 影响。
+		registerLoopRoutes(app, { dataDir, agentDir, cluster: { env: {}, home: dataDir } });
 		server = app.listen(0, "127.0.0.1");
 		await new Promise<void>((r) => server.once("listening", () => r()));
 		base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -210,10 +212,43 @@ describe("/api/mini-harness/*", () => {
 		rmSync(join(LOOP_RUNS_ROOT, malformedCleanup.runId), { recursive: true, force: true });
 	});
 
+	it("run detail 只读给出任务工作树状态：干净 / 有未提交改动 / 目录已不在 / git 给不出结论", async () => {
+		const run: any = createLoopRun({ sessionId: `route-tree-${Date.now()}`, cwd: dataDir, goal: "tree state" });
+		expect(run.ok).toBe(true);
+		const tree = mkdtempSync(join(tmpdir(), "loop-routes-tree-"));
+		const git = (...args: string[]) => execFileSync("git", ["-C", tree, ...args], { stdio: "ignore" });
+		git("init", "-q");
+		git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init");
+		const writeState = (worktreeDir: string) =>
+			writeFileSync(
+				join(LOOP_RUNS_ROOT, run.runId, "state.json"),
+				JSON.stringify({ ...run.st, status: "stopped", stage: "stopped", worktreeDir }),
+			);
+		const treeOf = async () =>
+			(await (await fetch(`${base}/api/mini-harness/runs/${run.runId}/detail`)).json()).worktree;
+		writeState(tree);
+		expect(await treeOf()).toEqual({ path: tree, exists: true, dirty: false, uncommitted: 0 });
+		writeFileSync(join(tree, "draft.txt"), "keep me");
+		expect(await treeOf()).toEqual({ path: tree, exists: true, dirty: true, uncommitted: 1 });
+		expect(existsSync(join(tree, "draft.txt"))).toBe(true);
+		const plain = mkdtempSync(join(tmpdir(), "loop-routes-plain-"));
+		writeState(plain);
+		expect(await treeOf()).toMatchObject({ exists: true, dirty: null });
+		writeState(join(plain, "gone"));
+		expect(await treeOf()).toMatchObject({ exists: false, dirty: false });
+		rmSync(join(LOOP_RUNS_ROOT, run.runId), { recursive: true, force: true });
+		rmSync(tree, { recursive: true, force: true });
+		rmSync(plain, { recursive: true, force: true });
+	});
+
 	it("cluster：未配置时报 not-configured；空 kubeconfig 拒绝；clear 幂等", async () => {
 		const j = await (await fetch(`${base}/api/mini-harness/cluster`)).json();
 		expect(j).toMatchObject({ configured: false, connected: false, code: "not-configured" });
 		expect((await post("/api/mini-harness/cluster", { kubeconfig: "  " })).status).toBe(400);
-		expect(await (await post("/api/mini-harness/cluster/clear", {})).json()).toEqual({ ok: true });
+		expect(await (await post("/api/mini-harness/cluster/clear", {})).json()).toMatchObject({
+			ok: true,
+			code: "not-configured",
+			source: "none",
+		});
 	});
 });

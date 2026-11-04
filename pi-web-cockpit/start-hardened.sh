@@ -14,8 +14,8 @@ export PI_WEB_MANAGED=1
 export PI_WEB_SDK=bundled
 # 若已建堡垒机隧道（~/.mini-harness/proxy.env 存在），继承代理环境，子进程 kubectl 才能连内网
 [ -f "$HOME/.mini-harness/proxy.env" ] && . "$HOME/.mini-harness/proxy.env"
-# 「连接集群」里保存的 kubeconfig：存在就用它（agent 直接 kubectl 即可连集群）
-[ -f "$HOME/.pi-web/kubeconfig" ] && export KUBECONFIG="$HOME/.pi-web/kubeconfig"
+# kubeconfig 由服务端按优先级解析（Web 导入 > 启动时继承的 KUBECONFIG > ~/.kube/config，见
+# pi-web-ui/server/loop/cluster-config.ts）。这里不改写 KUBECONFIG：清除 Web 配置后要能回退到它。
 # Finder/LaunchServices 双击启动时 PATH 很精简，可能找不到 node；补上常见位置
 for d in "$HOME/.local/share/pi-node/current/bin" /usr/local/bin /opt/homebrew/bin; do
   [ -x "$d/node" ] && PATH="$d:$PATH"

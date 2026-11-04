@@ -1122,6 +1122,7 @@ export interface DispatchSession {
 	destroySandbox?(path: string): Promise<void>;
 	switchWorktree?(path: string): Promise<void>;
 	removeWorktree?(path: string, force?: boolean): Promise<void>;
+	refreshWorktreeInfo?(): Promise<void>;
 	deleteSession(path: string): Promise<void>;
 	renameSession(path: string, name: string): Promise<void>;
 	renameConversation(id: string, name: string): Promise<void>;
@@ -1210,6 +1211,7 @@ export interface DispatchSession {
 			locked?: boolean;
 			/** 目标模式 2.0：执行者模型（DSH 引擎不接委托执行，忽略）。 */
 			execModel?: string;
+			reviewerModel?: string;
 		},
 	): Promise<void>;
 	clearGoal(): Promise<void>;
@@ -1221,6 +1223,7 @@ export interface DispatchSession {
 		maxRounds?: number;
 		locked?: boolean;
 		execModel?: string;
+		reviewerModel?: string;
 	}): Promise<void>;
 	startLoop?(msg: {
 		goal: string;
@@ -1230,6 +1233,7 @@ export interface DispatchSession {
 		maxRounds?: number;
 		plannerModel?: string;
 		reviewerModel?: string;
+		executorModel?: string;
 		useReviewer?: boolean;
 		worktree?: boolean;
 		taskId?: string;

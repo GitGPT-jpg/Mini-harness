@@ -48,6 +48,7 @@ const MODELS = [
 	{ provider: "oneapi", id: "glm-4.6", family: "glm" },
 	{ provider: "other", id: "glm-4.5", family: "glm" },
 	{ provider: "oneapi", id: "qwen3", family: "qwen" },
+	{ provider: "oneapi", id: "deepseek-v4", family: "deepseek" },
 ];
 
 const PACKS = [
@@ -200,11 +201,17 @@ describe("新任务弹窗：验收方式三选一", () => {
 		mount(taskModal());
 		await openModal();
 		setValue($("#task-goal"), "修复单测");
-		setValue($("#task-planner"), "oneapi/glm-4.6");
-		setValue($("#task-reviewer"), "other/glm-4.5");
-		expect($(".cockpit-model-note.bad")).not.toBeNull();
-		expect(startBtn()!.disabled).toBe(true);
+		setValue($("#task-planner"), "oneapi/qwen3");
 		setValue($("#task-reviewer"), "oneapi/qwen3");
+		expect($(".cockpit-model-note.bad")!.textContent).toContain("规划模型与审查模型同属 qwen 家族");
+		expect(startBtn()!.disabled).toBe(true);
+		// 执行显式选 GLM-4.6 后，审查选同家族（换 provider 也算同家族）→ 执行 / 审查冲突
+		setValue($("#task-executor"), "oneapi/glm-4.6");
+		setValue($("#task-reviewer"), "other/glm-4.5");
+		expect($(".cockpit-model-note.bad")!.textContent).toContain("执行模型与审查模型同属 glm 家族");
+		expect(startBtn()!.disabled).toBe(true);
+		setValue($("#task-reviewer"), "oneapi/deepseek-v4");
+		expect($(".cockpit-model-note.bad")).toBeNull();
 		expect(startBtn()!.disabled).toBe(false);
 	});
 
@@ -222,6 +229,7 @@ describe("新任务弹窗：验收方式三选一", () => {
 				mode: "code",
 				maxRounds: 5,
 				criteria: "npm test 退出码 0",
+				executorModel: "auto",
 				useReviewer: true,
 				reviewerModel: "oneapi/qwen3",
 				worktree: true,
@@ -247,6 +255,7 @@ describe("新任务弹窗：验收方式三选一", () => {
 				mode: "code",
 				maxRounds: 5,
 				validateCmd: "npm test",
+				executorModel: "auto",
 				useReviewer: false,
 				worktree: false,
 			},
@@ -267,6 +276,7 @@ describe("新任务弹窗：验收方式三选一", () => {
 				goal: "优化吞吐",
 				mode: "code",
 				maxRounds: 5,
+				executorModel: "auto",
 				useReviewer: true,
 				primaryMetric: "tps",
 				metricDirection: "maximize",
@@ -299,6 +309,7 @@ describe("新任务弹窗：验收方式三选一", () => {
 				mode: "code",
 				maxRounds: 6,
 				criteria: "tps 越大越好",
+				executorModel: "auto",
 				useReviewer: true,
 				primaryMetric: "tps",
 				metricDirection: "maximize",
@@ -317,12 +328,15 @@ describe("新任务弹窗：验收方式三选一", () => {
 		expect($("#task-exec")).not.toBeNull();
 		expect($("#task-rounds")).not.toBeNull();
 		expect(document.body.textContent).toContain("GLM-4.6");
-		// 执行模型跟随主对话 = 自己审自己 → 提醒
-		expect($(".cockpit-model-note.warn")).not.toBeNull();
+		// 旧服务端（goal_status 没有 reviewerModel）：审查=主对话，不出审查下拉；
+		// 执行跟随主对话 = 执行与审查同家族 → 冲突、开始键置灰
+		expect($("#task-llm-reviewer")).toBeNull();
 		setValue($("#task-goal"), "写一份发布说明");
 		setValue($("#task-criteria"), "覆盖全部改动");
+		expect($(".cockpit-model-note.bad")!.textContent).toContain("执行模型与审查模型同属 glm 家族");
+		expect(startBtn()!.disabled).toBe(true);
 		setValue($("#task-exec"), "oneapi/qwen3");
-		expect($(".cockpit-model-note.warn")).toBeNull();
+		expect($(".cockpit-model-note.bad")).toBeNull();
 		click(startBtn());
 		expect(sent).toEqual([
 			{ type: "set_goal_prefs", maxRounds: 3, reviewModel: "", execModel: "oneapi/qwen3" },
@@ -342,9 +356,12 @@ describe("新任务弹窗：验收方式三选一", () => {
 		click($('input[name="task-accept"][value="llm"]'));
 		expect($<HTMLButtonElement>(".task-refine")!.disabled).toBe(true);
 		setValue($("#task-goal"), "做个小工具");
+		// 执行与审查同家族时细化也不放行（向导结束会自动开跑）
+		expect($<HTMLButtonElement>(".task-refine")!.disabled).toBe(true);
+		setValue($("#task-exec"), "oneapi/qwen3");
 		click($(".task-refine"));
 		expect(sent).toEqual([
-			{ type: "set_goal_prefs", maxRounds: 3, reviewModel: "", execModel: "" },
+			{ type: "set_goal_prefs", maxRounds: 3, reviewModel: "", execModel: "oneapi/qwen3" },
 			{ type: "start_goal_wizard", text: "做个小工具", maxRounds: 3, locked: true },
 		]);
 		expect($(".task-modal")).toBeNull();
@@ -423,6 +440,7 @@ const detailOf = (p: Partial<LoopRunDetail> = {}): LoopRunDetail => ({
 	workspace: "/tmp/demo",
 	worktreeBranch: null,
 	worktreeCommitted: false,
+	worktree: null,
 	plannerOutput: "",
 	plan: "",
 	summary: "",
@@ -679,7 +697,7 @@ describe("任务详情面板（D-12-3）", () => {
 		expect(modal.textContent).toContain("评审理由");
 		expect(modal.textContent).toContain("分支 mini-harness/20261030120000-aaa111 · 已提交");
 		expect(modal.querySelector(".run-detail-hint")).toBeNull();
-		expect(btnTexts(modal.querySelector(".run-detail-acts")!)).toEqual(["用同一目标重新开始", "关闭"]);
+		expect(btnTexts(modal.querySelector(".run-detail-acts")!)).toEqual(["用同一目标重新开始", "删除任务", "关闭"]);
 	});
 
 	it("LLM 模式：代码验证不适用，不画验收输出", async () => {
@@ -773,6 +791,207 @@ describe("任务详情面板（D-12-3）", () => {
 	});
 });
 
+describe("任务详情：删除（复用任务台的 runs/delete）", () => {
+	const TREE = `/data/mini-harness/runs/${RUN_ERR}/worktree`;
+	type Answer = { status: number; body: unknown } | "network";
+	/** 详情按 detail() 应答；删除请求记下 body，按 answer() 应答（network = fetch 抛错）。 */
+	const deleteFetch = (detail: () => LoopRunDetail, answer: () => Answer) => {
+		const posts: unknown[] = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: unknown, init?: { body?: string }) => {
+				const url = String(input);
+				if (url.includes("runs/delete")) {
+					posts.push(JSON.parse(init?.body ?? "{}"));
+					const r = answer();
+					if (r === "network") throw new Error("offline");
+					return { ok: r.status >= 200 && r.status < 300, status: r.status, json: async () => r.body };
+				}
+				if (/runs\/[^/]+\/detail/.test(url)) return { ok: true, status: 200, json: async () => detail() };
+				return { ok: true, status: 200, json: async () => ({ models: MODELS }) };
+			}),
+		);
+		return posts;
+	};
+	const openDelete = async () => {
+		await openDetail(RUN_ERR);
+		click(btn("删除任务", $(".run-detail")!));
+		return $(".run-detail-delete")!;
+	};
+	const confirmBtn = () => $<HTMLButtonElement>(".run-detail-delete-confirm")!;
+	const press = (el: HTMLElement | null) =>
+		act(async () => {
+			el?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+			await new Promise((r) => setTimeout(r, 0));
+		});
+
+	it("干净的已停止任务：确认页列出会移除与会保留的内容，确认后发 runs/delete 并关闭详情", async () => {
+		const posts = deleteFetch(
+			() =>
+				detailOf({
+					worktreeBranch: `mini-harness/${RUN_ERR}`,
+					worktree: { path: TREE, exists: true, dirty: false, uncommitted: 0 },
+					clusterBinding: { status: "pinned", context: "dev-cluster" },
+				} as Partial<LoopRunDetail>),
+			() => ({ status: 200, body: { ok: true, runId: RUN_ERR, worktreeRemoved: true, checkpointRefsRemoved: [] } }),
+		);
+		mount(runDetail(null));
+		const panel = await openDelete();
+		const text = panel.textContent ?? "";
+		expect(text).toContain("运行记录：状态、各轮验收证据、过程记录和操作记录");
+		expect(text).toContain(`任务工作树目录 ${TREE}`);
+		expect(text).toContain(`refs/mini-harness/checkpoints/${RUN_ERR}-*`);
+		expect(text).toContain("这个任务固定的集群配置快照（context dev-cluster）");
+		expect(text).toContain(
+			`会保留：分支 mini-harness/${RUN_ERR} 及其已提交的内容；项目目录 /tmp/demo 里的文件不受影响。`,
+		);
+		expect(text).toContain("删除后不能撤销。");
+		expect(confirmBtn().disabled).toBe(false);
+		await press(confirmBtn());
+		await tick();
+		expect(posts).toEqual([{ runId: RUN_ERR }]);
+		expect(sent).toContainEqual({ type: "refresh_worktree" });
+		expect($(".run-detail")).toBeNull();
+	});
+
+	it("停止待确认：说明还在等什么，确认按钮不可用，不发删除请求", async () => {
+		const posts = deleteFetch(
+			() =>
+				detailOf({
+					status: "active",
+					stage: "stopping",
+					stopReason: "user-stop",
+					stopRequestedAt: AT,
+					journal: [
+						{
+							at: AT,
+							event: "stop-requested",
+							cancellation: {
+								hadActive: true,
+								allConfirmed: false,
+								cancelledOpIds: [],
+								blockedReasons: ["op-1: exit unconfirmed"],
+							},
+							turn: { inFlight: true, abortError: null },
+							legacyUnverified: [4242],
+						},
+					],
+				}),
+			() => ({ status: 200, body: { ok: true } }),
+		);
+		mount(runDetail(null));
+		const panel = await openDelete();
+		const block = panel.querySelector(".run-detail-delete-block")!.textContent ?? "";
+		expect(block).toContain("还在等：执行回合结束 · 1 个验证 / 评审进程确认退出 · 旧执行进程（PID 4242）核实身份");
+		expect(block).toContain("确认退出后才能删除");
+		expect(confirmBtn().disabled).toBe(true);
+		await press(confirmBtn());
+		expect(posts).toEqual([]);
+	});
+
+	it("工作树有未提交改动：默认拦下并给出保留改动的办法；提交后「重新检查」即可删除；状态不明同样拦下", async () => {
+		let tree: { path: string; exists: boolean; dirty: boolean | null; uncommitted: number } = {
+			path: TREE,
+			exists: true,
+			dirty: true,
+			uncommitted: 2,
+		};
+		const posts = deleteFetch(
+			() =>
+				detailOf({
+					worktreeBranch: `mini-harness/${RUN_ERR}`,
+					worktree: tree,
+					clusterBinding: { status: "none", context: null },
+				} as Partial<LoopRunDetail>),
+			() => ({ status: 200, body: { ok: true } }),
+		);
+		mount(runDetail(null));
+		const panel = await openDelete();
+		const block = panel.querySelector(".run-detail-delete-block")!.textContent ?? "";
+		expect(panel.textContent).not.toContain("集群配置快照");
+		expect(block).toContain(`任务工作树 ${TREE} 有 2 处未提交改动，默认不删除`);
+		expect(block).toContain(`先提交到分支 mini-harness/${RUN_ERR}（删除任务不会删这个分支）`);
+		expect(panel.querySelector(".run-detail-delete-cmd")!.textContent).toBe(
+			`git -C "${TREE}" add -A && git -C "${TREE}" commit -m "保留任务改动"`,
+		);
+		expect(confirmBtn().disabled).toBe(true);
+		tree = { ...tree, dirty: null, uncommitted: 0 };
+		await press($(".run-detail-delete-recheck"));
+		await tick();
+		expect($(".run-detail-delete-block")!.textContent).toContain(`无法确认任务工作树 ${TREE} 有没有未提交改动`);
+		expect(confirmBtn().disabled).toBe(true);
+		tree = { ...tree, dirty: false };
+		await press($(".run-detail-delete-recheck"));
+		await tick();
+		expect($(".run-detail-delete-block")).toBeNull();
+		expect(confirmBtn().disabled).toBe(false);
+		expect(posts).toEqual([]);
+	});
+
+	it("确认页打开后工作树变脏：点确认时先重拉详情并拦下，不发删除请求", async () => {
+		let dirty = false;
+		const posts = deleteFetch(
+			() =>
+				detailOf({
+					worktreeBranch: `mini-harness/${RUN_ERR}`,
+					worktree: { path: TREE, exists: true, dirty, uncommitted: dirty ? 1 : 0 },
+				}),
+			() => ({ status: 200, body: { ok: true } }),
+		);
+		mount(runDetail(null));
+		await openDelete();
+		await tick();
+		expect(confirmBtn().disabled).toBe(false);
+		dirty = true;
+		await press(confirmBtn());
+		await tick();
+		expect(posts).toEqual([]);
+		expect($(".run-detail-delete-block")!.textContent).toContain("有 1 处未提交改动，默认不删除");
+		expect($(".run-detail")).not.toBeNull();
+	});
+
+	it("删除失败：显示服务端拒绝原因与已移除的部分，详情和记录都还在；新错误码原样显示", async () => {
+		let answer: Answer = { status: 409, body: { ok: false, code: "active", runId: RUN_ERR, error: "run is active" } };
+		const posts = deleteFetch(
+			() => detailOf(),
+			() => answer,
+		);
+		mount(runDetail(null));
+		await openDelete();
+		await press(confirmBtn());
+		await tick();
+		const error = () => $(".run-detail-delete-error")?.textContent;
+		expect(error()).toBe("删除失败：服务端拒绝，任务仍是运行状态（active）。记录仍保留，处理后可以重试。");
+		expect($(".run-detail")).not.toBeNull();
+		answer = {
+			status: 500,
+			body: {
+				ok: false,
+				code: "cleanup-error",
+				runId: RUN_ERR,
+				error: "EBUSY: resource busy",
+				worktreeRemoved: true,
+				checkpointRefsRemoved: [`refs/mini-harness/checkpoints/${RUN_ERR}-1`],
+			},
+		};
+		await press(confirmBtn());
+		await tick();
+		expect(error()).toBe(
+			"删除失败：清理时出错（cleanup-error）：EBUSY: resource busy。记录仍保留，处理后可以重试。 已移除：工作树目录 · 1 个检查点引用。",
+		);
+		answer = { status: 409, body: { ok: false, code: "dirty-worktree", error: "worktree has 2 uncommitted changes" } };
+		await press(confirmBtn());
+		await tick();
+		expect(error()).toContain("服务端拒绝（dirty-worktree）：worktree has 2 uncommitted changes");
+		answer = "network";
+		await press(confirmBtn());
+		await tick();
+		expect(error()).toBe("删除请求没有送到服务端（网络或服务不可用），记录未删除。");
+		expect(posts).toHaveLength(4);
+		expect($(".run-detail")).not.toBeNull();
+	});
+});
+
 describe("任务台：代码 loop 的行（D-12-3）", () => {
 	const brief = (p: Partial<LoopRunBrief>): LoopRunBrief => ({
 		runId: RUN_OK,
@@ -795,7 +1014,7 @@ describe("任务台：代码 loop 的行（D-12-3）", () => {
 		...p,
 	});
 
-	it("每行显示人话状态；点行打开任务详情；点删除只删不开", async () => {
+	it("每行显示人话状态；点行打开任务详情；点删除打开删除确认，确认后才删", async () => {
 		const RUNS = [
 			brief({}),
 			brief({
@@ -831,12 +1050,21 @@ describe("任务台：代码 loop 的行（D-12-3）", () => {
 		]);
 		expect(rows[0]!.className).toContain("ok");
 		expect(rows[1]!.className).toContain("warn");
-		// 删除：确认后发删除请求，不打开详情
+		// 删除：先打开任务详情里的删除确认（说明会移除什么），确认后才发删除请求；成功后详情关掉
 		await act(async () => {
 			rows[1]!.querySelector(".task-desk-del")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 			await new Promise((r) => setTimeout(r, 0));
 		});
-		expect(confirm).toHaveBeenCalledTimes(1);
+		await tick();
+		expect(confirm).not.toHaveBeenCalled();
+		expect(calls.some((u) => u.includes("runs/delete"))).toBe(false);
+		const panel = $(".run-detail .run-detail-delete")!;
+		expect(panel.textContent).toContain("运行记录：状态、各轮验收证据、过程记录和操作记录");
+		await act(async () => {
+			panel.querySelector(".run-detail-delete-confirm")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+			await new Promise((r) => setTimeout(r, 0));
+		});
+		await tick();
 		expect(calls.some((u) => u.includes("runs/delete"))).toBe(true);
 		expect($(".run-detail")).toBeNull();
 		// 点行：打开详情
@@ -859,5 +1087,147 @@ describe("任务台：代码 loop 的行（D-12-3）", () => {
 			await new Promise((r) => setTimeout(r, 0));
 		});
 		expect($(".run-detail")).not.toBeNull();
+	});
+});
+
+describe("新任务弹窗：审查模型可选（服务端支持 reviewerModel）", () => {
+	const roleStub = (body: { executor?: string; reviewer?: string }) => {
+		const fam0 = (s: string) => (s.includes("glm") ? "glm" : s.includes("qwen") ? "qwen" : "deepseek");
+		// 与服务端联立分配同口径：执行自动 = 主对话 GLM-4.6；审查自动 = 避开执行家族的第一个
+		const executor = !body.executor || body.executor === "auto" ? "oneapi/glm-4.6" : body.executor;
+		const reviewer =
+			!body.reviewer || body.reviewer === "auto"
+				? fam0(executor) === "glm"
+					? "oneapi/qwen3"
+					: "oneapi/glm-4.6"
+				: body.reviewer;
+		const fam = (s: string) => (s.includes("glm") ? "glm" : s.includes("qwen") ? "qwen" : "deepseek");
+		const view = (s: string, explicit: boolean) => ({
+			provider: "oneapi",
+			id: s.split("/")[1],
+			family: fam(s),
+			source: explicit ? "explicit" : s === "oneapi/glm-4.6" ? "main" : "auto",
+		});
+		const same = fam(reviewer) === fam(executor);
+		return {
+			ok: !same,
+			roles: {
+				planner: view("oneapi/glm-4.6", false),
+				executor: view(executor, !!body.executor && body.executor !== "auto"),
+				reviewer: view(reviewer, !!body.reviewer && body.reviewer !== "auto"),
+			},
+			conflicts: same ? [{ roles: ["executor", "reviewer"], family: fam(executor), models: [executor, reviewer] }] : [],
+			error: null,
+			suggestion: same ? { role: "reviewer", provider: "oneapi", id: "qwen3", family: "qwen" } : null,
+		};
+	};
+
+	it("三个角色都可选：自动联立出三个实际模型；显式执行与审查同家族 → 指出冲突并一键改选；set_goal 带执行与审查", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string, init?: { body?: string }) => ({
+				ok: true,
+				json: async () =>
+					String(url).includes("/roles") ? roleStub(JSON.parse(init?.body ?? "{}")) : { models: MODELS },
+			})),
+		);
+		const settle = () => act(async () => void (await new Promise((r) => setTimeout(r, 220))));
+		mount(
+			createElement(TaskModal, {
+				goal: { ...goal, reviewerModel: null } as GoalStatus,
+				mainModel: { id: "glm-4.6", name: "GLM-4.6", provider: "oneapi" },
+				goalModeEnabled: true,
+			}),
+		);
+		await openModal();
+		click($('input[name="task-accept"][value="llm"]'));
+		setValue($("#task-goal"), "写一份发布说明");
+		expect($("#task-llm-planner")).not.toBeNull();
+		expect($<HTMLSelectElement>("#task-exec")!.value).toBe("auto");
+		expect($<HTMLSelectElement>("#task-llm-reviewer")!.value).toBe("auto");
+		await settle();
+		// 全自动：执行 = 主对话 GLM-4.6，审查自动避开到 qwen3
+		expect($(".cockpit-model-note.bad")).toBeNull();
+		expect($(".task-role-summary")!.textContent).toContain("审查：qwen3（qwen · 自动）");
+		setValue($("#task-exec"), "oneapi/glm-4.6");
+		setValue($("#task-llm-reviewer"), "other/glm-4.5");
+		await settle();
+		expect($(".cockpit-model-note.bad")!.textContent).toContain(
+			"执行模型 oneapi/glm-4.6 与审查模型 other/glm-4.5 同属 glm 家族",
+		);
+		expect(startBtn()!.disabled).toBe(true);
+		expect($(".task-role-fix")!.textContent).toBe("审查改用 qwen3");
+		click($(".task-role-fix"));
+		expect($<HTMLSelectElement>("#task-llm-reviewer")!.value).toBe("oneapi/qwen3");
+		await settle();
+		expect($(".cockpit-model-note.bad")).toBeNull();
+		expect($(".task-role-summary")!.textContent).toContain("审查：qwen3（qwen · 指定）");
+		expect(startBtn()!.disabled).toBe(false);
+		click(startBtn());
+		expect(sent).toEqual([
+			{
+				type: "set_goal_prefs",
+				maxRounds: 3,
+				reviewModel: "",
+				execModel: "oneapi/glm-4.6",
+				reviewerModel: "oneapi/qwen3",
+			},
+			{
+				type: "set_goal",
+				goal: "写一份发布说明",
+				maxRounds: 3,
+				locked: true,
+				execModel: "oneapi/glm-4.6",
+				reviewerModel: "oneapi/qwen3",
+			},
+		]);
+	});
+
+	it("可用家族不足：点名缺哪个角色、列出要避开的家族，启动保持禁用", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string) => ({
+				ok: true,
+				json: async () =>
+					String(url).includes("/roles")
+						? {
+								ok: false,
+								mode: "code-review",
+								roles: {
+									planner: { provider: "oneapi", id: "qwen3", family: "qwen", source: "auto" },
+									executor: { provider: "oneapi", id: "glm-4.6", family: "glm", source: "main" },
+									reviewer: null,
+								},
+								conflicts: [],
+								error: { code: "no-candidate", role: "reviewer" },
+								suggestion: null,
+							}
+						: { models: MODELS },
+			})),
+		);
+		mount(taskModal());
+		await openModal();
+		setValue($("#task-goal"), "跑测试");
+		await act(async () => void (await new Promise((r) => setTimeout(r, 220))));
+		expect($(".cockpit-model-note.bad")!.textContent).toBe(
+			"没有可用的审查模型：需要一个不属于 glm / qwen 家族的模型，请在「模型与服务商」里添加并配置密钥。",
+		);
+		expect($(".task-role-fix")).toBeNull();
+		expect(startBtn()!.disabled).toBe(true);
+	});
+
+	it("切到仅代码验收：残留的审查选择不进请求、不阻断启动", async () => {
+		mount(taskModal());
+		await openModal();
+		setValue($("#task-goal"), "跑测试");
+		setValue($("#task-executor"), "oneapi/glm-4.6");
+		setValue($("#task-reviewer"), "other/glm-4.5");
+		expect(startBtn()!.disabled).toBe(true);
+		click($('input[name="task-accept"][value="code"]'));
+		expect($("#task-reviewer")).toBeNull();
+		expect(startBtn()!.disabled).toBe(false);
+		click(startBtn());
+		expect(sent[0]).toMatchObject({ type: "loop_start_request", useReviewer: false, executorModel: "oneapi/glm-4.6" });
+		expect(sent[0]).not.toHaveProperty("reviewerModel");
 	});
 });

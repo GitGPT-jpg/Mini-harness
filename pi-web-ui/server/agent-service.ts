@@ -55,6 +55,7 @@ import {
 	unmarkRunTurnDispatch,
 	stopRunExternal,
 	canContinueLoop,
+	listRuns,
 	loadLoopState,
 	loadLoopStateForRecovery,
 	observeRunOperation,
@@ -188,6 +189,8 @@ import { PlanManager } from "./plan-manager.js";
 import { buildPlanModePrompt, planModeDenial, planModeNoticeText, PLAN_MODE_BLOCKED_TOOL_NAMES } from "./plan-mode.js";
 import { DELEGATION_SYSTEM_PROMPT, delegateNoticeText } from "./delegate-mode.js";
 import { goalReviewDenial, shouldDeferPromptForReview } from "./goal-review-gate.js";
+import { resolveTaskRoles, type RoleRequest, type RoleResolution } from "./loop/model-roles.js";
+import { activeClusterConfig } from "./loop/cluster-config.js";
 import { readPlanModeFromSession, readPlanFromSession } from "./permission-preset.js";
 import { readDelegateModeFromSession } from "./permission-preset.js";
 
@@ -375,6 +378,32 @@ const UI_MESSAGE_CACHE_CAP = 4096;
 
 /** mini-harness Loop：落盘的 run 状态 → 快照里的 conv.loop。事件路由、服务端建 run、续跑共用
  *  这一个口径（D-12-1）；评审理由走 reviewBrief 截断，与 /api/mini-harness/runs 同源。 */
+/** 新任务角色解析（server/loop/model-roles.ts）：模型目录与换模型用的是同一个 sharedModelRuntime；
+ *  缺运行时或会话（未就绪 / 单测替身）时返回 undefined，调用方按旧路径处理。 */
+function resolveRolesForSession(
+	runtime:
+		| {
+				getModel(p: string, id: string): unknown;
+				getModels(): readonly unknown[];
+				getAvailableSnapshot(): readonly unknown[];
+		  }
+		| undefined,
+	session: { model?: unknown } | undefined,
+	req: RoleRequest,
+): RoleResolution | undefined {
+	if (!runtime || !session) return undefined;
+	type M = { provider?: string; id: string };
+	return resolveTaskRoles(
+		{
+			find: (provider, id) => runtime.getModel(provider, id) as M | undefined,
+			getAll: () => [...runtime.getModels()] as M[],
+			getAvailable: () => [...runtime.getAvailableSnapshot()] as M[],
+		},
+		(session.model as M | undefined) ?? null,
+		req,
+	);
+}
+
 function loopUiFromState(st: LoopState): LoopUiState {
 	const review = reviewBrief(st.lastReview);
 	return {
@@ -880,6 +909,53 @@ export class ClientSession {
 		return (conversationId ? this.convs.get(conversationId) : this.convs.get(this.activeId))?.cwd ?? this.cwd;
 	}
 
+	/** 会话 sessionId → 绑定了集群配置的代码 loop run（startLoop / 续跑时登记；run 不再 active 即失效）。
+	 *  访问处用 ?.：单测会把 startLoop / resumeLoop 挂到不带实例字段的替身 this 上调用。 */
+	private readonly loopRunBySession = new Map<string, string>();
+
+	/**
+	 * 该会话里 Agent 起的子进程（Bash / 终端）该用的环境：属于运行中任务（代码 loop 的执行会话、
+	 * 目标的执行与审查对话）时换成任务绑定的集群配置，其余照当前配置（server/loop/cluster-config.ts）。
+	 */
+	private clusterEnvForConversation(convId: string | undefined, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+		const cc = activeClusterConfig();
+		const conv = convId ? this.convs.get(convId) : undefined;
+		if (!cc || !conv) return env;
+		if ((conv.subagentType === "goal-executor" || conv.subagentType === "goal-reviewer") && conv.parentId) {
+			return cc.envForTask(`goal:${conv.parentId}`, env);
+		}
+		const sid = conv.session?.sessionId;
+		// 重启后未经 resumeLoop 的接续（例如用户直接在原会话继续）：按 sessionId 精确找活跃 run 补登记。
+		const runId = sid ? (this.loopRunBySession?.get(sid) ?? this.activeRunIdForSession(sid)) : undefined;
+		if (runId) {
+			let active = false;
+			try {
+				active = loadLoopState(runId)?.status === "active";
+			} catch {
+				// 状态读不出来时按仍在运行处理：宁可用绑定的配置，也不落到当前全局配置上。
+				active = true;
+			}
+			if (active) return cc.envForTask(`run:${runId}`, env);
+		}
+		return env;
+	}
+
+	/** sessionId → 活跃 run 的精确查找（5 秒缓存：每次起进程都扫 run 目录太贵）。 */
+	private activeRunLookup = new Map<string, { runId: string | null; at: number }>();
+	private activeRunIdForSession(sid: string): string | undefined {
+		const hit = this.activeRunLookup?.get(sid);
+		if (hit && Date.now() - hit.at < 5000) return hit.runId ?? undefined;
+		let runId: string | null = null;
+		try {
+			runId = listRuns().find((r) => r.status === "active" && r.sessionId === sid)?.runId ?? null;
+		} catch {
+			runId = null;
+		}
+		this.activeRunLookup?.set(sid, { runId, at: Date.now() });
+		if (runId) this.loopRunBySession?.set(sid, runId);
+		return runId ?? undefined;
+	}
+
 	private makeTerminalManager(conversationId: string, cwd: string): TerminalManager {
 		const mgr = new TerminalManager(
 			(msg) => this.emitTerminal(conversationId, msg),
@@ -887,6 +963,15 @@ export class ClientSession {
 			// issue #91：终端输入错误按客户端 UI 语言出中英（英文默认）。
 			() => this.getLang(),
 		);
+		// 属于运行中任务的终端用任务绑定的集群配置：任务专属会话（目标执行 / 审查、loop 执行者）里的
+		// 全部终端，以及主对话里由 Agent 发起的终端；主对话里用户手开的终端照当前配置。
+		mgr.envFor = (env, { agent }) => {
+			const type = this.convs.get(conversationId)?.subagentType;
+			const dedicated = type === "goal-executor" || type === "goal-reviewer" || type === "loop-executor";
+			if (!agent && !dedicated) return env;
+			const out = this.clusterEnvForConversation(conversationId, env);
+			return Object.fromEntries(Object.entries(out).filter((e): e is [string, string] => typeof e[1] === "string"));
+		};
 		// 终端活力检测：AI 触碰过的终端静默 ≥ 阈值（PI_WEB_TERMINAL_IDLE_MS，
 		// 默认 15s）且该对话正在运行时，注入一条 steer 消息唤醒 AI 去检查。
 		mgr.onAgentIdle = (terminalId, idleMs, title, lastLines) =>
@@ -2539,8 +2624,10 @@ export class ClientSession {
 				} catch {
 					usage = undefined;
 				}
+				const m = conv.session.model as { provider?: string; id?: string } | undefined;
 				return {
 					text,
+					model: m?.id ? (m.provider ? `${m.provider}/${m.id}` : m.id) : undefined,
 					errorSnippet: extractErrorSnippetFromSession(conv.session, text),
 					streaming,
 					lastTool,
@@ -2604,6 +2691,20 @@ export class ClientSession {
 			},
 			hasConv: (convId) => this.convs.has(convId),
 			roleDeadlineMs: () => this.getBaseToolWatchdogTimeoutMs(),
+			// 「仅模型评审」的角色解析：模型目录与 spawnRoleAgent 换模型用的是同一个 sharedModelRuntime；
+			// 执行默认 = 子代理默认模型（设置）→ 主对话模型，与 spawnSubagentConversation 的回落同序。
+			bindGoalCluster: async (convId) => {
+				await activeClusterConfig()?.bindTask(`goal:${convId}`);
+			},
+			releaseGoalCluster: (convId) => activeClusterConfig()?.releaseTask(`goal:${convId}`),
+			// 执行的旧默认（空）= 子代理默认模型 → 主对话模型，与 spawnSubagentConversation 的回落同序。
+			resolveGoalRoles: (convId, req) =>
+				resolveRolesForSession(this.sharedModelRuntime, this.convs.get(convId)?.session, {
+					mode: "llm",
+					planner: req.planner ?? null,
+					executor: req.executor || this.settingsSvc.current.subagentDefaultModel || null,
+					reviewer: req.reviewer ?? null,
+				}),
 		});
 
 		this.modelAdmin = new ModelAdminService({
@@ -3134,7 +3235,12 @@ export class ClientSession {
 							withWorkspaceSnapshotGate(
 								makeAdaptiveBashTool(
 									// issue #91：bash 返回按客户端 UI 语言出中英（英文默认）。
-									makeKillableBashTool(effectiveCwd, this.bashKills, () => this.getLang()),
+									makeKillableBashTool(
+										effectiveCwd,
+										this.bashKills,
+										() => this.getLang(),
+										(env) => this.clusterEnvForConversation(ownerId, env),
+									),
 									makeTerminalBashTool(terminals, {
 										cwd: effectiveCwd,
 										// 设置开 = 用终端；此分支里 persist 未显式给时默认一次性（false）。
@@ -6891,7 +6997,11 @@ export class ClientSession {
 	 *  缺省才回退活动对话 —— 与 planModeOf / delegateModeOf 同口径。 */
 	private goalReviewTurnOf(ownerId: string | undefined): boolean {
 		const id = ownerId ?? this.activeId;
-		return (this.convs.get(id) as unknown as GoalConversation | undefined)?.awaitingVerdict != null;
+		const conv = this.convs.get(id);
+		// 显式审查模型的审查角色对话（spawnRoleAgent role=reviewer）整个生命周期都只读：
+		// subagentType 在首回合之前就已写入，不存在「首个工具调用早于闸门」的窗口。
+		if (conv?.subagentType === "goal-reviewer") return true;
+		return (conv as unknown as GoalConversation | undefined)?.awaitingVerdict != null;
 	}
 
 	/** 等待该会话正在并发生成的影子快照完成，确保写操作发生在快照完成之后。 */
@@ -12338,6 +12448,8 @@ export class ClientSession {
 			locked?: boolean;
 			/** 目标模式 2.0：执行者模型。 */
 			execModel?: string;
+			/** 审查者模型（空 = 主对话审查）。 */
+			reviewerModel?: string;
 			autoStart?: boolean;
 		},
 	): Promise<void> {
@@ -12387,6 +12499,7 @@ export class ClientSession {
 		maxRounds?: number;
 		plannerModel?: string;
 		reviewerModel?: string;
+		executorModel?: string;
 		useReviewer?: boolean;
 		worktree?: boolean;
 		taskId?: string;
@@ -12461,6 +12574,24 @@ export class ClientSession {
 		// 显式项目位置与会话目录不同：模型工具必须落在 workspace，否则「模型改会话目录、验收查 workspace」不一致。
 		const sessionCwd = conv.runtime?.cwd || conv.cwd || this.cwd;
 		const workspaceDiffers = !!workspace && !!sessionCwd && resolve(workspace) !== resolve(sessionCwd);
+		// 三个角色联立解析（与新任务预检同一套规则）：冲突、缺候选、模型失效都在建 run 之前拒绝，不发模型请求。
+		const roles = resolveRolesForSession(this.sharedModelRuntime, conv.session, {
+			mode: useReviewer === false ? "code" : "code-review",
+			planner: msg.plannerModel,
+			executor: msg.executorModel,
+			reviewer: msg.reviewerModel,
+		});
+		if (roles && !roles.ok) {
+			conv.loop = { kind: "request-failed", taskId, goal, reason: roles.message, createdAt: new Date().toISOString() };
+			this.emitNotice("warning", `Loop 启动失败：${roles.message}`);
+			this.flushSnapshot();
+			return;
+		}
+		const roleSpec = (m: { provider?: string; id: string } | null | undefined) =>
+			m ? (m.provider ? `${m.provider}/${m.id}` : m.id) : undefined;
+		// 执行不是主对话模型 → 在独立执行会话里跑（主对话的聊天模型不变）。
+		const executorSpec =
+			roles?.roles.executor && roles.roles.executor.source !== "main" ? (roleSpec(roles.roles.executor) ?? null) : null;
 		// 上下文发现：只读整理已确认/缺失/冲突，不执行工作区命令；结果注入执行提示词（含 worktree 执行者）。
 		let discoveryLines: string[] = [];
 		let taskContext: ReturnType<typeof resolveTaskContext> | undefined;
@@ -12512,8 +12643,9 @@ export class ClientSession {
 			mode: msg.mode,
 			maxRounds,
 			useReviewer,
-			plannerModel: msg.plannerModel,
-			reviewerModel: msg.reviewerModel,
+			// 联立解析后的实际模型显式传给运行时，规划 / 审查与预览展示的保持一致。
+			plannerModel: roles ? roleSpec(roles.roles.planner) : msg.plannerModel,
+			reviewerModel: roles ? (useReviewer === false ? undefined : roleSpec(roles.roles.reviewer)) : msg.reviewerModel,
 			worktree: msg.worktree,
 			artifactRoots: roots,
 			taskId,
@@ -12532,6 +12664,9 @@ export class ClientSession {
 			return;
 		}
 		const st = created.st;
+		// 任务启动即绑定当前实际使用的集群配置（首个命令之前）；之后导入 / 清除不影响本 run。
+		await activeClusterConfig()?.bindTask(`run:${st.runId}`);
+		if (conv.session?.sessionId) this.loopRunBySession?.set(conv.session.sessionId, st.runId);
 		conv.loop = loopUiFromState(st);
 		this.flushSnapshot();
 		const lines = [
@@ -12580,17 +12715,23 @@ export class ClientSession {
 		);
 		lines.push("不要向用户提问。");
 		if (st.worktreeBranch && st.worktreeDir) {
+			// 首页工作树横幅要立即列出这个任务的工作树
+			void this.refreshWorktreeInfo?.();
 			// worktree 执行者会话：模型工具/终端/validator/reviewer 全落独立 worktree，不污染 base 工作区
-			await this.startWorktreeExecutor(conv, st, lines.join("\n"));
-		} else if (workspaceDiffers) {
-			// 显式项目位置 ≠ 会话目录：也起绑定 workspace 的执行者，保证「模型工具/验收」同一工作区。
+			await this.startWorktreeExecutor(conv, st, lines.join("\n"), executorSpec);
+		} else if (workspaceDiffers || executorSpec) {
+			// 显式项目位置 ≠ 会话目录，或执行模型不是主对话模型：起绑定 workspace 的执行者会话，
+			// 保证「模型工具/验收」同一工作区，且主对话的聊天模型不变。
 			await this.startExecutorInWorkspace(
 				conv,
 				st,
 				lines.join("\n"),
-				`工作目录：${st.workspace}（显式项目位置，与当前会话目录不同）。你的 shell/终端/文件工具默认就在这个目录，所有修改都直接做在这里。`,
+				workspaceDiffers
+					? `工作目录：${st.workspace}（显式项目位置，与当前会话目录不同）。你的 shell/终端/文件工具默认就在这个目录，所有修改都直接做在这里。`
+					: `工作目录：${st.workspace}。你的 shell/终端/文件工具默认就在这个目录，所有修改都直接做在这里。`,
 				"执行环境绑定失败",
 				"workspace-executor-error",
+				executorSpec,
 			);
 		} else {
 			// 投递前登记 run 回合：停止要能取消该 run 绑定会话的模型回合（扩展在
@@ -12602,7 +12743,12 @@ export class ClientSession {
 
 	/** worktree 模式：起一个绑定在 st.workspace 的执行者子代理跑 loop，模型工具/终端都落 worktree。
 	 *  失败显式报错并停 run，绝不静默回退到 base 工作区（否则「模型改原目录、验收查 worktree」不一致）。 */
-	private async startWorktreeExecutor(conv: Conversation, st: LoopState, prompt: string): Promise<void> {
+	private async startWorktreeExecutor(
+		conv: Conversation,
+		st: LoopState,
+		prompt: string,
+		executorModel: string | null = null,
+	): Promise<void> {
 		return this.startExecutorInWorkspace(
 			conv,
 			st,
@@ -12610,6 +12756,7 @@ export class ClientSession {
 			`工作目录：${st.workspace}（独立 git worktree，分支 ${st.worktreeBranch}）。你的 shell/终端/文件工具默认就在这个目录，所有修改都直接做在这里。`,
 			"worktree 执行环境绑定失败",
 			"worktree-executor-error",
+			executorModel,
 		);
 	}
 
@@ -12622,6 +12769,8 @@ export class ClientSession {
 		workspaceNote: string,
 		errorLabel: string,
 		stopReason: string,
+		/** 执行模型（"provider/id"）；null = 跟随主对话。 */
+		executorModel: string | null = null,
 	): Promise<void> {
 		try {
 			// deferKickoff：先建会话、重绑 run.sessionId，再触发首回合 —— 否则首回合的
@@ -12631,7 +12780,7 @@ export class ClientSession {
 				"loop-executor",
 				st.workspace,
 				undefined,
-				null,
+				executorModel,
 				conv.id,
 				true,
 				`Loop ${st.runId}`,
@@ -12639,11 +12788,19 @@ export class ClientSession {
 			);
 			const execConv = this.convs.get(execConvId);
 			if (!execConv?.session) throw new Error("执行者会话创建失败");
+			// 换模型失败时子代理会沿用默认模型：执行角色不能悄悄换人，直接按失败处理。
+			const actualExec = execConv.session.model
+				? `${execConv.session.model.provider}/${execConv.session.model.id}`
+				: "";
+			if (executorModel && actualExec !== executorModel) {
+				throw new Error(`执行会话没能切换到所选模型 ${executorModel}（实际为 ${actualExec || "无"}）`);
+			}
 			const re = rebindLoopSession(st.runId, execConv.session.sessionId);
 			if (!re.ok) throw new Error(re.error || "run 会话重绑失败");
 			// 投递前登记 run 回合：执行者会话也接入回合取消（扩展在 before_agent_start
 			// 消费登记并注册该回合的取消控制器），任务台/API 停止要能取消该子代理的模型回合。
 			markRunTurnDispatch(st.runId, execConv.session.sessionId);
+			this.loopRunBySession?.set(execConv.session.sessionId, st.runId);
 			// 执行者会话 cwd 就是 workspace：工具/终端天然落 workspace，提示词不再需要「先 cd」兜底。
 			const kickPrompt = `${prompt}\n${workspaceNote}`;
 			execConv.kickoff = execConv.session.sendUserMessage(kickPrompt).catch((err) => {
@@ -12785,6 +12942,8 @@ export class ClientSession {
 				const fresh = loadLoopState(runId);
 				if (fresh) cur = fresh;
 			}
+			// 续跑沿用该 run 启动时的集群绑定（跨重启时按持久记录核实，核实不了即受阻）。
+			if (cur.sessionId) this.loopRunBySession?.set(cur.sessionId, runId);
 			conv.loop = loopUiFromState(cur);
 			this.flushSnapshot();
 			// 恢复摘要只含：已确认完成步骤+证据、仍在运行实体、当前代码配置、失效/未知部分、下一步动作。
@@ -12907,6 +13066,7 @@ export class ClientSession {
 		maxRounds?: number;
 		locked?: boolean;
 		execModel?: string;
+		reviewerModel?: string;
 	}): Promise<void> {
 		return this.goalSvc.setGoalPrefs(opts);
 	}

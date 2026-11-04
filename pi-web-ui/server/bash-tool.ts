@@ -33,9 +33,12 @@ export function makeKillableBashTool(
 	kills: Set<AbortController>,
 	/** per-call 返回文本的服务端语言（默认英文）；工具 definition 为纯英文。 */
 	lang: () => ServerLang = () => "en",
+	/** 每次起进程前调整环境（运行中任务的集群绑定：server/loop/cluster-config.ts）。 */
+	envFor?: (env: NodeJS.ProcessEnv) => NodeJS.ProcessEnv,
 ): ToolDefinition {
 	const base = createLocalBashOperations();
 	const tool = createBashToolDefinition(cwd, {
+		...(envFor ? { spawnHook: (c) => ({ ...c, env: envFor(c.env) }) } : {}),
 		operations: {
 			exec: async (command, c, opts) => {
 				const ac = new AbortController();
