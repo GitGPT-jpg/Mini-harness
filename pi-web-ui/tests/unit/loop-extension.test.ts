@@ -465,20 +465,32 @@ describe("mini-harness loop extension", () => {
 	});
 
 	it("代码 loop：reviewer 通过 → done/passed，并提交 worktree（worktreeCommitted=true）", async () => {
+		const wt = mkdtempSync(join(tmpdir(), "loop-auto-commit-"));
+		const git = (...args: string[]) =>
+			execFileSync("git", ["-C", wt, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+		git("init", "-q");
+		git("config", "user.email", "t@example.com");
+		git("config", "user.name", "t");
+		writeFileSync(join(wt, "a.txt"), "baseline");
+		git("add", "-A");
+		git("commit", "-qm", "baseline");
 		const h = makeHarness(SID());
 		const start = await h.tools
 			.get("loop_start")!
 			.execute("t", { goal: "g", validateCmd: "true" }, undefined, undefined, h.ctx);
 		const runId = start.details.runId;
-		patchRun(runId, { worktreeDir: "/tmp/loop-test-wt", worktreeBranch: `mini-harness/${runId}` });
+		// 运行内容落在 git worktree：冻结快照从 worktree 生成，自动收下提交到独立分支。
+		patchRun(runId, { workspace: wt, worktreeDir: wt, worktreeBranch: `mini-harness/${runId}` });
+		git("checkout", "-qb", `mini-harness/${runId}`);
+		writeFileSync(join(wt, "a.txt"), "x"); // 本轮改动
 		await h.tools.get("loop_done")!.execute("t", { summary: "s" }, undefined, undefined, h.ctx);
 		await h.handlers.get("agent_end")![0](undefined, h.ctx);
 		const st = loadRun(runId);
 		expect(st).toMatchObject({ status: "done", acceptance: "passed" });
 		expect(st.lastReview.verdict).toBe("pass");
-		expect(h.execCalls.some((c) => c.cmd === "git" && c.args.includes("add"))).toBe(true);
-		// 完成后的提交只核代次（status 已是 done）：不能再被当成迟到回调丢掉
 		expect(st.worktreeCommitted).toBe(true);
+		expect(git("log", "--format=%s")).toContain(`mini-harness run ${runId}`);
+		// 完成后的提交只核代次（status 已是 done）：不能再被当成迟到回调丢掉
 		const events = journalRecords(runId).map((r) => r.event);
 		expect(events).toContain("worktree-commit");
 		expect(events).not.toContain("late-callback-dropped");

@@ -43,6 +43,7 @@ export interface RunDetail {
 	workspace: string;
 	worktreeBranch: string | null;
 	worktreeCommitted: boolean;
+	worktreeFinalizeError: string | null;
 	plannerOutput: string;
 	plan: string;
 	summary: string;
@@ -501,6 +502,9 @@ function DetailBody({ detail }: { detail: RunDetail }) {
 					<span>
 						{t("runDetailBranch", { name: detail.worktreeBranch })}
 						{detail.worktreeCommitted ? ` · ${t("runDetailCommitted")}` : ""}
+						{detail.worktreeFinalizeError
+							? ` · ${t("runDetailFinalizeBlocked", { reason: detail.worktreeFinalizeError })}`
+							: ""}
 					</span>
 				)}
 				{distilledPath ? (

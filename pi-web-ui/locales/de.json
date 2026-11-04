@@ -867,6 +867,7 @@
 		"runDetailProject": "Project {name}",
 		"runDetailBranch": "Branch {name}",
 		"runDetailCommitted": "committed",
+		"runDetailFinalizeBlocked": "Git finalize blocked ({reason})",
 		"runDetailStop": "Stop",
 		"runDetailStopConfirm": "Request this task and its processes to stop? Artifacts and evidence are kept; stopped is shown only after exit is confirmed.",
 		"runDetailStopSending": "Requesting stop…",

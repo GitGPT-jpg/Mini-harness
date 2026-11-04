@@ -123,3 +123,43 @@
   （10 项全过）、跨宿主恢复（loop-core-restart / loop-recovery-process / loop-running-takeover）通过。
 - 未覆盖：容器重建端到端（本机无 Docker）；Linux 实机；窗口二整合（cluster A + import B +
   restart restore A 的组合回归）待 W2-HANDOFF.md 后执行。
+
+## 7. 第三批·两条可从真实入口复跑的链路（默认持久执行器）
+
+基线（18f0dfb）两条链路都断：默认执行器下冻结 run 的 validator 结果消费契约失配
+（启动用冻结目录、消费比对 st.workspace → runtime-error），git 收尾失败被吞、任务台仍报完成，
+物化走 git archive 会因 export-ignore 漏文件，同树路径跳过 staged 冲突预检。
+
+### 链路一：代码任务能验收并收下
+
+- 执行契约统一（修复 cwd 问题）：`validationFromOperation` 以 operation 自身记录的执行目录
+  （冻结目录优先）解析 validator 并比对 cwd；L0 precheck 与 L1 同一执行目录 —— 命令启动、
+  即时消费、重启后消费共用同一契约；重启消费只消费一次（pendingUnconsumedOp + consumedResults）。
+- 物化改为精确树物化（read-tree --index-output + checkout-index，不用 git archive）：
+  export-ignore 不再从冻结目录漏文件，验收内容 == 最终收下树；保留模式位/符号链接。
+- 冻结目录被 validator 改写 → 「冻结执行目录已被改写，本轮证据失效」明确受阻，不判完成不提交。
+- Git 收尾三态：已收下（新提交）/ 同树无需提交（幂等重入、index 协调完成）/ 收尾受阻
+  （`worktreeFinalizeError` 落盘 + run detail 携带 + 任务台展示，禁止提前报完成）；
+  移除 handleVerdict 的 git add -A 回退；收尾受阻可经「按代码验证收下」重试（finalize 幂等不重复提交）。
+- 真实 Git 验证：staged 删除/执行位/index.lock/引用推进后中断重试（loop-frozen-content P2 回归保留）。
+
+### 链路二：停止后能确认退出
+
+- 停止与续跑共用实体核对规则：stopRunExternal 改用 `unverifiedLegacyEntities`
+  （PID+宿主+进程启动身份+可信退出证据逐实体判定），身份不完整/PID 复用保持停止待确认、
+  不误杀、阻断新一轮投递；进程组退出（result.groupGone）确认后才显示已停止。
+- 回合交接：停止发生在「下一回合已投递排队但未开始」窗口时，该回合启动即中止
+  （beginLoopTurn 对 stopTurnId 匹配的排队回合立即 abort），不产出内容；同会话普通聊天不被误中断。
+
+### 验证与复跑
+
+- 新回归：`tests/unit/loop-exec-contract.test.ts`（默认执行器+真实 git worktree，5 条：
+  显式 validateCmd 冻结链路、自动发现 validate.py 重启消费一次、export-ignore、冻结目录被改写、
+  staged 冲突收尾受阻+重试收下）、`tests/unit/loop-stop-confirm.test.ts`（3 条：真实进程组停止确认、
+  身份不完整停止待确认+共享门禁、回合交接排队回合启动即中止）。
+- 全量：Vitest 342 文件 3576 通过 / 8 跳过；typecheck、lint、协议 v40、双端构建通过；
+  浏览器 pending-stop（`node tests/loop-recovery-browser-stop-test.mjs --source --pending-stop`）10/10；
+  跨宿主恢复（loop-core-restart / loop-recovery-process / loop-running-takeover）通过。
+- 复跑命令：`cd pi-web-ui && npm run typecheck && npm test && npm run lint && npm run check:protocol && npm run build`；
+  浏览器链路 `node tests/loop-recovery-browser-stop-test.mjs --source --pending-stop`。
+- 本轮交付窗口一核心修复；三模型/关联工作树展示/删除入口留窗口二。

@@ -235,6 +235,13 @@ export function beginLoopTurn(
 		turnId,
 		sessionId,
 	);
+	// 回合交接：停止发生在「下一回合已投递（排队）但尚未开始」的窗口时，本回合就是被
+	// 停止的回合（stopTurnId 在投递时已绑定）→ 启动即中止，排队回合不产出内容。
+	if (loadState(runId)?.stopTurnId === turnId) {
+		try {
+			c.abort?.();
+		} catch {}
+	}
 }
 
 /** 回合结束（agent_end）：只清理属于本会话的「回合在途」标记与控制器（清理自己）。 */
@@ -489,6 +496,8 @@ export interface LoopState {
 	worktreeDir: string | null;
 	worktreeBranch: string | null;
 	worktreeCommitted: boolean;
+	/** Git 收尾受阻原因（验证通过但提交/引用/index 协调失败）：任务未完成，任务台据此显示受阻原因。 */
+	worktreeFinalizeError?: string | null;
 	harnessRoot: string | null;
 	artifactRoots: string[];
 	/** L0 快速预检命令（语法/配置/轻量检查）：失败直接拦截，不跑昂贵的 L1 validateCmd 与 reviewer。 */
@@ -720,6 +729,7 @@ function normalizeState(st: LoopState): LoopState {
 	if (st.observedBest === undefined) st.observedBest = null;
 	if (st.legacyExecutionEntities === undefined) st.legacyExecutionEntities = [];
 	if (st.turnActive === undefined) st.turnActive = null;
+	if (st.worktreeFinalizeError === undefined) st.worktreeFinalizeError = null;
 	return st;
 }
 
@@ -1086,28 +1096,29 @@ async function validationFromOperation(st: LoopState, opId: string): Promise<Val
 	const observed = await observeOperation(st.runId, opId, { timeoutMs: 0 });
 	const op = observed.record;
 	if (!op?.result || !op.resultDigest) throw new Error("操作结果未知，不能重跑");
-	const expected = op.stage === "precheck" ? { cmd: "bash", args: ["-lc", st.precheckCmd] } : resolveValidator(st);
+	// 执行契约统一以 operation 自身记录的执行目录为准（冻结目录优先）：命令启动、
+	// 即时消费与重启后消费解析同一个 validator，cwd 与 validator 路径都来自同一处。
+	// 修复：此前启动用冻结目录、消费用 st.workspace，冻结工作区的结果永远契约失配。
+	const identity = st.validationIdentity;
+	const contractDir = identity?.frozenDir || st.workspace;
+	const expected =
+		op.stage === "precheck" ? { cmd: "bash", args: ["-lc", st.precheckCmd] } : resolveValidator(st, contractDir);
 	if (
 		op.runId !== st.runId ||
 		op.round !== st.round ||
 		op.attemptId !== st.attemptId ||
 		!["validate", "precheck"].includes(op.stage) ||
-		real(op.cwd) !== real(st.workspace) ||
+		real(op.cwd) !== real(contractDir) ||
 		!expected ||
 		op.command !== expected.cmd ||
 		JSON.stringify(op.args) !== JSON.stringify(expected.args)
 	) {
 		throw new Error("结果与当前执行契约不匹配");
 	}
-	const identity = st.validationIdentity;
 	if (!identity || identity.round !== st.round || identity.attemptId !== st.attemptId)
 		throw new Error("缺少执行前身份");
 	if (op.snapshotSha !== identity.snapshotSha || op.snapshotRef !== identity.snapshotRef)
 		throw new Error("结果快照身份冲突");
-	// operation 的执行 cwd 必须等于冻结目录（恢复时同 run 目录复用；缺失即未验收状态）。
-	if (identity.frozenDir && real(op.cwd) !== real(identity.frozenDir)) {
-		throw new Error("操作执行目录与冻结内容不一致");
-	}
 	// 冻结目录未被改写：validator 若改写了纳入验收的源码，结果失效并重新冻结验证。
 	if (identity.frozenHash && identity.frozenDir) {
 		if (frozenDirectoryHash(identity.frozenDir) !== identity.frozenHash)
@@ -1202,7 +1213,8 @@ async function runValidationOnce(pi: ExtensionAPI, st: LoopState): Promise<Valid
 					? { ...(await observeOperation(st.runId, previous.opId)), opId: previous.opId }
 					: await loopExec("bash", ["-lc", preCmd], {
 							...execOptions,
-							cwd,
+							// 与 L1 同一执行目录（冻结目录优先）：预检验收的是同一份候选内容。
+							cwd: execCwd,
 							timeout: 5 * 60 * 1000,
 							signal: ac.signal,
 							runId: st.runId,
@@ -1439,21 +1451,38 @@ function materializeFrozenTree(runId: string, round: number, tree: string, works
 		if (fs.existsSync(marker) && fs.readFileSync(marker, "utf8").trim() === tree) return dir;
 		fs.rmSync(dir, { recursive: true, force: true });
 		fs.mkdirSync(dir, { recursive: true });
-		const archive = execFileSync("git", ["--no-optional-locks", "-C", workspace, "archive", tree], {
-			timeout: 30000,
-			maxBuffer: 256 * 1024 * 1024,
-			stdio: ["ignore", "pipe", "ignore"],
-		});
-		const untar = execFileSync("tar", ["-x", "-C", dir], {
-			input: archive,
-			timeout: 30000,
-			stdio: ["pipe", "pipe", "pipe"],
-		});
-		void untar;
+		// 精确树物化（不用 git archive）：archive 遵守 .gitattributes 的 export-ignore，
+		// 会把纳入验收/收下的文件从冻结目录里漏掉，validator 看到的就不再等于最终收下的树。
+		// read-tree + checkout-index 从树对象逐项还原，保留模式位与符号链接。
+		// 临时 index 必须落在仓库内（git 拒绝仓库外的 --index-output 路径），用完即删。
+		const index = path.join(workspace, ".mini-harness-frozen-index-" + round);
+		try {
+			execFileSync("git", ["--no-optional-locks", "-C", workspace, "read-tree", "--index-output=" + index, tree], {
+				timeout: 30000,
+				maxBuffer: 256 * 1024 * 1024,
+				stdio: ["ignore", "pipe", "pipe"],
+			});
+			execFileSync(
+				"git",
+				["--no-optional-locks", "-C", workspace, "checkout-index", "--all", "--prefix=" + dir + path.sep],
+				{
+					env: { ...process.env, GIT_INDEX_FILE: index },
+					timeout: 30000,
+					maxBuffer: 256 * 1024 * 1024,
+					stdio: ["ignore", "pipe", "pipe"],
+				},
+			);
+		} finally {
+			fs.rmSync(index, { force: true });
+		}
 		fs.writeFileSync(marker, tree + "\n");
 		return dir;
 	} catch (error) {
-		throw new Error("冻结树物化受阻：" + String((error as Error).message || error).slice(0, 300));
+		const detail = (error as { stderr?: Buffer | string })?.stderr;
+		const stderr = detail ? String(detail).slice(0, 400) : "";
+		throw new Error(
+			(stderr ? "冻结树物化受阻 stderr: " + stderr : "冻结树物化受阻：" + String((error as Error).message || error).slice(0, 400)),
+		);
 	}
 }
 
@@ -2118,9 +2147,11 @@ async function commitVerifiedWorktreeTree(st: LoopState): Promise<string | null 
 		tree = gitSync(["-C", worktree, "rev-parse", identity.snapshotSha + "^{tree}"], worktree, 15000).trim();
 	} else {
 		const fresh = await createWorkspaceSnapshot(st.workspace);
-		if (!fresh) return null;
+		// git 工作区必须能构建可核验树：无法构建时明确受阻，不落入 git add -A 回退提交。
+		if (!fresh) throw new Error("无法生成可核验的提交树（git 工作区不提供回退提交）");
 		tree = gitSync(["-C", worktree, "rev-parse", fresh + "^{tree}"], worktree, 15000).trim();
 	}
+	if (!tree) throw new Error("收下树缺少可核对的 tree 对象");
 	if (!evidenceStillValid(st)) return "drift";
 	const branch = st.worktreeBranch!;
 	const tip = gitSync(["-C", worktree, "rev-parse", "--verify", "refs/heads/" + branch], worktree, 15000).trim();
@@ -2136,6 +2167,7 @@ async function commitVerifiedWorktreeTree(st: LoopState): Promise<string | null 
 	}
 	const result = finalizeVerifiedCommit(worktree, branch, parent, tree, `mini-harness run ${st.runId}`);
 	if (!result.ok) throw new Error(result.error);
+	// commit 为 null 且 ok = 同树无需提交（index 协调已完成）：同样视为已收下。
 	return result.commit;
 }
 
@@ -2259,40 +2291,38 @@ async function handleVerdict(
 					);
 					return;
 				}
-				if (!committed) {
-					// 构建不了可核验树（非 git / 快照失败）：退化为原有 add+commit 序列；
-					// 证据核对已在前置门禁完成，该退化路径仅存在于无法生成快照的工作区。
-					await pi.exec("git", ["-C", st.worktreeDir, "add", "-A"], { cwd: st.worktreeDir, timeout: 60000 });
-					if (!stillCurrent(token)) {
-						return;
-					}
-					const d = await pi.exec("git", ["-C", st.worktreeDir, "diff", "--cached", "--quiet"], {
-						cwd: st.worktreeDir,
-						timeout: 60000,
-					});
-					if (d.code !== 0) {
-						if (!stillCurrent(token)) return;
-						await pi.exec("git", ["-C", st.worktreeDir, "commit", "-m", `mini-harness run ${st.runId}`], {
-							cwd: st.worktreeDir,
-							timeout: 60000,
-						});
-					}
-					if (!sameEpoch(token)) {
-						journal(st, "late-callback-dropped", { at: "handleVerdict/worktree", epoch: token.epoch });
-						return;
-					}
-					st.worktreeCommitted = true;
-					journal(st, "worktree-commit", { branch: st.worktreeBranch, dir: st.worktreeDir, fallback: true });
-				} else {
-					if (!sameEpoch(token)) {
-						journal(st, "late-callback-dropped", { at: "handleVerdict/worktree", epoch: token.epoch });
-						return;
-					}
-					st.worktreeCommitted = true;
-					journal(st, "worktree-commit", { branch: st.worktreeBranch, dir: st.worktreeDir, commit: committed });
+				// committed 为 sha = 已收下（新提交）；null = 同树无需提交（收尾已幂等完成）。二者都算收下。
+				if (!sameEpoch(token)) {
+					journal(st, "late-callback-dropped", { at: "handleVerdict/worktree", epoch: token.epoch });
+					return;
 				}
+				st.worktreeCommitted = true;
+				journal(st, "worktree-commit", {
+					branch: st.worktreeBranch,
+					dir: st.worktreeDir,
+					commit: committed ?? "same-tree",
+				});
 			} catch (e) {
-				journal(st, "worktree-commit-error", { error: String((e as Error)?.message || e) });
+				// 收尾受阻：不标记完成、不回退 git add -A；把原因落到 run 可见处（任务台详情），
+				// 用户可核对现场后经「按代码验证收下」重试（finalize 幂等，不会重复提交）。
+				const msg = String((e as Error)?.message || e);
+				journal(st, "worktree-commit-error", { error: msg });
+				st.worktreeFinalizeError = msg;
+				if (!sameEpoch(token)) {
+					journal(st, "late-callback-dropped", { at: "handleVerdict/worktree-error", epoch: token.epoch });
+					return;
+				}
+				st.stage = "validate";
+				st.status = "active";
+				st.acceptance = null;
+				delete (st as { stopReason?: string }).stopReason;
+				if (!saveState(st, token)) return;
+				notify(
+					ctx,
+					`⚠️ mini-harness：验证通过，但 Git 收尾受阻（${msg}）。任务未完成，可核对现场后重试收下。`,
+					"warning",
+				);
+				return;
 			}
 		}
 		if (!saveState(st, token)) {
@@ -3448,10 +3478,9 @@ export function stopRunExternal(
 		const operations = listOperations(runId);
 		const lease = getLease(runDir(runId));
 		const taskPid = lease?.taskPid;
-		// 接管保留的旧执行实体：身份未核实（裸 PID 不可信）时不发信号、不确认已停。
-		const legacyUnverified = (fresh.legacyExecutionEntities ?? []).filter(
-			(e) => e.pid != null && !operations.some((op) => op.pid === e.pid) && isPidAlive(e.pid),
-		);
+		// 接管保留的旧执行实体：与续跑投递门禁共用同一核对规则（PID+宿主+进程启动身份+
+		// 可信退出证据逐实体判定）。未核实的实体不发信号、不确认已停。
+		const legacyUnverified = unverifiedLegacyEntities(fresh);
 		const unknownExternal =
 			!!fresh.remoteJobId || (!!taskPid && !operations.some((op) => op.pid === taskPid)) || legacyUnverified.length > 0;
 		if (cancellation.allConfirmed && !unknownExternal && !turnInFlight && !turnAbortError) {
@@ -3628,8 +3657,9 @@ function isReviewerErrorRun(st: LoopState) {
 export function acceptRunValidatorOnly(runId: string): { ok: boolean; error?: string } {
 	const st = loadState(runId);
 	if (!st) return { ok: false, error: `run 不存在：${runId}` };
-	if (!isReviewerErrorRun(st) || st.lastVerdict !== "pass") {
-		return { ok: false, error: "只有代码验证已通过、模型评审出错的 run 才能按代码验证收下" };
+	const acceptEligible = (isReviewerErrorRun(st) || !!st.worktreeFinalizeError) && st.lastVerdict === "pass";
+	if (!acceptEligible) {
+		return { ok: false, error: "只有代码验证已通过、模型评审出错或 Git 收尾受阻的 run 才能按代码验证收下" };
 	}
 	if (!acquireRunControl(st)) return { ok: false, error: "无法取得执行权" };
 	// 收下的前提：验证证据仍对应当前 round/attempt 的执行内容与验收契约（不能补记未验证版本）。
@@ -3643,7 +3673,7 @@ export function acceptRunValidatorOnly(runId: string): { ok: boolean; error?: st
 			!fresh ||
 			!matchesToken(fresh, token) ||
 			fresh.revision !== st.revision ||
-			!isReviewerErrorRun(fresh) ||
+			!((isReviewerErrorRun(fresh) || !!fresh.worktreeFinalizeError) && fresh.lastVerdict === "pass") ||
 			!lease ||
 			leaseExpired(lease) ||
 			lease.owner !== token.owner ||
@@ -3677,6 +3707,7 @@ export function acceptRunValidatorOnly(runId: string): { ok: boolean; error?: st
 			}
 			assertAcceptControl();
 			st.worktreeCommitted = true;
+			st.worktreeFinalizeError = null;
 			journal(st, "worktree-commit", { branch: st.worktreeBranch, dir: st.worktreeDir, by: "user-accept" });
 		}
 		st.status = "done";

@@ -185,6 +185,7 @@ export interface LoopRunDetail {
 	workspace: string;
 	worktreeBranch: string | null;
 	worktreeCommitted: boolean;
+	worktreeFinalizeError?: string | null;
 	plannerOutput: string;
 	plan: string;
 	summary: string;
@@ -314,6 +315,7 @@ export function collectRunDetail(runId: string): LoopRunDetail | null {
 		workspace: ws,
 		worktreeBranch: st.worktreeBranch ?? null,
 		worktreeCommitted: Boolean(st.worktreeCommitted),
+		worktreeFinalizeError: st.worktreeFinalizeError ?? null,
 		plannerOutput: clipTail(st.plannerOutput, DETAIL_TEXT_MAX),
 		plan: clipTail(st.plan, DETAIL_TEXT_MAX),
 		summary: clipTail(st.summary, DETAIL_TEXT_MAX),

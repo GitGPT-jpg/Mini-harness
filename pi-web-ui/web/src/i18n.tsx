@@ -968,6 +968,7 @@ export const zh = {
 	runDetailProject: "项目 {name}",
 	runDetailBranch: "分支 {name}",
 	runDetailCommitted: "已提交",
+	runDetailFinalizeBlocked: "Git 收尾受阻（{reason}）",
 	runDetailStop: "停止",
 	runDetailStopConfirm: "请求停止这个任务及其执行进程？产物和证据会保留，退出确认后才显示已停止。",
 	runDetailStopSending: "正在请求停止…",
@@ -2672,6 +2673,7 @@ export const en: Record<keyof typeof zh, string> = {
 	runDetailProject: "Project {name}",
 	runDetailBranch: "Branch {name}",
 	runDetailCommitted: "committed",
+	runDetailFinalizeBlocked: "Git finalize blocked ({reason})",
 	runDetailStop: "Stop",
 	runDetailStopConfirm:
 		"Request this task and its processes to stop? Artifacts and evidence are kept; stopped is shown only after exit is confirmed.",
