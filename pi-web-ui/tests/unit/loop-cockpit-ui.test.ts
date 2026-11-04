@@ -48,6 +48,7 @@ const MODELS = [
 	{ provider: "oneapi", id: "glm-4.6", family: "glm" },
 	{ provider: "other", id: "glm-4.5", family: "glm" },
 	{ provider: "oneapi", id: "qwen3", family: "qwen" },
+	{ provider: "oneapi", id: "deepseek-v4", family: "deepseek" },
 ];
 
 const PACKS = [
@@ -200,11 +201,16 @@ describe("新任务弹窗：验收方式三选一", () => {
 		mount(taskModal());
 		await openModal();
 		setValue($("#task-goal"), "修复单测");
-		setValue($("#task-planner"), "oneapi/glm-4.6");
-		setValue($("#task-reviewer"), "other/glm-4.5");
-		expect($(".cockpit-model-note.bad")).not.toBeNull();
-		expect(startBtn()!.disabled).toBe(true);
+		setValue($("#task-planner"), "oneapi/qwen3");
 		setValue($("#task-reviewer"), "oneapi/qwen3");
+		expect($(".cockpit-model-note.bad")!.textContent).toContain("规划模型与审查模型同属 qwen 家族");
+		expect(startBtn()!.disabled).toBe(true);
+		// 审查与执行（主对话 GLM-4.6）同家族：换 provider 也算同家族
+		setValue($("#task-reviewer"), "other/glm-4.5");
+		expect($(".cockpit-model-note.bad")!.textContent).toContain("执行模型与审查模型同属 glm 家族");
+		expect(startBtn()!.disabled).toBe(true);
+		setValue($("#task-reviewer"), "oneapi/deepseek-v4");
+		expect($(".cockpit-model-note.bad")).toBeNull();
 		expect(startBtn()!.disabled).toBe(false);
 	});
 
@@ -317,12 +323,15 @@ describe("新任务弹窗：验收方式三选一", () => {
 		expect($("#task-exec")).not.toBeNull();
 		expect($("#task-rounds")).not.toBeNull();
 		expect(document.body.textContent).toContain("GLM-4.6");
-		// 执行模型跟随主对话 = 自己审自己 → 提醒
-		expect($(".cockpit-model-note.warn")).not.toBeNull();
+		// 旧服务端（goal_status 没有 reviewerModel）：审查=主对话，不出审查下拉；
+		// 执行跟随主对话 = 执行与审查同家族 → 冲突、开始键置灰
+		expect($("#task-llm-reviewer")).toBeNull();
 		setValue($("#task-goal"), "写一份发布说明");
 		setValue($("#task-criteria"), "覆盖全部改动");
+		expect($(".cockpit-model-note.bad")!.textContent).toContain("执行模型与审查模型同属 glm 家族");
+		expect(startBtn()!.disabled).toBe(true);
 		setValue($("#task-exec"), "oneapi/qwen3");
-		expect($(".cockpit-model-note.warn")).toBeNull();
+		expect($(".cockpit-model-note.bad")).toBeNull();
 		click(startBtn());
 		expect(sent).toEqual([
 			{ type: "set_goal_prefs", maxRounds: 3, reviewModel: "", execModel: "oneapi/qwen3" },
@@ -342,9 +351,12 @@ describe("新任务弹窗：验收方式三选一", () => {
 		click($('input[name="task-accept"][value="llm"]'));
 		expect($<HTMLButtonElement>(".task-refine")!.disabled).toBe(true);
 		setValue($("#task-goal"), "做个小工具");
+		// 执行与审查同家族时细化也不放行（向导结束会自动开跑）
+		expect($<HTMLButtonElement>(".task-refine")!.disabled).toBe(true);
+		setValue($("#task-exec"), "oneapi/qwen3");
 		click($(".task-refine"));
 		expect(sent).toEqual([
-			{ type: "set_goal_prefs", maxRounds: 3, reviewModel: "", execModel: "" },
+			{ type: "set_goal_prefs", maxRounds: 3, reviewModel: "", execModel: "oneapi/qwen3" },
 			{ type: "start_goal_wizard", text: "做个小工具", maxRounds: 3, locked: true },
 		]);
 		expect($(".task-modal")).toBeNull();
@@ -859,5 +871,84 @@ describe("任务台：代码 loop 的行（D-12-3）", () => {
 			await new Promise((r) => setTimeout(r, 0));
 		});
 		expect($(".run-detail")).not.toBeNull();
+	});
+});
+
+describe("新任务弹窗：审查模型可选（服务端支持 reviewerModel）", () => {
+	const roleStub = (body: { executor?: string; reviewer?: string }) => {
+		const reviewer = body.reviewer || "oneapi/glm-4.6";
+		const executor = body.executor || "oneapi/glm-4.6";
+		const fam = (s: string) => (s.includes("glm") ? "glm" : s.includes("qwen") ? "qwen" : "deepseek");
+		const view = (s: string, explicit: boolean) => ({
+			provider: "oneapi",
+			id: s.split("/")[1],
+			family: fam(s),
+			source: explicit ? "explicit" : "main",
+		});
+		const same = fam(reviewer) === fam(executor);
+		return {
+			ok: !same,
+			roles: {
+				planner: view("oneapi/glm-4.6", false),
+				executor: view(executor, !!body.executor),
+				reviewer: view(reviewer, !!body.reviewer),
+			},
+			conflicts: same ? [{ roles: ["executor", "reviewer"], family: fam(executor), models: [executor, reviewer] }] : [],
+			error: null,
+			suggestion: same ? { role: "reviewer", provider: "oneapi", id: "qwen3", family: "qwen" } : null,
+		};
+	};
+
+	it("默认审查与执行同家族 → 指出两个角色与模型；一键改选另一家族审查后可启动，set_goal 带 reviewerModel", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string, init?: { body?: string }) => ({
+				ok: true,
+				json: async () =>
+					String(url).includes("/roles") ? roleStub(JSON.parse(init?.body ?? "{}")) : { models: MODELS },
+			})),
+		);
+		const settle = () => act(async () => void (await new Promise((r) => setTimeout(r, 220))));
+		mount(
+			createElement(TaskModal, {
+				goal: { ...goal, reviewerModel: null } as GoalStatus,
+				mainModel: { id: "glm-4.6", name: "GLM-4.6", provider: "oneapi" },
+				goalModeEnabled: true,
+			}),
+		);
+		await openModal();
+		click($('input[name="task-accept"][value="llm"]'));
+		setValue($("#task-goal"), "写一份发布说明");
+		expect($("#task-llm-reviewer")!.textContent).toContain("跟随主对话（GLM-4.6）");
+		await settle();
+		expect($(".cockpit-model-note.bad")!.textContent).toContain(
+			"执行模型 oneapi/glm-4.6 与审查模型 oneapi/glm-4.6 同属 glm 家族",
+		);
+		expect(startBtn()!.disabled).toBe(true);
+		expect($(".task-role-fix")!.textContent).toBe("审查改用 qwen3");
+		click($(".task-role-fix"));
+		expect($<HTMLSelectElement>("#task-llm-reviewer")!.value).toBe("oneapi/qwen3");
+		await settle();
+		expect($(".cockpit-model-note.bad")).toBeNull();
+		expect($(".task-role-summary")!.textContent).toContain("审查：qwen3（qwen · 指定）");
+		expect(startBtn()!.disabled).toBe(false);
+		click(startBtn());
+		expect(sent).toEqual([
+			{ type: "set_goal_prefs", maxRounds: 3, reviewModel: "", execModel: "", reviewerModel: "oneapi/qwen3" },
+			{ type: "set_goal", goal: "写一份发布说明", maxRounds: 3, locked: true, reviewerModel: "oneapi/qwen3" },
+		]);
+	});
+
+	it("切到仅代码验收：残留的审查选择不进请求、不阻断启动", async () => {
+		mount(taskModal());
+		await openModal();
+		setValue($("#task-goal"), "跑测试");
+		setValue($("#task-reviewer"), "other/glm-4.5");
+		expect(startBtn()!.disabled).toBe(true);
+		click($('input[name="task-accept"][value="code"]'));
+		expect(startBtn()!.disabled).toBe(false);
+		click(startBtn());
+		expect(sent[0]).toMatchObject({ type: "loop_start_request", useReviewer: false });
+		expect(sent[0]).not.toHaveProperty("reviewerModel");
 	});
 });

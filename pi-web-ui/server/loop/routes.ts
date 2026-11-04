@@ -3,6 +3,7 @@
  *
  * - runs：代码 loop 运行状态（~/.mini-harness/runs/<id>/state.json 的公开字段）；
  * - models：代码 loop 表单的规划/评审模型下拉（只给 provider/id/family，不含 baseUrl/密钥）；
+ * - roles：新任务各验收方式的规划/执行/审查实际模型与家族冲突预检（与服务端启动校验同一套规则）；
  * - task：执行者会话 jsonl 尾部 → 工具调用时间线（只读）；
  * - goals：LLM loop 永久目录（goal-history.jsonl）；
  * - cluster：服务实际可见的 kubeconfig（Web 导入 > 启动时 KUBECONFIG > ~/.kube/config）+ /version 探测，
@@ -13,6 +14,7 @@
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { Express, NextFunction, Request, Response } from "express";
+import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
 	ClusterConfig,
 	setActiveClusterConfig,
@@ -21,6 +23,7 @@ import {
 } from "./cluster-config.js";
 import { deleteGoalLog, listGoalLog } from "../goal-history-log.js";
 import { distillLoopRun } from "./distill.js";
+import { findModel, resolveTaskRoles, type TaskMode } from "./model-roles.js";
 import { listOperations } from "./operation.js";
 import type { BestRoundRecord, HardConstraint, HarnessMetrics, MetricGateResult } from "./metrics.js";
 import { getPackKnowledge, getPackReference, listCapabilityPacks, listPackReferences } from "./packs.js";
@@ -513,6 +516,45 @@ export function registerLoopRoutes(app: Express, opts: LoopRoutesOptions): void 
 
 	app.get("/api/mini-harness/models", (_req, res) => {
 		res.json({ models: collectModels(opts.agentDir) });
+	});
+	app.post("/api/mini-harness/roles", async (req, res) => {
+		const b = req.body ?? {};
+		const mode = String(b.mode ?? "");
+		if (mode !== "code-review" && mode !== "code" && mode !== "llm") {
+			res.status(400).json({ error: "bad mode" });
+			return;
+		}
+		const spec = (v: unknown) => (typeof v === "string" ? v.trim().slice(0, 200) : "");
+		let registry: ModelRegistry;
+		try {
+			registry = new ModelRegistry(
+				await ModelRuntime.create({
+					authPath: join(opts.agentDir, "auth.json"),
+					modelsPath: join(opts.agentDir, "models.json"),
+				}),
+			);
+		} catch {
+			res.status(503).json({ error: "model catalog unavailable" });
+			return;
+		}
+		// 主对话模型可能来自扩展注册的 provider（不在这份目录里）：家族只看 id，按 "provider/id" 原样参与比较。
+		const mainSpec = spec(b.main);
+		const slash = mainSpec.indexOf("/");
+		const main =
+			findModel(registry, mainSpec) ??
+			(mainSpec
+				? slash > 0
+					? { provider: mainSpec.slice(0, slash), id: mainSpec.slice(slash + 1) }
+					: { id: mainSpec }
+				: null);
+		res.json(
+			resolveTaskRoles(registry, main, {
+				mode: mode as TaskMode,
+				planner: spec(b.planner),
+				executor: spec(b.executor),
+				reviewer: spec(b.reviewer),
+			}),
+		);
 	});
 
 	app.get("/api/mini-harness/packs", (_req, res) => {

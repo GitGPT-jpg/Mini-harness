@@ -74,6 +74,27 @@ const ACCEPT_OPTIONS: Array<{
 /** 「仅模型评审」把验收标准并进目标正文：与服务端 startLoop 拼启动提示词同一写法（另起一行「验收标准：…」）。 */
 const withCriteria = (goal: string, criteria: string): string => (criteria ? `${goal}\n验收标准：${criteria}` : goal);
 
+type RoleName = "planner" | "executor" | "reviewer";
+interface RoleModelView {
+	provider?: string;
+	id: string;
+	family: string;
+	source: "explicit" | "main" | "auto";
+}
+type RoleSuggestion = { role: RoleName; provider?: string; id: string; family: string };
+/** POST /api/mini-harness/roles（server/loop/model-roles.ts）：各角色实际生效的模型与家族冲突。 */
+interface RoleResolution {
+	ok: boolean;
+	roles: Record<RoleName, RoleModelView | null>;
+	conflicts: Array<{ roles: [RoleName, RoleName]; family: string; models: [string, string] }>;
+	error: { code: "unresolved" | "no-candidate" | "no-main"; role: RoleName } | null;
+	suggestion: RoleSuggestion | null;
+	executorSuggestion?: RoleSuggestion | null;
+}
+const isResolution = (v: unknown): v is RoleResolution =>
+	!!v && typeof (v as RoleResolution).ok === "boolean" && Array.isArray((v as RoleResolution).conflicts);
+const specOf = (m: { provider?: string; id: string }) => (m.provider ? `${m.provider}/${m.id}` : m.id);
+
 /** 输入框上沿的「新任务」胶囊：目标条折叠行（目标模式开）与 LoopBar（目标模式关）共用一份。 */
 export function TaskCapsule({ label }: { label?: string }) {
 	const t = useT();
@@ -129,8 +150,13 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 	// LLM loop（GoalService 偏好；空 = 使用主模型，轮数 0 = 不限）
 	const [llmPlanner, setLlmPlanner] = useState("");
 	const [execModel, setExecModel] = useState("");
+	const [llmReviewer, setLlmReviewer] = useState("");
 	const [llmRounds, setLlmRounds] = useState(0);
 	const [models, setModels] = useState<LoopModel[] | null>(null);
+	const [resolved, setResolved] = useState<{ key: string; r: RoleResolution } | null>(null);
+	// 服务端 goal_status 带 reviewerModel 字段 = 审查角色可选且会传到真正审查的主对话回合；
+	// 旧服务端没有该字段时不显示审查下拉（否则选了也不生效），审查仍是主对话当前模型。
+	const reviewerSelectable = "reviewerModel" in goalStatus;
 
 	// 带预填打开（终态条「重试」/ 详情面板「用同一目标重新开始」）：换成那条任务的目标与验收标准
 	// （没带验收标准就清空），带了验收方式就切过去；不带预填就沿用上次没提交的草稿。
@@ -146,6 +172,7 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 		if (!open) return;
 		setLlmPlanner(goalStatus.reviewModel ?? "");
 		setExecModel(goalStatus.execModel ?? "");
+		setLlmReviewer((goalStatus as { reviewerModel?: string | null }).reviewerModel ?? "");
 		setLlmRounds(goalStatus.maxRounds > 0 ? goalStatus.maxRounds : 0);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [open]);
@@ -206,20 +233,59 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 		};
 	}, [packId, workspace, extraInputs, cmd, precheck]);
 
-	if (!open) return null;
-
 	// 目标模式关着时「仅模型评审」不可选（上次留下的选择也回落到默认）。
 	const mode: TaskAcceptance = acceptance === "llm" && !goalModeEnabled ? "code-review" : acceptance;
+	const mainSpec = mainModel ? `${mainModel.provider}/${mainModel.id}` : "";
+	// 各角色实际生效的模型与家族冲突由服务端按启动时同一套规则解析（显式选择 / 主模型默认 / 自动挑选）。
+	const roleKey = JSON.stringify(
+		mode === "llm"
+			? {
+					mode,
+					main: mainSpec,
+					planner: llmPlanner,
+					executor: execModel,
+					reviewer: reviewerSelectable ? llmReviewer : "",
+				}
+			: { mode, main: mainSpec, planner, reviewer: mode === "code-review" ? reviewer : "" },
+	);
+	useEffect(() => {
+		if (!open) return;
+		let alive = true;
+		const id = setTimeout(() => {
+			void mhPost<RoleResolution>("roles", JSON.parse(roleKey)).then((res) => {
+				if (alive && res?.ok && isResolution(res.data)) setResolved({ key: roleKey, r: res.data });
+			});
+		}, 150);
+		return () => {
+			alive = false;
+			clearTimeout(id);
+		};
+	}, [open, roleKey]);
+
+	if (!open) return null;
+
 	const codeMode = mode !== "llm";
-	const plannerFamily = familyOf.get(planner) ?? "";
-	const conflict = mode === "code-review" && !!plannerFamily && plannerFamily === (familyOf.get(reviewer) ?? "");
+	const resolution = resolved?.key === roleKey ? resolved.r : null;
+	// 服务端结果没到（或旧服务端没有该接口）时，先用模型列表里服务端给的家族比较显式选择与主模型。
+	const famOf = (spec: string) => familyOf.get(spec) ?? "";
+	const mainFam = famOf(mainSpec);
+	const localConflict = ((): { roles: [RoleName, RoleName]; family: string } | null => {
+		if (mode === "llm") {
+			const e = execModel ? famOf(execModel) : mainFam;
+			const r = reviewerSelectable && llmReviewer ? famOf(llmReviewer) : mainFam;
+			return e && e === r ? { roles: ["executor", "reviewer"], family: e } : null;
+		}
+		const p = famOf(planner);
+		const r = mode === "code-review" ? famOf(reviewer) : "";
+		if (p && p === mainFam) return { roles: ["executor", "planner"], family: p };
+		if (r && r === mainFam) return { roles: ["executor", "reviewer"], family: r };
+		if (p && r && p === r) return { roles: ["planner", "reviewer"], family: p };
+		return null;
+	})();
+	const blocked = resolution ? !resolution.ok : !!localConflict;
 	const g = goal.trim();
 	const c = criteria.trim();
-	const canStart = !!g && !conflict;
-	// 执行模型跟随主对话（空）或就选了主对话那个 = 自己审自己。
-	const sameModel =
-		!execModel ||
-		(!!mainModel && (execModel === mainModel.id || execModel === `${mainModel.provider}/${mainModel.id}`));
+	const canStart = !!g && !blocked;
 
 	/** 下拉项：模型列表；当前值不在列表里（旧偏好 / 列表没读到）时补一项，不悄悄改掉用户的选择。 */
 	const modelOptions = (current: string) => (
@@ -255,7 +321,13 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 
 	/** LLM loop：先把本次选的偏好记下（同旧编辑器的 set_goal_prefs），再发目标 / 启动细化向导。 */
 	const sendLlmPrefs = (maxRounds: number) =>
-		appSend({ type: "set_goal_prefs", maxRounds, reviewModel: llmPlanner, execModel });
+		appSend({
+			type: "set_goal_prefs",
+			maxRounds,
+			reviewModel: llmPlanner,
+			execModel,
+			...(reviewerSelectable ? { reviewerModel: llmReviewer } : {}),
+		});
 
 	const start = () => {
 		if (!canStart) return;
@@ -269,6 +341,7 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 				maxRounds,
 				locked: true,
 				...(execModel ? { execModel } : {}),
+				...(reviewerSelectable && llmReviewer ? { reviewerModel: llmReviewer } : {}),
 			});
 		} else {
 			const artifactRoots = roots
@@ -303,7 +376,7 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 
 	/** 「帮我细化」：交给目标调研向导（先提问、再给计划确认），弹窗关掉让目标条显示向导进度。 */
 	const refine = () => {
-		if (!g || mode !== "llm") return;
+		if (!g || mode !== "llm" || blocked) return;
 		const maxRounds = Math.max(0, Math.min(llmRounds, 50));
 		sendLlmPrefs(maxRounds);
 		appSend({
@@ -316,11 +389,97 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 		finish();
 	};
 
-	const note = conflict
-		? t("codeLoopModelConflict", { family: plannerFamily })
-		: models && models.length === 0
+	const roleLabel = (r: RoleName) =>
+		t(r === "planner" ? "taskRolePlanner" : r === "executor" ? "taskRoleExecutor" : "taskRoleReviewer");
+	const roleModel = (m: RoleModelView | null) =>
+		m
+			? t("taskRoleModel", {
+					id: m.id,
+					family: m.family,
+					source: t(m.source === "auto" ? "taskRoleAuto" : m.source === "main" ? "taskRoleMain" : "taskRoleExplicit"),
+				})
+			: t("taskRoleNone");
+	/** 冲突 / 解析失败时指出具体角色与模型；否则给角色说明。 */
+	const problem = ((): string | null => {
+		const e = resolution?.error;
+		if (e?.code === "unresolved") return t("taskRoleUnresolved", { role: roleLabel(e.role) });
+		if (e?.code === "no-candidate") return t("taskRoleNoCandidate", { role: roleLabel(e.role) });
+		if (e?.code === "no-main") return t("taskRoleNoMain");
+		const cf = resolution?.conflicts[0];
+		if (cf)
+			return t("taskRoleConflict", {
+				a: roleLabel(cf.roles[0]),
+				am: cf.models[0],
+				b: roleLabel(cf.roles[1]),
+				bm: cf.models[1],
+				family: cf.family,
+			});
+		if (!resolution && localConflict)
+			return t("taskRoleConflictShort", {
+				a: roleLabel(localConflict.roles[0]),
+				b: roleLabel(localConflict.roles[1]),
+				family: localConflict.family,
+			});
+		return null;
+	})();
+	// 一键修正：只替换可在本面板里调整的那个角色（审查不可选时改执行模型）。
+	const fix = ((): { label: string; apply: () => void } | null => {
+		if (!resolution || resolution.ok) return null;
+		const s = resolution.suggestion;
+		if (s && mode === "code-review")
+			return {
+				label: t("taskRoleUseSuggestion", { role: roleLabel("reviewer"), model: s.id }),
+				apply: () => setReviewer(specOf(s)),
+			};
+		if (s && mode === "llm" && reviewerSelectable)
+			return {
+				label: t("taskRoleUseSuggestion", { role: roleLabel("reviewer"), model: s.id }),
+				apply: () => setLlmReviewer(specOf(s)),
+			};
+		const x = resolution.executorSuggestion;
+		if (x && mode === "llm")
+			return {
+				label: t("taskRoleUseSuggestion", { role: roleLabel("executor"), model: x.id }),
+				apply: () => setExecModel(specOf(x)),
+			};
+		return null;
+	})();
+	const summary =
+		resolution && !resolution.error
+			? [
+					t("taskRoleItem", { role: roleLabel("planner"), model: roleModel(resolution.roles.planner) }),
+					t("taskRoleItem", { role: roleLabel("executor"), model: roleModel(resolution.roles.executor) }),
+					t("taskRoleItem", {
+						role: roleLabel("reviewer"),
+						model: mode === "code" ? t("taskRoleNoReview") : roleModel(resolution.roles.reviewer),
+					}),
+				].join(" · ")
+			: null;
+	const note =
+		problem ??
+		(models && models.length === 0
 			? t("codeLoopModelsMissing")
-			: t("codeLoopModelNote");
+			: codeMode
+				? t("codeLoopModelNote")
+				: reviewerSelectable
+					? t("taskLlmRoleNote")
+					: t("taskLlmReviewer", { name: mainModel?.name ?? "—" }));
+	const roleNotes = (
+		<>
+			{mode === "llm" && !reviewerSelectable && problem && (
+				<div className="cockpit-model-note">{t("taskLlmReviewer", { name: mainModel?.name ?? "—" })}</div>
+			)}
+			<div className={`cockpit-model-note${problem ? " bad" : ""}`}>{note}</div>
+			{fix && (
+				<button type="button" className="btn sm task-role-fix" onClick={fix.apply}>
+					{fix.label}
+				</button>
+			)}
+			{summary && (
+				<div className="cockpit-model-note task-role-summary">{t("taskRoleSummary", { roles: summary })}</div>
+			)}
+		</>
+	);
 	return (
 		<Modal className="cockpit-modal task-modal" onClose={closeTaskModal} title={t("taskNew")} icon={<FiPlus />}>
 			<div className="cockpit-body">
@@ -475,7 +634,7 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 								</div>
 							)}
 						</div>
-						<div className={`cockpit-model-note${conflict ? " bad" : ""}`}>{note}</div>
+						{roleNotes}
 					</>
 				) : (
 					<>
@@ -508,9 +667,24 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 									{modelOptions(execModel)}
 								</select>
 							</div>
+							{reviewerSelectable && (
+								<div>
+									<label className="cockpit-label" htmlFor="task-llm-reviewer">
+										{t("codeLoopReviewer")}
+									</label>
+									<select
+										id="task-llm-reviewer"
+										className="cockpit-input"
+										value={llmReviewer}
+										onChange={(e) => setLlmReviewer(e.target.value)}
+									>
+										<option value="">{t("taskRoleFollowMain", { name: mainModel?.name ?? "—" })}</option>
+										{modelOptions(llmReviewer)}
+									</select>
+								</div>
+							)}
 						</div>
-						<div className="cockpit-model-note">{t("taskLlmReviewer", { name: mainModel?.name ?? "—" })}</div>
-						{sameModel && <div className="cockpit-model-note warn">{t("goalSameModelWarn")}</div>}
+						{roleNotes}
 					</>
 				)}
 				<details className="cockpit-adv">
@@ -641,7 +815,13 @@ export const TaskModal = memo(function TaskModal({ goal: goalStatus, mainModel, 
 						{t("cancel")}
 					</button>
 					{mode === "llm" && (
-						<button type="button" className="btn task-refine" disabled={!g} title={t("goalWizardTip")} onClick={refine}>
+						<button
+							type="button"
+							className="btn task-refine"
+							disabled={!g || blocked}
+							title={t("goalWizardTip")}
+							onClick={refine}
+						>
 							{t("goalWizardBtn")}
 						</button>
 					)}
