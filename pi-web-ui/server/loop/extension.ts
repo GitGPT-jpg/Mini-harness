@@ -129,6 +129,16 @@ export function unregisterRunTurnController(runId: string): void {
 const runTurnActive = new Set<string>();
 const runTurnSessions = new Map<string, string>();
 
+/** 清除落盘的「回合在途」持久证据（回合结束时调用；失败不影响回合已结束的事实）。 */
+function clearPersistedTurnActive(runId: string): void {
+	try {
+		const st = loadState(runId);
+		if (!st || !st.turnActive) return;
+		st.turnActive = null;
+		saveState(st);
+	} catch {}
+}
+
 // ---------- 租约心跳生命周期（Task B：心跳接入真实服务生命周期） ----------
 
 /** 每个活跃 run 的心跳定时器（模块级，跨会话共享；run 终态时清理）。 */
@@ -381,6 +391,9 @@ export interface LoopState {
 	stopRequestedAt?: string | null;
 	/** 本地执行（validator/precheck 子进程组）确认退出时间；未确认 = 仍可能在途或远端未知。 */
 	stopConfirmedAt?: string | null;
+	/** 绑定会话的「回合在途」持久证据（owner = 启动回合的宿主身份）。宿主重启后
+	 *  内存标记消失，停止/恢复必须依据这条持久证据判断旧回合是否已随宿主结束。 */
+	turnActive?: { owner: string; since: string } | null;
 	/**
 	 * 接管前从旧租约保留的执行实体证据（旧协议 run 可能没有 operation）。
 	 * 只作核对线索：身份未核实时不向该 pid 发信号，也不自动重放任务。
@@ -579,6 +592,7 @@ function normalizeState(st: LoopState): LoopState {
 	if (st.recoveryState === undefined) st.recoveryState = null;
 	if (st.observedBest === undefined) st.observedBest = null;
 	if (st.legacyExecutionEntities === undefined) st.legacyExecutionEntities = [];
+	if (st.turnActive === undefined) st.turnActive = null;
 	return st;
 }
 
@@ -961,7 +975,10 @@ async function validationFromOperation(st: LoopState, opId: string): Promise<Val
 		throw new Error("缺少执行前身份");
 	if (op.snapshotSha !== identity.snapshotSha || op.snapshotRef !== identity.snapshotRef)
 		throw new Error("结果快照身份冲突");
-	const unchanged = fingerprintMatches(identity.fingerprint, currentFingerprintOf(st, true));
+	// 同一冻结内容：op.snapshotSha 必须等于冻结快照（上面已校验），此处再把
+	// 当前工作树重建树与冻结树比较。A→B 竞态下即使内容指纹已在 B 上计算，
+	// 树比较仍会把「验证 B、提交 A」识别为漂移。
+	const unchanged = frozenContentMatches(st);
 	const combined = observed.stdout + "\n" + observed.stderr;
 	return {
 		opId,
@@ -1198,9 +1215,9 @@ async function runValidationOnce(pi: ExtensionAPI, st: LoopState): Promise<Valid
 			};
 		}
 
-		// 验收后校验代码指纹（Task 3）：工作区是否在验收期间发生变化。
-		const postSha = await createWorkspaceSnapshot(st.workspace).catch(() => null);
-		const unchanged = preId.recoverable && postSha != null && postSha === preId.snapshotSha;
+		// 验收后校验冻结内容（Task 3/P1）：validator 执行前后工作树必须仍是同一棵树。
+		// 有冻结树时直接比较树（重建树失败也视为漂移：无法证明一致就不能通过）。
+		const unchanged = preId.recoverable && frozenContentMatches(st);
 		const workspaceChangedDuringValidation = preId.recoverable && !unchanged;
 
 		const combined = (res.stdout ?? "") + "\n" + (res.stderr ?? "");
@@ -1263,22 +1280,33 @@ async function runValidationOnce(pi: ExtensionAPI, st: LoopState): Promise<Valid
 interface AttemptIdentity {
 	snapshotRef: string | null;
 	snapshotSha: string | null;
+	/** 冻结快照对应的 tree 对象：validator/reviewer/提交绑定的是同一棵树，不是随后的工作树。 */
+	treeSha: string | null;
 	recoverable: boolean;
 }
 
 async function captureAttemptIdentity(st: LoopState, token: ExecToken): Promise<AttemptIdentity> {
+	const blocked = (): AttemptIdentity => ({ snapshotRef: null, snapshotSha: null, treeSha: null, recoverable: false });
 	try {
-		if (!stillCurrent(token)) return { snapshotRef: null, snapshotSha: null, recoverable: false };
+		if (!stillCurrent(token)) return blocked();
 		const sha = await createWorkspaceSnapshot(st.workspace);
-		if (!sha) return { snapshotRef: null, snapshotSha: null, recoverable: false };
+		if (!sha) {
+			// Git 工作区必须能生成冻结快照：无法创建/证明冻结内容时明确受阻，
+			// 而不是退化为「无法检测漂移」的验收（否则 A/B 竞态会提交旧树）。
+			if (isGitWorkspaceAt(st.workspace)) throw new Error("无法生成执行内容冻结快照（git 工作区）");
+			return blocked();
+		}
 		// createWorkspaceSnapshot is async. A stop/takeover can win while it is producing the commit;
 		// never pin a checkpoint ref for a run that is no longer current.
-		if (!stillCurrent(token)) return { snapshotRef: null, snapshotSha: null, recoverable: false };
+		if (!stillCurrent(token)) return blocked();
+		const tree = gitSync(["-C", st.workspace, "rev-parse", sha + "^{tree}"], st.workspace, 15000).trim();
+		if (!tree) throw new Error("冻结快照缺少可核对的 tree 对象");
 		const ref = "refs/mini-harness/checkpoints/" + st.runId + "-r" + st.round;
 		gitSync(["-C", st.workspace, "update-ref", ref, sha], st.workspace, 15000);
-		return { snapshotRef: ref, snapshotSha: sha, recoverable: true };
-	} catch {
-		return { snapshotRef: null, snapshotSha: null, recoverable: false };
+		return { snapshotRef: ref, snapshotSha: sha, treeSha: tree, recoverable: true };
+	} catch (error) {
+		// 阻断原因不外泄内容：统一为冻结快照受阻。
+		throw new Error("执行内容冻结受阻：" + String((error as Error).message || error).slice(0, 300));
 	}
 }
 
@@ -1727,12 +1755,118 @@ async function reviewOnce(pi: ExtensionAPI, ctx: LoopCtx, st: LoopState, v: { co
 	}
 }
 /**
- * 生成「实际准备提交」的树并核对它与通过验收/评审的内容一致，然后提交该树：
- * 优先使用验收绑定的不可变快照树（validationIdentity.snapshotSha）；无预存快照时
- * 用影子 index 重建当前内容的树，并在 commit-tree 前再次核对证据。commit-tree 只
- * 提交已构建的树对象，核对之后的并发改动不会进入提交。
- * 返回 null=无法构建已核验树（保持未提交）；"drift"=证据与当前内容不一致（不得判完成）。
+ * 自动/手动收下共享的 Git 收尾（P2）：提交验收绑定的不可变树，并在推进分支引用后
+ * 协调真实 index —— 提交后暂存区只保留用户独立的 staged 改动，绝不残留「收下内容
+ * 相对新 HEAD 的反向差异」，也不覆盖用户暂存。
+ *
+ * 步骤：校验预期旧 SHA（并发推进时幂等接续/明确拒绝）→ 冲突预检（用户 staged 与
+ * 收下内容同路径不同 blob → 更新引用前拒绝）→ commit-tree + update-ref（需要时）→
+ * 重写 index（已验证树 + 用户额外 staged 条目）。工作树与用户 unstaged 改动不动。
+ * 返回：ok+commit（commit 为 null 表示树已等于分支 tip，无新提交）；失败返回可恢复错误。
  */
+export function finalizeVerifiedCommit(
+	worktree: string,
+	branch: string,
+	expectedParent: string,
+	tree: string,
+	message: string,
+): { ok: true; commit: string | null } | { ok: false; error: string } {
+	const run = (args: string[], env: NodeJS.ProcessEnv = {}, input?: string) =>
+		execFileSync("git", ["--no-optional-locks", "-C", worktree, ...args], {
+			env: { ...process.env, ...env },
+			timeout: 15000,
+			encoding: "utf8",
+			stdio: ["pipe", "pipe", "pipe"],
+			...(input !== undefined ? { input } : {}),
+		});
+	try {
+		const tip = run(["rev-parse", "--verify", "refs/heads/" + branch]).trim();
+		const tipTree = run(["rev-parse", tip + "^{tree}"]).trim();
+		let commit: string | null = null;
+		if (tipTree !== tree) {
+			// 引用必须先等于预期旧 SHA：并发推进时要么同一内容（幂等接续），要么明确拒绝。
+			if (tip !== expectedParent) return { ok: false, error: "worktree 分支已被并发推进，未覆盖他人提交" };
+			// 冲突预检：用户 staged 与「旧 HEAD → 收下树」同路径但内容不同 → 更新引用前拒绝。
+			// 用户 staged = 真实 index 相对「旧 HEAD」的差异（而不是相对即将推进的新 HEAD）。
+			const staged = run(["diff", "--cached", expectedParent, "--name-only", "-z"]).split("\0").filter(Boolean);
+			for (const rel of staged) {
+				const entry = run(["ls-files", "--stage", "-z", "--", rel]).split("\0").filter(Boolean)[0];
+				if (!entry) continue;
+				const tab = entry.indexOf("\t");
+				const stagedBlob = entry.slice(0, tab).split(" ")[1];
+				const blobIn = (sha: string) => {
+					try {
+						const out = run(["ls-tree", "-z", sha + "^{tree}", "--", rel])
+							.split("\0")
+							.filter(Boolean)[0];
+						return out ? out.split(" ")[2].split("\t")[0] : "";
+					} catch {
+						return "";
+					}
+				};
+				const oldBlob = blobIn(expectedParent);
+				const newBlob = blobIn(tree);
+				// 冲突只在「收下改动了该路径」且用户 staged 第三种内容时成立；
+				// 收下未触及的路径上的 staged 内容是用户的独立暂存，保留即可。
+				if (oldBlob !== newBlob && stagedBlob && stagedBlob !== newBlob && stagedBlob !== oldBlob) {
+					return { ok: false, error: "暂存内容与收下的改动冲突（" + rel + "），未更新分支引用" };
+				}
+			}
+			commit = run(["commit-tree", tree, "-p", tip, "-m", message]).trim();
+			run(["update-ref", "refs/heads/" + branch, commit]);
+		}
+		// 协调 index：新 index = 收下树 + 用户额外 staged（staged 与收下树不同的条目）。
+		// 工作树与 unstaged 改动不动；重写真实 index 为原子拷贝。
+		// 「用户暂存」按收下前的旧 HEAD 判定：幂等重入时旧 HEAD 是当前 tip 的父提交。
+		let preHead = tip;
+		if (tipTree === tree) {
+			try {
+				preHead = run(["rev-parse", tip + "^"]).trim();
+			} catch {
+				preHead = tip;
+			}
+		}
+		const gitDir = run(["rev-parse", "--absolute-git-dir"]).trim();
+		const tmp = path.join(gitDir, `pi-finalize-index-${process.pid}-${crypto.randomBytes(6).toString("hex")}`);
+		try {
+			const tmpEnv = { GIT_INDEX_FILE: tmp };
+			run(["read-tree", tree], tmpEnv);
+			// 协调时的「用户 staged」相对收下前的旧 HEAD 判定；新 HEAD 与 index 的差异由 read-tree 收口。
+			const stagedNow = run(["diff", "--cached", preHead, "--name-only", "-z"]).split("\0").filter(Boolean);
+			const extra: string[] = [];
+			for (const rel of stagedNow) {
+				const entry = run(["ls-files", "--stage", "-z", "--", rel]).split("\0").filter(Boolean)[0];
+				if (!entry) continue;
+				const tab = entry.indexOf("\t");
+				const meta = entry.slice(0, tab).split(" ");
+				const blobIn = (sha: string) => {
+					try {
+						const out = run(["ls-tree", "-z", sha, "--", rel]).split("\0").filter(Boolean)[0];
+						return out ? out.split(" ")[2].split("\t")[0] : "";
+					} catch {
+						return "";
+					}
+				};
+				const inTree = blobIn(tree);
+				const oldBlob = blobIn(preHead + "^{tree}");
+				if (meta[1] && meta[1] !== inTree && meta[1] !== oldBlob)
+					extra.push(meta[0] + " " + meta[1] + " " + meta[2] + "\t" + entry.slice(tab + 1));
+			}
+			if (extra.length) {
+				run(["update-index", "--index-info"], tmpEnv, extra.join("\n") + "\n");
+			}
+			const realIndex = run(["rev-parse", "--git-path", "index"]).trim();
+			const realPath = path.resolve(worktree, realIndex);
+			fs.copyFileSync(tmp, realPath);
+		} finally {
+			fs.rmSync(tmp, { force: true });
+		}
+		return { ok: true, commit };
+	} catch (error) {
+		return { ok: false, error: String((error as Error).message || error).slice(0, 300) };
+	}
+}
+
 async function commitVerifiedWorktreeTree(st: LoopState): Promise<string | null | "drift"> {
 	const worktree = st.worktreeDir!;
 	const identity = st.validationIdentity;
@@ -1747,14 +1881,9 @@ async function commitVerifiedWorktreeTree(st: LoopState): Promise<string | null 
 	if (!evidenceStillValid(st)) return "drift";
 	const branch = st.worktreeBranch!;
 	const parent = gitSync(["-C", worktree, "rev-parse", "--verify", "refs/heads/" + branch], worktree, 15000).trim();
-	if (gitSync(["-C", worktree, "rev-parse", parent + "^{tree}"], worktree, 15000).trim() === tree) return tree;
-	const commit = gitSync(
-		["-C", worktree, "commit-tree", tree, "-p", parent, "-m", `mini-harness run ${st.runId}`],
-		worktree,
-		15000,
-	).trim();
-	gitSync(["-C", worktree, "update-ref", "refs/heads/" + branch, commit], worktree, 15000);
-	return commit;
+	const result = finalizeVerifiedCommit(worktree, branch, parent, tree, `mini-harness run ${st.runId}`);
+	if (!result.ok) throw new Error(result.error);
+	return result.commit;
 }
 
 /** 同步路径（用户「按代码验证收下」）取验收绑定的不可变树；无预存快照返回 null。 */
@@ -2806,9 +2935,16 @@ export function createLoopExtension() {
 			if (!st || st.status !== "active") {
 				return;
 			}
-			// 回合在途标记：停止要能定位并取消该 run 绑定会话的模型回合。
+			// 回合在途标记（内存 + 持久）：停止要能定位并取消该 run 绑定会话的模型回合；
+			// 持久证据供宿主重启后判断旧回合是否随宿主结束。
 			runTurnActive.add(st.runId);
 			runTurnSessions.set(st.runId, sessionIdOf(c));
+			if (st.owner) {
+				try {
+					st.turnActive = { owner: st.owner, since: now() };
+					saveState(st);
+				} catch {}
+			}
 			// D-12-2：服务端建的 run 在第一次开跑前做模型准备（家族解析 + 规划，原 loop_start 的逻辑）
 			if (st.setupPending && !setupBusy.has(st.runId)) {
 				const runId = st.runId;
@@ -2843,6 +2979,7 @@ export function createLoopExtension() {
 				if (sid === endedSid) {
 					runTurnSessions.delete(runId);
 					runTurnActive.delete(runId);
+					clearPersistedTurnActive(runId);
 				}
 			}
 			const st = findActiveRun(c);
@@ -3033,7 +3170,16 @@ export function stopRunExternal(
 				turnAbortError = String((error as Error).message);
 			}
 		}
-		const turnInFlight = turn ? !turn.turnEnded() : runTurnActive.has(runId);
+		const turnInFlight = (() => {
+			if (turn) return !turn.turnEnded();
+			// 无控制器（宿主重启/会话未加载）：按持久证据判断。旧宿主进程已死 →
+			// 回合随宿主结束，不计在途；旧宿主仍活（同机）→ 无法核验 → 待确认。
+			const active = loadState(runId)?.turnActive;
+			if (!active) return runTurnActive.has(runId);
+			const ownerPid = Number(String(active.owner).split("@")[0]);
+			if (Number.isSafeInteger(ownerPid) && ownerPid > 0 && ownerPid !== process.pid) return isPidAlive(ownerPid);
+			return runTurnActive.has(runId);
+		})();
 		const cancellation = cancelRunOperations(runId, reason, { canControl });
 		if (!canControl()) return { ok: false, error: "停止期间控制权已失效" };
 		const fresh = loadState(runId)!;
@@ -3247,21 +3393,21 @@ export function acceptRunValidatorOnly(runId: string): { ok: boolean; error?: st
 		if (st.worktreeDir && st.worktreeBranch && !st.worktreeCommitted) {
 			const tree = verifiedTreeFromIdentity(st);
 			if (tree) {
-				// 提交验收绑定的不可变树，不重新 add 当前工作树（关闭检查与暂存之间的竞态）。
-				const branch = st.worktreeBranch;
+				// 提交验收绑定的不可变树并协调真实 index（P2 共享收尾）：
+				// 预期旧 SHA 校验 + 冲突预检 + commit-tree/update-ref + index 重写。
 				const parent = gitSync(
-					["-C", st.worktreeDir, "rev-parse", "--verify", "refs/heads/" + branch],
+					["-C", st.worktreeDir, "rev-parse", "--verify", "refs/heads/" + st.worktreeBranch],
 					st.worktreeDir,
 					60000,
 				).trim();
-				if (gitSync(["-C", st.worktreeDir, "rev-parse", parent + "^{tree}"], st.worktreeDir, 60000).trim() !== tree) {
-					const commit = gitSync(
-						["-C", st.worktreeDir, "commit-tree", tree, "-p", parent, "-m", `mini-harness run ${st.runId}`],
-						st.worktreeDir,
-						60000,
-					).trim();
-					gitSync(["-C", st.worktreeDir, "update-ref", "refs/heads/" + branch, commit], st.worktreeDir, 60000);
-				}
+				const result = finalizeVerifiedCommit(
+					st.worktreeDir,
+					st.worktreeBranch,
+					parent,
+					tree,
+					`mini-harness run ${st.runId}`,
+				);
+				if (!result.ok) throw new Error(result.error);
 			} else {
 				// 无预存快照（非快照路径的旧状态）：退化为 add+commit，每步之间核对控制权。
 				gitSync(["-C", st.worktreeDir, "add", "-A"], st.worktreeDir, 60000);
@@ -3360,14 +3506,66 @@ function fingerprintMatches(a: EnvironmentFingerprint | null, b: EnvironmentFing
  * 已有验收证据（validationIdentity）是否仍对应当前 round/attempt 的实际执行内容与
  * 验收契约。指纹受阻（读失败/超限）视为不能复用：复用决策不允许「无法证明就没变」。
  */
-function evidenceStillValid(st: LoopState): boolean {
+/**
+ * 同步重建当前工作树的 tree 对象（影子 index，不触碰真实 index 与工作树）。
+ * 与 captureAttemptIdentity 的冻结口径一致：都只读工作树内容本身。
+ */
+function syncCurrentTreeSha(cwd: string): string | null {
+	let gitDir: string;
+	try {
+		gitDir = execFileSync("git", ["--no-optional-locks", "-C", cwd, "rev-parse", "--absolute-git-dir"], {
+			timeout: 15000,
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "ignore"],
+		}).trim();
+	} catch {
+		return null;
+	}
+	const tmp = path.join(gitDir, `pi-sync-tree-${process.pid}-${crypto.randomBytes(6).toString("hex")}`);
+	try {
+		const env = { GIT_INDEX_FILE: tmp };
+		execFileSync("git", ["--no-optional-locks", "-C", cwd, "read-tree", "--empty"], {
+			env,
+			timeout: 15000,
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+		execFileSync("git", ["--no-optional-locks", "-C", cwd, "add", "-A", "--", "."], {
+			env,
+			timeout: 15000,
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+		return execFileSync("git", ["--no-optional-locks", "-C", cwd, "write-tree"], {
+			env,
+			timeout: 15000,
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "ignore"],
+		}).trim();
+	} catch {
+		return null;
+	} finally {
+		fs.rmSync(tmp, { force: true });
+	}
+}
+
+/**
+ * 冻结内容一致判定：git 工作区优先比较冻结树与当前工作树重建树（A/B 竞态下，
+ * 「指纹匹配 B 但快照是 A」会被树比较识别为漂移）；无冻结树的旧状态回退内容指纹。
+ */
+function frozenContentMatches(st: LoopState): boolean {
 	const identity = st.validationIdentity;
 	if (!identity || identity.round !== st.round || identity.attemptId !== st.attemptId) return false;
+	if (identity.treeSha) {
+		return syncCurrentTreeSha(st.workspace) === identity.treeSha;
+	}
 	try {
 		return fingerprintMatches(identity.fingerprint, currentFingerprintOf(st, true));
 	} catch {
 		return false;
 	}
+}
+
+function evidenceStillValid(st: LoopState): boolean {
+	return frozenContentMatches(st);
 }
 
 /** 从 run 状态构建当前环境指纹（恢复/展示共用，避免三处字段映射漂移）。fresh 用于恢复核对绕过缓存。 */
@@ -3612,6 +3810,12 @@ export function recoverRun(runId: string, requesterOwner?: string): RecoverRunRe
 			if (!saveState(st)) throw new Error("恢复状态提交冲突");
 			startLeaseHeartbeat(runId, me, st.generation);
 			journal(st, "recovery-takeover", { owner: me, generation: st.generation, classification: cls.unit });
+			// P1-4：接管允许拿控制权做核对，但旧执行实体身份未核实前阻断续跑投递。
+			const unverified = unverifiedLegacyEntities(st);
+			if (unverified.length > 0) {
+				blockedReason =
+					"存在未核实的旧执行实体（pid: " + unverified.map((e) => e.pid).join(", ") + "），先核对现场再续跑";
+			}
 		} else {
 			blockedReason = "接管失败：并发竞争者已取得执行所有权";
 		}
@@ -3687,6 +3891,28 @@ export async function observeRunOperation(runId: string, timeoutMs = 30 * 60 * 1
 		await recordValidationOutcome(st, v, token);
 	}
 	return observed;
+}
+
+/**
+ * 未核实的旧执行实体：接管保留的 legacyExecutionEntities 中仍然存活、且没有
+ * 对应持久 operation 的条目。身份未核实时不向这些 pid 发信号，也阻断续跑投递。
+ */
+function unverifiedLegacyEntities(st: LoopState): Array<{ pid: number }> {
+	const ops = listOperations(st.runId);
+	// 存在当前 round/attempt 的未消费持久 operation 时，执行实体身份由 operation 记录，
+	// 旧 taskPid 只是冗余线索（同一执行），不视为「未核实」；取消/核验走 operation 路径。
+	const pending = ops.find(
+		(op) => op.attemptId === st.attemptId && op.round === st.round && !st.consumedResults?.[op.opId],
+	);
+	return (st.legacyExecutionEntities ?? []).filter(
+		(e) => e.pid != null && !ops.some((op) => op.pid === e.pid) && !pending && isPidAlive(e.pid),
+	);
+}
+
+/** 服务投递入口门禁：执行权有效且不存在未核实旧实体时才能实际投递续跑提示词。 */
+export function canResumeLoopDelivery(st: LoopState): boolean {
+	if (!canContinueLoop(st)) return false;
+	return unverifiedLegacyEntities(st).length === 0;
 }
 
 /** 任务台只读恢复信息（不接管、不写盘）：unit / 租约 / 环境变化 / attempt。 */
