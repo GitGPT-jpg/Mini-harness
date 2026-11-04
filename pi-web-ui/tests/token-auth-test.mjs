@@ -94,6 +94,23 @@ async function run() {
 			healthCookie,
 		);
 
+		// Safari requests tab icons without cookies; public images must not leak auth.
+		for (const path of ["/icons/icon-192.png?v=4", "/favicon.png"]) {
+			const iconRes = await fetch(`${base}${path}`);
+			check(
+				`public icon ${path} returns image without token`,
+				iconRes.status === 200 && (iconRes.headers.get("content-type") || "").startsWith("image/"),
+			);
+			check(
+				`public icon ${path} does not set auth cookie`,
+				!(iconRes.headers.get("set-cookie") || "").includes("pi_web_token="),
+			);
+		}
+		for (const path of ["/icons/private.json", "/icons/nested/image.png", "/favicon.png/private"]) {
+			const res = await fetch(`${base}${path}`);
+			check(`icon-like protected path ${path} returns 401`, res.status === 401);
+		}
+
 		// 2. Protected route without token -> 401
 		const noAuthRes = await fetch(`${base}${protectedPath}`);
 		check("protected route without token returns 401", noAuthRes.status === 401, `status=${noAuthRes.status}`);

@@ -1,6 +1,6 @@
 # 训推引擎组 Harness 交接文档
 
-> 更新于 2026-10-30。主工作区已完备转正（关联工作树 `/Users/zhangteng14/ComateProjects/mini-harness-cockpit` 已清理），`harness-cockpit` 与 `main` 同步并已推送到 GitHub（`https://github.com/GitGPT-jpg/Mini-harness`）。
+> 更新于 2026-11-02。当前工作区为 `/Users/zhangteng14/ComateProjects/pi agent 的定制化`，分支 `harness-cockpit`。本轮整理为 1.0.1（1.0 系列收尾版），同步 GitHub 并更新 iCode CR #123037970；推送及合入状态以远端为准。已公开的 v1.0.0 标签保留。
 > 读法：先看第 0 节「现状」和第 11 节「待办」；要改代码再看第 3–10 节。
 
 ## 0. 现状
@@ -8,8 +8,9 @@
 - **产品**：「训推引擎组 Harness」是上游 pi-web-ui v0.111.0 的源码裁剪定制版，跑 pi 1.4.0，接 Baidu One API 网关，服务推理侧（sglang / AttentionStore / prefill / cache）的 AI Loop 工作流。
 - **D-9 已完成**：旧做法是 npm 装 pi-web-ui 包，再由 `harden.mjs` 改写 `dist/`、往 `index.html` 注入脚本。现在所有定制都在 `pi-web-ui/` 源码里；`harden.mjs`、`verify-hardened.mjs`、`harness-server/` 已删除。
 - **能用**：`./setup.sh` 一键安装 → `pi-web-cockpit/start-hardened.sh` 启动 → 首次配置弹窗填 One API Key → 直接对话。干净 HOME 实测通过，setup 可重复跑。
-- **测试**：typecheck 0 错误、build 通过、vitest 312/312 个文件通过（D-11 后）、首装浏览器 E2E 14/14、`verify-cockpit.mjs` 15/15、**零 token 冒烟套件 `run-smoke.mjs`：D-10 时 74/74；D-11 后清单 59 条，58/59（`terminal-smoke-test` 本机偶发，单跑可过）**、`tests/loop-bar-test.mjs` 14/14 全绿（含 `token-auth-test.mjs` 恢复与 `.gitignore` 例外规则）。
-- **刻意没动**：GitHub 默认分支（用户要求先不动）；icode 上的版本（仍是旧 harden 版）。
+- **本轮测试（2026-11-02）**：typecheck、lint（0 warning / 0 error）、build 通过；vitest 313 个文件全过（3362 通过、9 跳过）；任务入口与详情浏览器用例通过；冒烟 58/59，终端时序用例独立重跑 55/55 通过。首装、真实模型和集群结论仍属历史记录，本轮没有重验。
+- **残留清理**：删除失效的 SSH/MCP 测试辅助文件、临时脚本、DSH 探针与社区投票 Worker；移除两个 DSH 直接依赖及 38 个锁文件包条目。CLI 明确拒绝退役引擎，开发说明按当前功能更新。详见 `pi-web-ui/DELIVERABLES.md` 顶部记录。
+- **提交方式**：GitHub 保留开发历史；iCode 将同一源码树压成一个评审提交，沿用卡片 luno-5578 与 CR #123037970。提交评审不等于合入 master。
 
 ## 1. 仓库与分支
 
@@ -17,8 +18,8 @@
 |---|---|
 | 主工作区（唯一工作树） | `/Users/zhangteng14/ComateProjects/pi agent 的定制化`，分支 `harness-cockpit`（`main` 同构对齐；原关联工作树 `mini-harness-cockpit` 已在转正后清理） |
 | GitHub | remote `github` = `https://github.com/GitGPT-jpg/Mini-harness`，`harness-cockpit` 与 `main` 均已推送最新提交 |
-| icode | remote `origin` = `icode.baidu.com/baidu/ai/mini-harness`。禁止直推 master，要用 `icode push` 提 CR，commit 需绑 iCafe 卡（luno-5578）。最新 CR #123037970 是旧 harden 版，待他人 +2，不含本分支 |
-| 本机在跑的驾驶舱 | `127.0.0.1:8787`，来自主工作树的旧版。**测试别占这个端口，也别杀这个进程** |
+| icode | remote `origin` = `icode.baidu.com/baidu/ai/mini-harness`。禁止直推 master，commit 需绑 iCafe 卡（luno-5578）；CR #123037970 用于源码版 1.0 系列评审，需他人审核 |
+| 本机在跑的驾驶舱 | `127.0.0.1:8787`，2026-11-02 核查已运行主工作树构建产物。**测试别占这个端口，也别杀这个进程** |
 | 上游来源 | 见 `pi-web-ui/PROVENANCE.md`：xing-shuyin/pi-web-ui v0.111.0（tag commit `7c40b44`，MIT），vendor 基线提交 `30902c1` |
 
 ## 2. 做过什么
@@ -91,14 +92,15 @@
 - `server/goal-history-log.ts`：LLM loop 永久目录 `<DATA_DIR>/goal-history.jsonl`，只有 `index.ts` 调过 `configureGoalLog()` 才落盘。
 - `server/loop/extension.ts`：代码 loop 运行时（状态机 + validator 门禁 + 自动下一轮 + 续跑），导出 `listRuns` / `familyOf` / `runsRoot` 供路由用。
 - `server/loop/routes.ts`：`/api/mini-harness/*`（见第 7 节）。
-- `server/agent-service.ts` 的 `startLoop()`：把 `loop_start_request` 拼成启动提示词，含验收标准、产物目录，没给检查命令时让模型先写一个真正检查的 `validate.py`。
+- `server/agent-service.ts` 的 `startLoop()`：收到 `loop_start_request` 后先调用 `createLoopRun()` 绑定会话并落盘，立即推送状态，再发送执行提示词；模型准备由 `before_agent_start` 处理。没有检查命令时要求模型编写真正检查成果的 `validate.py`。
 
 前端：
 
 - `web/src/loop-cockpit.ts`：三个弹层的开关、集群状态 store、`mhGet` / `mhPost`（`appUrl()` + `withToken()`）。
-- `web/src/components/GoalBar.tsx`：折叠行里成对的「LLM loop / 代码 loop」胶囊（任一驾驶舱弹层打开时收起）；编辑器里的评审模型胶囊、代码 loop 入口、说明行、「自己审自己」提醒；改名（LLM loop / 开始 / 帮我细化 / 规划模型 / 最多尝试）。
-- `web/src/components/LoopBar.tsx`：代码 loop 状态条（运行中、终态、重试）；目标模式关掉时补一枚代码 loop 胶囊。
-- `web/src/components/CodeLoopModal.tsx`：代码 loop 启动弹窗（预设、验收条件、规划/评审模型跨厂商校验、检查命令、产物目录、尝试次数）。
+- `web/src/components/GoalBar.tsx`：显示 LLM loop 运行状态；空闲时使用统一的 `TaskCapsule`，相关弹层打开时收起入口。
+- `web/src/components/LoopBar.tsx`：代码 loop 状态与终态动作；复用 `loop-status.ts`，评审出错时支持重试评审或按代码验证收下。
+- `web/src/components/TaskModal.tsx`：统一「新任务」弹窗，选择代码验证 + 模型评审 / 仅代码验证 / 仅模型评审，按验收方式分流；原 CodeLoopModal 已删除。
+- `web/src/components/RunDetailModal.tsx`：显示验收结论、各轮报告、validator 输出、diff、时间线、指标与经验沉淀入口。
 - `web/src/components/TaskDesk.tsx`：任务台抽屉（四段进度、工具调用时间线、暂停/继续/停止、LLM loop 历史、代码 loop 运行列表，可删除）。
 - `web/src/components/ClusterControls.tsx`：输入框里的集群按钮、底栏「集群已连接」指示、kubeconfig 弹窗。6 秒一次的状态轮询挂在 App 级的弹窗组件上。
 - 插槽 `web/src/ui-slots.ts`：新增 `host:task-desk`（顶栏，排在「后台任务」前）和 `host:cluster`（底栏，紧跟连接状态）。底栏连接文案改为「API 已连接」。
@@ -237,13 +239,14 @@ npx vitest run <相关测试>          # 全量：npx vitest run
 ## 11. 待办与建议的下一步
 
 1. **默认分支**：要不要把 `harness-cockpit` 设成 GitHub 默认分支。用户 2026-10-30 明确说先不动。
-2. **icode 同步**：icode 上仍是旧 harden 版（CR #123037970）。要换成源码版就走 `icode push`：先把整棵树压成一个 commit（一次推超过 50 个 change 会被拒），装 Change-Id 钩子，commit 绑卡 luno-5578，推之前 `git stash push --include-untracked` 保持干净；平台不允许自己 +2。
+2. **icode 评审**：源码版沿用 CR #123037970、卡片 luno-5578。从已验证的提交树生成单个评审提交，以 origin/master 为父提交，避免一次推送全部开发历史；无需 stash 或切换主工作区。评审版本的 tree 应与 GitHub 发行提交一致，合入状态以平台为准。
 3. ~~**补齐过期测试**~~（已完成：冒烟套件 `run-smoke.mjs` 74/74 全绿、`loop-bar-test.mjs` 14/14 全绿、`token-auth-test.mjs` 21/21 全绿并加入 `.gitignore` 例外）。
 4. **补实测**：8.5 列出的几项，尤其是真实集群和真实模型下的「帮我细化」与暂停/继续。
-5. **可选清理**：`@types/ssh2` 开发依赖残留；98 条 lint warning。
+5. **残留清理已进行**：当前清单不再有 `@types/ssh2` 或 DSH 直接依赖，2026-11-02 lint 为 0 warning / 0 error；安装包、wiki 扩展与早期原型等交付物保留。
 6. **已知小缺口**：
    - 填 key 后的补选模型只作用于保存 key 的那个页面，同时开着的其他标签页要手动选一次模型。
    - 旧版左下角「多 run 状态药丸」没有移植，由 LoopBar 状态条和任务台的运行列表覆盖。
+7. **worktree 执行环境绑定（P1 #3，已实现执行者会话）**：validator / reviewer / diff / 快照 / 提交都落 `st.workspace`（worktree），隔离失败直接报错（不静默回退），成功路径 + 失败路径都有回归。模型工具/终端的绑定走「执行者会话」：`startLoop` 在 `worktree: true` 时用 `spawnSubagentConversation(cwd=st.workspace, deferKickoff)` 起一个绑定 worktree 的常驻子代理，`rebindLoopSession` 把 run 的 `sessionId` 重绑到执行者会话，再 fire-and-forget `sendUserMessage` 触发首回合（子代理 runtime 的 cwd 即 worktree ⇒ bash/文件/终端天然落 worktree）。run-state 事件经 `handleLoopEvent` 同时路由到执行者与父对话（主对话 LoopBar 随动）；`resumeLoop`/`acceptLoop` 用 `ownsLoopRun`/`loopExecutorConv` 识别「run 绑在子代理上仍属本对话」并把续跑提示词发到执行者会话。**未做真实模型验证**：子代理工具确实落 worktree 这一机制与 GoalService/delegate 执行对话同源（已长期在用），但 Loop 跑在执行者会话的端到端行为需真模型/GPU 实测。
 
 ## 12. 附：干净 HOME 实测步骤
 
@@ -265,7 +268,7 @@ kill %1; rm -rf "$H"                                       # 首次配置弹窗�
 
 要点：`env -i` 隔开真实 HOME；`npm_config_prefix` 让 `npm install -g pi` 装进临时目录；共享 npm 缓存只为提速。
 
-## 13. 进行中：D-12（Loop 完成态可信度 / 结构化启动 / 成果查看 / 统一任务入口）
+## 13. 已完成：D-12（Loop 完成态可信度 / 结构化启动 / 成果查看 / 统一任务入口）
 
 > 2026-10-30 开始。依据用户贴出的评估（对照最初架构基调）分四步做，每步做完在这里打勾并写提交号。中途断了就按这里接着做。
 

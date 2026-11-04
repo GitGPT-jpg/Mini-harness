@@ -17,6 +17,8 @@ export interface LoopStatusInput {
 	round?: number | null;
 	maxRounds?: number | null;
 	stopReason?: string | null;
+	stopRequestedAt?: string | null;
+	stopConfirmedAt?: string | null;
 	acceptance?: string | null;
 	setupPending?: boolean | null;
 	setupError?: string | null;
@@ -33,6 +35,7 @@ export type LoopStatusAction =
 
 export type LoopStatusKind =
 	| "starting"
+	| "stopping"
 	| "preparing"
 	| "planning"
 	| "working"
@@ -97,6 +100,9 @@ export function loopStatus(run: LoopStatusInput, t: Translate): LoopStatus {
 	if (run.kind === "pending") return make("starting", t("loopStStarting"), "", "busy", "none", true);
 
 	const status = run.status ?? "";
+	if (run.stage === "stopping" || (run.stopRequestedAt && !run.stopConfirmedAt)) {
+		return make("stopping", t("loopStStopping"), t("loopStViewEvidence"), "warn", "view-evidence", true);
+	}
 	if (status === "active") {
 		// 服务端刚建 run、还没做完模型准备（家族解析 + 规划）
 		if (run.setupPending || run.stage === "intake")
@@ -207,4 +213,26 @@ export function canAcceptValidatorOnly(run: {
 	return (
 		run.status === "stopped" && run.stopReason === "reviewer-error" && run.mode !== "llm" && run.lastVerdict === "pass"
 	);
+}
+
+/** 隔夜恢复只读徽标（unit → 短文案 + 色调）；没有恢复信息（旧 state）时返回 null。 */
+export function recoveryBadgeOf(
+	recovery: { unit?: string | null } | null | undefined,
+	t: Translate,
+): { label: string; tone: LoopTone } | null {
+	const unit = recovery?.unit ?? null;
+	if (!unit) return null;
+	switch (unit) {
+		case "running":
+			return { label: t("recoveryRunning"), tone: "busy" };
+		case "completed-valid":
+			return { label: t("recoveryCompleted"), tone: "ok" };
+		case "failed-retryable":
+			return { label: t("recoveryFailed"), tone: "warn" };
+		case "cancelled":
+			return { label: t("recoveryCancelled"), tone: "idle" };
+		case "unknown":
+		default:
+			return { label: t("recoveryUnknown"), tone: "warn" };
+	}
 }

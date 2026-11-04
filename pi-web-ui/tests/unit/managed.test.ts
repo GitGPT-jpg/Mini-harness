@@ -46,8 +46,8 @@ describe("managed instances", () => {
 		);
 	});
 
-	it("touches nothing else: chatting, git and terminal", () => {
-		for (const type of ["prompt", "scm_status", "terminal_create"]) {
+	it("touches nothing else: chatting, search and terminal", () => {
+		for (const type of ["prompt", "search_files", "terminal_create"]) {
 			expect(managedRefusal(type, true), type).toBeNull();
 		}
 	});

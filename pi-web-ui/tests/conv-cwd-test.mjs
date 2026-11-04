@@ -4,15 +4,15 @@
  *   conv1 (A, startup) → new_chat REUSES it while it is blank (ac5a4c8) →
  *   set_cwd(B) creates B's own conversation → set_cwd(A) creates a NEW A
  *   conversation (the old one was dismissed) → conversation ids never leak
- *   between projects, the running-conversation list stays empty (nothing was
- *   ever displaced while streaming), and the file tree follows the project.
+ *   between projects, and the running-conversation list stays empty (nothing
+ *   was ever displaced while streaming).
  */
 import { portUp, freePort } from "./lib/port-utils.mjs";
 import { ensureBuild } from "./lib/ensure-build.mjs";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
 import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -26,8 +26,6 @@ const dataDir = mkdtempSync(join(tmpdir(), "pi-conv-cwd-data-"));
 const agentDir = mkdtempSync(join(tmpdir(), "pi-conv-cwd-agent-"));
 const A = mkdtempSync(join(tmpdir(), "pi-proj-a-"));
 const B = mkdtempSync(join(tmpdir(), "pi-proj-b-"));
-writeFileSync(join(A, "only-in-A.txt"), "A\n");
-writeFileSync(join(B, "only-in-B.txt"), "B\n");
 
 let failures = 0;
 const check = (name, ok, extra = "") => {
@@ -62,7 +60,6 @@ const send = (msg) => ws.send(JSON.stringify({ ...msg, seq: ++seq }));
 // State mirrors
 let snapshot = null;
 let conversations = [];
-let files = null;
 const notices = [];
 
 ws.on("message", (d) => {
@@ -84,11 +81,9 @@ ws.on("message", (d) => {
 			};
 		}
 	} else if (m.type === "conversations") conversations = m.conversations;
-	else if (m.type === "files") files = m;
 	else if (m.type === "notice" || m.type === "transition_progress") notices.push(m.text);
 	else if (m.type === "ready") {
 		console.log("ready");
-		send({ type: "list_files", path: undefined });
 	}
 });
 
@@ -131,12 +126,6 @@ await waitFor(() => snapshot?.cwd === B, "cwd=B");
 const convB = snapshot.conversationId;
 check("set_cwd(B) → B gets its OWN conversation id", convB && convB !== conv2, `${conv2} → ${convB}`);
 check("convB cwd = B", snapshot?.cwd === B);
-await waitFor(() => files?.entries?.some((e) => e.name === "only-in-B.txt"), "B file tree");
-check(
-	"file tree shows B's files",
-	files?.entries?.some((e) => e.name === "only-in-B.txt"),
-);
-
 // --- set_cwd(A): B's conv (never ran) is dismissed; A gets a NEW conversation ---
 send({ type: "set_cwd", path: A });
 await waitFor(() => snapshot?.cwd === A, "cwd=A");
@@ -146,12 +135,6 @@ check(
 	convA2 && convA2 !== convB && convA2 !== conv2,
 	`${convB} → ${convA2}`,
 );
-await waitFor(() => files?.entries?.some((e) => e.name === "only-in-A.txt"), "A file tree");
-check(
-	"file tree shows A's files",
-	files?.entries?.some((e) => e.name === "only-in-A.txt"),
-);
-
 // --- set_cwd(B) again: B's previous conv was dismissed; a new one is created ---
 send({ type: "set_cwd", path: B });
 await waitFor(() => snapshot?.cwd === B && snapshot?.conversationId !== convB, "cwd=B again");

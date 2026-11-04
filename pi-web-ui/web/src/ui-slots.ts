@@ -93,7 +93,6 @@ const SLOT_IDS: UiSlotId[] = [
 	"goalbar.actions",
 	"composer.leading",
 	"composer.actions",
-	"rightpanel.tabs",
 	"terminal.toolbar",
 	"bottombar",
 	"file.preview.toolbar",
@@ -101,7 +100,6 @@ const SLOT_IDS: UiSlotId[] = [
 	"contextmenu.message",
 	"contextmenu.session",
 	"contextmenu.project",
-	"contextmenu.file",
 	"contextmenu.toolcall",
 	"settings.pages",
 	"tasks.panel",
@@ -165,7 +163,6 @@ export function applyUiSlotCardinality<T extends { id: string; hidden: boolean }
  *   message.actions  web/src/components/Message.tsx 的 `.msg-actions`（编辑重问）与
  *                    卡片内复制按钮（复制消息）。
  *   contextmenu.session  LeftPanel.tsx 的 `.ctx-menu`：重命名 / 关闭已结束子代理 / 强行关闭对话。
- *   contextmenu.file     文件右键菜单的宿主条目（右栏文件树已删除，目前没有界面打开它）。
  *   contextmenu.message 与 contextmenu.topbar：右键菜单（Message.tsx 整条消息右键 /
  *                    TopBar.tsx 顶栏条目右键，经 ContextMenu.tsx 渲染）。
  *   contextmenu.toolcall 工具调用卡片的**工具名**右键菜单（ToolCallBlock.tsx 的卡头：
@@ -179,8 +176,8 @@ export function applyUiSlotCardinality<T extends { id: string; hidden: boolean }
  *                    的 host:goal-plan）。
  *   file.preview.toolbar / terminal.toolbar / goalbar.actions / leftpanel.sections：见下表各段注释。
  *   其余槽位（chat.header / chat.empty / notice.actions / composer.leading / leftpanel.* 的
- *                    按钮位 / contextmenu.project / settings.pages / tasks.panel / modal.dialog /
- *                    rightpanel.tabs）没有宿主内置条目：无条目时渲染层返回 null、不渲染。
+ *                    按钮位 / contextmenu.project / settings.pages / tasks.panel / modal.dialog）
+ *                    没有宿主内置条目：无条目时渲染层返回 null、不渲染。
  */
 export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 	// ---- 左栏三个分区（P2：布局页可隐藏 / 调序；LeftPanel 按此计划挂载，见 left-sections.ts） ----
@@ -282,7 +279,7 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		// 缺省落右区工具组之尾（紧接「新对话 / 临时对话」）；位置完全由 slot 顺序定，用户 ↑↓ 可调。
 		align: "end",
 	},
-	// 视图切换三连：同组 + 连号权重 → 顺序就是 TopBar 里 tab 的顺序（chat/terminal/git）。
+	// 视图切换：同组 + 连号权重 → 顺序就是 TopBar 里 tab 的顺序（chat/terminal）。
 	{
 		id: "host:chat",
 		slot: "topbar.primary",
@@ -807,274 +804,6 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		kind: "action",
 		context: "session",
 		order: 50,
-	},
-
-	// ---- 文件右键菜单（contextmenu.file；右栏文件树已删除，目前没有界面打开它）----
-	// 按 group 分段：open（打开类）/ new（新建类，目录行与空白处）/ chat（发对话）/
-	// edit（改名/副本/剪切）/ clipboard（复制路径等文本类）/ danger（删除）。
-	// 哪些 kind（file/dir/list）可见由 RightPanel 按 target.kind 置 hidden ——
-	// 这里只管声明，免得「布局页看到的」和「右键弹出来的」跑两套逻辑。
-	{
-		id: "host:file-open",
-		slot: "contextmenu.file",
-		labelKey: "fileOpenPreview",
-		icon: "open",
-		kind: "action",
-		context: "file",
-		order: 11,
-		group: "open",
-	},
-	{
-		id: "host:file-enter",
-		slot: "contextmenu.file",
-		labelKey: "fileEnterDir",
-		icon: "folder",
-		kind: "action",
-		context: "file",
-		order: 12,
-		group: "open",
-	},
-	{
-		id: "host:file-download",
-		slot: "contextmenu.file",
-		labelKey: "downloadFile",
-		icon: "download",
-		kind: "action",
-		context: "file",
-		order: 13,
-		group: "open",
-	},
-	{
-		id: "host:file-compress",
-		slot: "contextmenu.file",
-		labelKey: "fileCompress",
-		icon: "file",
-		kind: "action",
-		context: "file",
-		order: 16,
-		group: "archive",
-	},
-	{
-		id: "host:file-extract",
-		slot: "contextmenu.file",
-		labelKey: "fileExtract",
-		icon: "folder",
-		kind: "action",
-		context: "file",
-		order: 17,
-		group: "archive",
-	},
-	{
-		id: "host:file-compress-download",
-		slot: "contextmenu.file",
-		labelKey: "fileCompressDownload",
-		icon: "download",
-		kind: "action",
-		context: "file",
-		order: 18,
-		group: "archive",
-	},
-	{
-		id: "host:file-upload-folder",
-		slot: "contextmenu.file",
-		labelKey: "fileUploadFolder",
-		icon: "upload",
-		kind: "action",
-		context: "file",
-		order: 25,
-		group: "new",
-	},
-	{
-		id: "host:file-open-project",
-		slot: "contextmenu.file",
-		labelKey: "openAsProject",
-		icon: "folder",
-		kind: "action",
-		context: "file",
-		order: 14,
-		group: "open",
-	},
-	// 多根（宿主侧多根，见 protocol 的 set_workspace_roots）：把某个目录加成
-	// 「工作区根」—— 只对目录行可见（渲染层按 target.kind 置灰），已是根/就是主根时不显。
-	{
-		id: "host:file-add-root",
-		slot: "contextmenu.file",
-		labelKey: "addWorkspaceRoot",
-		icon: "folder",
-		kind: "action",
-		context: "file",
-		order: 15,
-		group: "open",
-	},
-	{
-		id: "host:file-reveal",
-		slot: "contextmenu.file",
-		labelKey: "fileReveal",
-		icon: "folder",
-		kind: "action",
-		context: "file",
-		order: 16,
-		group: "open",
-	},
-	{
-		id: "host:file-open-default",
-		slot: "contextmenu.file",
-		labelKey: "fileOpenDefault",
-		icon: "open",
-		kind: "action",
-		context: "file",
-		order: 17,
-		group: "open",
-	},
-	{
-		id: "host:file-new-file",
-		slot: "contextmenu.file",
-		labelKey: "fileNewFile",
-		icon: "file",
-		kind: "action",
-		context: "file",
-		order: 21,
-		group: "new",
-	},
-	{
-		id: "host:file-new-dir",
-		slot: "contextmenu.file",
-		labelKey: "fileNewDir",
-		icon: "folder",
-		kind: "action",
-		context: "file",
-		order: 22,
-		group: "new",
-	},
-	{
-		id: "host:file-upload",
-		slot: "contextmenu.file",
-		labelKey: "uploadToFolder",
-		icon: "upload",
-		kind: "action",
-		context: "file",
-		order: 23,
-		group: "new",
-	},
-	{
-		id: "host:file-paste",
-		slot: "contextmenu.file",
-		labelKey: "filePaste",
-		icon: "paste",
-		kind: "action",
-		context: "file",
-		order: 24,
-		group: "new",
-	},
-	{
-		id: "host:file-attach-ref",
-		slot: "contextmenu.file",
-		labelKey: "referenceTip",
-		icon: "link",
-		kind: "action",
-		context: "file",
-		order: 32,
-		group: "chat",
-	},
-	{
-		id: "host:file-attach-folder",
-		slot: "contextmenu.file",
-		labelKey: "linkFolderTip",
-		icon: "link",
-		kind: "action",
-		context: "file",
-		order: 33,
-		group: "chat",
-	},
-	{
-		id: "host:file-rename",
-		slot: "contextmenu.file",
-		labelKey: "fileRename",
-		icon: "edit",
-		kind: "action",
-		context: "file",
-		order: 41,
-		group: "edit",
-	},
-	{
-		id: "host:file-duplicate",
-		slot: "contextmenu.file",
-		labelKey: "fileDuplicate",
-		icon: "copy",
-		kind: "action",
-		context: "file",
-		order: 42,
-		group: "edit",
-	},
-	{
-		id: "host:file-cut",
-		slot: "contextmenu.file",
-		labelKey: "fileCut",
-		icon: "cut",
-		kind: "action",
-		context: "file",
-		order: 43,
-		group: "edit",
-	},
-	{
-		id: "host:file-copy",
-		slot: "contextmenu.file",
-		labelKey: "fileCopyEntry",
-		icon: "copy",
-		kind: "action",
-		context: "file",
-		order: 44,
-		group: "edit",
-	},
-	{
-		id: "host:file-copy-name",
-		slot: "contextmenu.file",
-		labelKey: "copyName",
-		icon: "copy",
-		kind: "action",
-		context: "file",
-		order: 51,
-		group: "clipboard",
-	},
-	{
-		id: "host:file-copy-path",
-		slot: "contextmenu.file",
-		labelKey: "copyPath",
-		icon: "copy",
-		kind: "action",
-		context: "file",
-		order: 52,
-		group: "clipboard",
-	},
-	{
-		id: "host:file-copy-rel",
-		slot: "contextmenu.file",
-		labelKey: "fileCopyRelPath",
-		icon: "copy",
-		kind: "action",
-		context: "file",
-		order: 53,
-		group: "clipboard",
-	},
-	{
-		id: "host:file-refresh",
-		slot: "contextmenu.file",
-		labelKey: "fileRefresh",
-		icon: "refresh",
-		kind: "action",
-		context: "file",
-		order: 54,
-		group: "clipboard",
-	},
-	{
-		id: "host:file-delete",
-		slot: "contextmenu.file",
-		labelKey: "fileDelete",
-		icon: "trash",
-		kind: "action",
-		context: "file",
-		order: 61,
-		group: "danger",
 	},
 
 	// ---- 消息右键菜单（contextmenu.message，渲染与分派见 Message.tsx）----

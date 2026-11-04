@@ -46,6 +46,7 @@ import { startControlServer } from "./control-socket.js";
 import { scheduleUploadCleanup } from "./uploads.js";
 import { configureGoalLog } from "./goal-history-log.js";
 import { registerLoopRoutes } from "./loop/routes.js";
+import { migrateMissingLoopStates } from "./loop/extension.js";
 import { ensureWindowsBash, windowsBashDir } from "./ensure-bash.js";
 import { listThemes, readThemeCss, resolveThemeFile } from "./themes.js";
 import { isManaged, managedRefusal } from "./managed.js";
@@ -73,7 +74,7 @@ import { buildPiWebTokenCookie, decodeCookieToken, isTlsRequest } from "./auth-c
 import { getAppVersion, getPkgRoot } from "./pkg-info.js";
 import {
 	handleFileMessage,
-	handleScmMessage,
+	handleWorktreeMessage,
 	handleBgServerMessage,
 	handlePresetAndDshMessage,
 	handleModelAndProviderMessage,
@@ -354,6 +355,9 @@ function splatParam(req: { params: unknown }): string {
 if (AUTH_TOKEN) {
 	// /api/health 保持开放：无敏感信息，容器/监控探针需要它。
 	// 但绝不能因命中 /api/health 就反射下发真实 token cookie（安全漏洞：issue #45）。
+	// 页签图标同样放行：Safari（WebKit IconLoader）取 favicon 时不带 cookie，鉴权会让它
+	// 401、页签没有图标。只放行公开品牌图；正则不允许子路径，不能借 /icons/ 前缀穿越。
+	const PUBLIC_ICON_PATH = /^\/(?:favicon\.(?:png|svg)|icon\.ico|icons\/[\w.-]+\.png)$/;
 	app.use((req, res, next) => {
 		const ok = tokenOk(req);
 		const cookie = cookieToken(req);
@@ -377,7 +381,7 @@ if (AUTH_TOKEN) {
 			// 协议不同而残留，所以两种属性组合各发一遍（HTTP 下 Secure 那条被忽略，无害）。
 			res.setHeader("Set-Cookie", [buildPiWebTokenCookie("", 0, false), buildPiWebTokenCookie("", 0, true)]);
 		}
-		if (req.path === "/api/health" || ok) {
+		if (req.path === "/api/health" || PUBLIC_ICON_PATH.test(req.path) || ok) {
 			next();
 			return;
 		}
@@ -396,9 +400,6 @@ const sharedStateStore = new ClientStateStore(join(DATA_DIR, "client-state.json"
 
 /** 精简发行版只保留 pi 引擎。 */
 let currentDefaultEngine: EngineId = "pi";
-/** 默认引擎标识（兼容 /api/health 等读取）。 */
-/** 精简发行版只保留 pi 引擎，所有客户端恒走 pi。 */
-const clientEngines = new Map<string, EngineId>();
 
 function resolveClientEngine(_clientId: string): EngineId {
 	return "pi";
@@ -419,13 +420,19 @@ const TABS = parseTabs();
 registerFileTransferRoutes(app, (clientId) => service.get(clientId)?.cwd);
 // Loop 任务台 / 代码 loop 表单 / 连接集群（/api/mini-harness/*，token 鉴权由上方中间件覆盖）。
 configureGoalLog(DATA_DIR);
+for (const migration of migrateMissingLoopStates()) {
+	if (migration.error) console.warn(`[loop migration] ${migration.runId}: ${migration.error}`);
+}
 registerLoopRoutes(app, { dataDir: DATA_DIR, agentDir: getAgentDir() });
 
 app.get("/api/health", (_req, res) => {
 	// 审查 #352：该端点对未鉴权开放（监控探针需要），故只保留版本/引擎与 SDK
 	// 副本诊断信息，不再暴露 cwd（工作区路径披露）与 pid（指纹/信息收集面）。
+	// `app` 是 Harness 产品标识：安装/启动脚本据此区分「本服务」与任意占用端口的程序，
+	// 避免把带 token 的 URL 交给来路不明的本地服务。
 	res.json({
 		ok: true,
+		app: "mini-harness",
 		piVersion: VERSION,
 		// issue #260：服务实际加载的是自带副本，不是全局 pi CLI 那份。这里把两份都报出来，
 		// 用户就不用猜「为什么升了全局 SDK 不生效」。（纯新增字段，piVersion 语义不变。）
@@ -867,7 +874,7 @@ if (existsSync(webDist)) {
 		// dotfiles: allow — issue #223：nvm 等安装路径本身在隐藏目录下（如 ~/.nvm/…），同上需放行。
 		res.sendFile(join(webDist, "index.html"), { dotfiles: "allow" }, (err) => {
 			if (err && !res.headersSent) {
-				res.status(503).send("正在更新 pi-web-ui，请稍后刷新…");
+				res.status(503).send("正在更新 训推引擎组 Harness，请稍后刷新…");
 			}
 		});
 	});
@@ -1042,7 +1049,7 @@ const heartbeatTimer = setInterval(() => {
 // Unref'd so it never blocks exit: heartbeat alone must not hold the event loop open.
 heartbeatTimer.unref?.();
 
-// 引擎分发：PI_WEB_ENGINE=dsh 时使用 DeepSeek Harness 引擎（server/dsh/），
+// 引擎分发：统一走 pi 引擎（精简发行版已移除 dsh 引擎）。
 import type { EngineId } from "./protocol.js";
 
 /** dispatch 表所需的方法契约（pi 的 ClientSession 与 dsh 的 DshClientSession
@@ -1115,6 +1122,7 @@ export interface DispatchSession {
 	destroySandbox?(path: string): Promise<void>;
 	switchWorktree?(path: string): Promise<void>;
 	removeWorktree?(path: string, force?: boolean): Promise<void>;
+	refreshWorktreeInfo?(): Promise<void>;
 	deleteSession(path: string): Promise<void>;
 	renameSession(path: string, name: string): Promise<void>;
 	renameConversation(id: string, name: string): Promise<void>;
@@ -1129,25 +1137,10 @@ export interface DispatchSession {
 	planCleanHandoff?(steps: import("./protocol.js").PlanStep[], promptText: string): Promise<void>;
 	switchSession(path: string, sessionId?: string): Promise<void>;
 	switchConversation(id: string): Promise<void>;
-	listFiles(path?: string): Promise<void>;
 	searchFiles(query: string, reqId: number): Promise<void>;
 	searchSessions(query: string, reqId: number): Promise<void>;
-	scmQuery(
-		kind: "status" | "history" | "filediff" | "commit",
-		reqId: number,
-		opts?: { path?: string; hash?: string },
-	): Promise<void>;
-	/** SCM「AI 生成提交信息」（scm_commitmsg）：当前模型一次性补全，应答 kind
-	 *  "commitmsg" 的 scm_data；pi 引擎之外的会话实现缺失时分发处兜底报错。 */
-	scmGenCommitMessage?(reqId: number): Promise<void>;
 	readFile(path: string): Promise<void>;
 	writeFile(path: string, text: string): Promise<void>;
-	uploadFile(dirPath: string, name: string, data: string): Promise<void>;
-	/** 文件树右键菜单的文件操作（contextmenu.file：新建/重命名/删除/复制移动）。 */
-	createEntry(dir: string, name: string, kind: "file" | "dir"): Promise<void>;
-	renameEntry(path: string, newName: string): Promise<void>;
-	deleteEntry(path: string): Promise<void>;
-	copyEntry(src: string, destDir: string, move?: boolean): Promise<void>;
 	revealEntry(path: string): Promise<void>;
 	openDefaultEntry(path: string): Promise<void>;
 	listModels(): Promise<void>;
@@ -1218,6 +1211,7 @@ export interface DispatchSession {
 			locked?: boolean;
 			/** 目标模式 2.0：执行者模型（DSH 引擎不接委托执行，忽略）。 */
 			execModel?: string;
+			reviewerModel?: string;
 		},
 	): Promise<void>;
 	clearGoal(): Promise<void>;
@@ -1229,6 +1223,7 @@ export interface DispatchSession {
 		maxRounds?: number;
 		locked?: boolean;
 		execModel?: string;
+		reviewerModel?: string;
 	}): Promise<void>;
 	startLoop?(msg: {
 		goal: string;
@@ -1238,11 +1233,31 @@ export interface DispatchSession {
 		maxRounds?: number;
 		plannerModel?: string;
 		reviewerModel?: string;
+		executorModel?: string;
 		useReviewer?: boolean;
 		worktree?: boolean;
 		taskId?: string;
 		criteria?: string;
 		artifactRoots?: string[];
+		primaryMetric?: string;
+		metricDirection?: "maximize" | "minimize";
+		metricPrecision?: number;
+		metricUnit?: string;
+		metricThreshold?: number;
+		metricThresholdOp?: "lt" | "lte" | "gt" | "gte";
+		metricTolerance?: number;
+		metricScenario?: string;
+		hardConstraints?: Array<{
+			name: string;
+			metric: string;
+			op: "lt" | "lte" | "gt" | "gte";
+			value: number;
+			unit?: string;
+			scenario?: string;
+		}>;
+		packId?: string;
+		workspace?: string;
+		inputs?: Record<string, string>;
 	}): Promise<void>;
 	stopLoop?(runId?: string): Promise<void>;
 	resumeLoop?(runId: string): Promise<void>;
@@ -1271,18 +1286,10 @@ export interface DispatchSession {
 		visionBridgeModel?: string | null;
 		visionBridgePromptMode?: "append" | "replace";
 		visionBridgePrompt?: string;
-		scmCommitMsgPromptMode?: "append" | "replace";
-		scmCommitMsgPrompt?: string;
 		reviewPrompt?: string;
 		reviewDisabledSkills?: string[];
 	}): Promise<void>;
 	reloadExtensions(): Promise<void>;
-	/** DSH engine only: list/rescan <dataDir>/dsh-patches user patch files. */
-	listDshPatches?(): Promise<void>;
-	rescanDshPatches?(): Promise<void>;
-	installDshPatch?(spec: string, id?: string): Promise<void>;
-	toggleDshPatch?(name: string, enabled: boolean): Promise<void>;
-	deleteDshPatch?(name: string): Promise<void>;
 	/** DSH engine only: Agent 预设名录刷新/空白切换/默认设置。 */
 	refreshAgentPresets?(): Promise<void>;
 	selectAgentPreset?(preset: string): Promise<void>;
@@ -1411,17 +1418,10 @@ const service: EngineService = {
 		return ensureEngine(resolveClientEngine(clientId)).attach(clientId, send);
 	},
 	detach(clientId, send) {
-		const eng = clientEngines.get(clientId);
-		if (eng) {
-			ensureEngine(eng).detach(clientId, send);
-		} else {
-			for (const s of activeEngines()) s.detach(clientId, send);
-		}
+		for (const s of activeEngines()) s.detach(clientId, send);
 	},
 	get(clientId) {
 		if (!clientId) return undefined;
-		const eng = clientEngines.get(clientId);
-		if (eng) return ensureEngine(eng).get(clientId);
 		for (const s of activeEngines()) {
 			const cs = s.get(clientId);
 			if (cs) return cs;
@@ -1903,7 +1903,7 @@ wss.on("connection", (ws) => {
 		}
 		try {
 			if (handleFileMessage(msg, cs)) return;
-			if (handleScmMessage(msg, cs, send)) return;
+			if (handleWorktreeMessage(msg, cs)) return;
 			if (handleBgServerMessage(msg, cs)) return;
 			if (handlePresetAndDshMessage(msg, cs)) return;
 			if (handleModelAndProviderMessage(msg, cs)) return;
@@ -2016,9 +2016,13 @@ wss.on("connection", (ws) => {
 						send({
 							type: "notice",
 							level: "error",
-							text: "当前实例不是由 pi-web-ui 服务启动的（前台运行），无法自动重启；请在终端里重启，或先用 pi-web-ui server install 安装服务。",
+							text:
+								"当前实例不是由 训推引擎组 Harness 服务启动的（前台运行），无法自动重启；" +
+								"请在终端里重启，或先用 pi-web-ui server install 安装服务。",
 							textEn:
-								"This instance runs in the foreground, not as a pi-web-ui service — nothing would bring it back. Restart it in its terminal, or install the service with `pi-web-ui server install`.",
+								"This instance runs in the foreground, not as a 训推引擎组 Harness service — " +
+								"nothing would bring it back. Restart it in its terminal, or install the service " +
+								"with `pi-web-ui server install`.",
 						});
 						break;
 					}
@@ -2249,7 +2253,7 @@ if (process.env[RESTART_CHILD_ENV] === "1") {
 
 httpServer.listen(PORT, HOST, () => {
 	console.log("");
-	console.log("  ⚡ pi-web-ui — web chat for the pi coding agent");
+	console.log("  ⚡ 训推引擎组 Harness — web chat for the pi coding agent");
 	console.log(`    http://localhost:${PORT}`);
 	console.log(`    workspace   : ${CWD}`);
 	console.log(`    session dir : ${SESSION_DIR_ROOT}`);

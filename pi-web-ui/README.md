@@ -1,80 +1,65 @@
 <div align="center">
 
-# 💬 pi-web-ui
+# Training & Inference Engine Team Harness
 
-**English** | [简体中文](https://github.com/xing-shuyin/pi-web-ui/blob/main/README.zh-CN.md) · [繁體中文](https://github.com/xing-shuyin/pi-web-ui/blob/main/README.zh-TW.md) · 🌐 [**Official Website**](https://xing-shuyin.github.io/pi-web-ui-site/) · 📖 [**Documentation Portal**](https://xing-shuyin.github.io/pi-web-ui-site/docs.html)
+**English** | [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md) · [Harness repository guide](../README.md)
 
-_Just open your browser to get all your work done — browser cockpit for AI coding agents._
+_Browser cockpit for inference engineering, powered by pi and Baidu One API._
 
 <p>
-  <a href="https://www.npmjs.com/package/pi-web-ui"><img src="https://img.shields.io/npm/v/pi-web-ui?color=cb3837&logo=npm&label=pi-web-ui" alt="npm version"></a>
-  <a href="https://nodejs.org/"><img src="https://img.shields.io/node/v/pi-web-ui?logo=node.js&logoColor=white" alt="node compatibility"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
 </p>
 
 </div>
 
-pi-web-ui is a full-featured web interface and desktop workspace for the pi coding agent SDK (`@earendil-works/pi-coding-agent`) and DeepSeek Harness (DSH). It turns your local AI coding agent into a responsive, visual cockpit featuring real-time chat, workspace file management, in-line code editing, terminal execution, visual Git control, and multi-agent workflows — and natively supports opening and developing on remote SSH server projects in a single browser tab.
+This directory contains the customized browser cockpit for **训推引擎组 Harness (mini-harness)**, derived from [xing-shuyin/pi-web-ui](https://github.com/xing-shuyin/pi-web-ui) v0.111.0. It uses the pi coding agent SDK (`@earendil-works/pi-coding-agent`) with Baidu One API. Install this repository through its root [setup.sh](../setup.sh); upstream npm packages and releases do not include these customizations. See [PROVENANCE.md](PROVENANCE.md) for the source record.
 
 ---
 
-## 🌟 Comprehensive Features
+## Current Harness capabilities
 
 ### 💬 Intelligent Dialogue & Interaction
 
 - **Snapshot-Driven Real-time Streaming**: Sub-60ms incremental snapshots via WebSocket. Displays live agent thought chains (Thinking/Reasoning), tool calls, elapsed execution times, and interactive terminal output.
 - **Human-in-the-Loop Questionnaires (`ask_user_question`)**: The model can pose structured questions (single/multi-select, rich option previews, freeform text) in interactive dialogs, exempt from watchdog timeouts and recoverable across page refreshes.
-- **Visual Web Element Selection (`Page Picker`)**: Companion Chrome browser extension enables clicking DOM elements in any webpage to seamlessly bring visual captures and CSS selectors into chat for agent analysis.
 - **Multi-Conversation Concurrency**: Run multiple parallel agent conversations in the same workspace; conversations run continuously in the background with support for edit-and-fork, message withdrawal (↩), and live migration.
-- **Rich Workflow Ergonomics**: Global slash commands picker (`/new`, `/model`, `/compact`, `/resume`, etc.), prompt template library, visual context compression summaries, automatic error retries, and audio/desktop notifications.
+- **Conversation tools**: Slash commands, inference prompt templates, context compression summaries, error retries and desktop notifications.
 
-### 📁 Workspace, Multimodal & 🌐 Remote SSH Projects
+### Local workspace and artifacts
 
-- **Multi-Root Workspaces & Context-Rich File Tree**: Manage primary and up to 8 secondary workspace roots with live file watching and instant search (`Ctrl/Cmd+K`); full-featured file context menu supporting opening as project root, adding to workspace, reveal in file manager, directory zip-and-download, and instant path referencing in chat.
-- **🌐 Remote SSH Server Projects**: Connect directly to remote Linux servers (`ssh://user@host:port/path`):
-  - **Credentials & Auth**: Supports passwords, SSH private keys (`~/.ssh/id_rsa` / `id_ed25519`), and SSH-Agent; credentials are encrypted locally with AES-256-GCM.
-  - **Remote Environment Probe**: Automatically detects server architecture and installs missing dependencies (Git, Node.js, Bash, etc.).
-  - **Seamless Remote Development**: SFTP-driven file browsing, preview and real-time editing (`Ctrl+S`), remote AI tool execution, and remote interactive PTY terminal; chat transcripts are securely persisted locally.
-- **Rich Media Preview & In-line Editing**: Syntax-highlighted code viewer, Markdown renderer, audio/video/image players, and direct file editing with instant save (`Ctrl+S`).
-- **Intelligent Attachments & Vision Bridge**: Drag-and-drop file uploads; local image paths are automatically converted to multimodal vision payloads, with text-reference and line-slicing modes.
+- **Local projects**: Open a working directory and attach file references to conversations. The backend retains multi-root workspace support; the former sidebar file tree has been removed.
+- **File preview and editing**: Browse code, Markdown and images, edit local files, and attach file references to conversations.
+- **Cluster access**: Supply kubeconfig through the cluster button; Harness checks connectivity with `kubectl cluster-info`. See the repository guide for K8s access.
 - **Interactive Artifact Cards (`present_files`)**: Visually surface charts, reports, web pages, and generated files as rich cards with native reveal and quick opening.
 
-### 💻 Integrated Terminal & Visual Git Cockpit
+### 💻 Integrated Terminal and Change Evidence
 
 - **Server PTY Terminals**: Built on `node-pty` and `xterm.js` with multi-tab support and persistent `ai-bash` sessions, allowing the AI to run commands in visible, interactive terminals.
-- **Visual Git Source Control**: Track repository changes with inline diffs, staging/unstaging, one-click commit, branch switching, and fast-forward pull operations.
+- **Git and change evidence**: Run Git commands in the terminal and inspect captured diffs in run details. The former visual Git panel has been removed.
 - **Seamless Theme Integration**: Terminal colors automatically align with the active theme; supports native text selection and drag-and-drop file path pasting.
 
-### 🤖 Multi-Engine & Model Management
+### pi engine and domain workflows
 
-- **Seamless Multi-Agent Engine Hot-Switching**: Out-of-the-box native integration with pi coding agent SDK, DeepSeek Harness (DSH), and Claude official coding agent runtime. Hot-swap agent engines instantly without restarts; run different engines concurrently across separate browser tabs and sessions.
-- **Universal Provider Compatibility**: Works seamlessly with OpenAI, Anthropic (Claude), Google Gemini, DeepSeek, Ollama, OpenRouter, Azure, and custom API endpoints.
-- **Zero-Leak Credential Security**: API keys and authorization headers remain securely on the server and are never exposed to client browsers.
-- **Dynamic Context Budgeting**: Soft-cap threshold token compression and a 20-minute watchdog timer to prevent agent hangs and context overflow.
+- **pi-only runtime**: First-run setup selects Baidu One API. Enter your own API key; it is stored locally in `~/.pi/agent/auth.json`.
+- **Unified task entry**: The “New task” capsule offers code validation with model review, code validation only, or model review only.
+- **LLM loop**: AI self-evaluation for open-ended tasks; the research wizard collects requirements and asks you to confirm the plan.
+- **Code loop**: A persisted `intake → plan → run → validate` workflow with a validator gate, iteration limits and resume support. Optional planner/reviewer models help define and review acceptance; a reviewer cannot override a failed validator.
+- **Task desk**: Inspect progress, tool timelines, run details and artifacts; pause, continue or stop tasks.
+- **Domain resources**: Inference prompt templates, workflow subagents, skills and the local `pi-llm-wiki` knowledge extension, configured by the root installer.
+- **Context management**: On-demand tool loading and context compression reduce context overhead.
 
-### 🧭 Advanced Agent Collaboration Modes
-
-- **Hard-Fenced Sandbox Project Mode**: Experiment freely with prototypes, destructive refactorings, or untrusted scripts in an isolated sandbox clone without touching your original workspace; supports project snapshot cloning or clean blank environments, with both ephemeral (auto-cleanup) and persistent lifecycles.
-- **Goal Mode 2.0**: The main conversation acts as a Reviewer while an automated Executor session carries out tasks, backed by evidence injection and stagnation circuit-breakers.
-- **Delegate Mode**: The main chat focuses on review and instructions while delegating execution to a background worker session with strict write gates.
-- **Plan Mode**: Enforces planning-only constraints, intercepting write tools and code dumping until the plan is approved.
-- **Subagents**: Spawn independent background subagents with customizable role templates for parallel research and delegated tasks.
-
-### 🧩 Plugin Ecosystem & Extensibility
-
-- **Official Plugin Market**: One-click installation and hot-reloading for chatbots (Slack, Discord, DingTalk, Feishu, WeChat), database clients, Mermaid diagrams, office document previews, and more.
-- **33+ Host UI Extension Slots**: Modular layout slots across top bar, side dock, footer, panels, and composer tools.
-- **On-Demand Lazy Tool Loading**: Loads specialized tools on the fly without breaking model prompt prefix caching.
-- **Settings & Preset Sharing**: Import/export configuration presets with strict whitelist sanitization.
+The plugin runtime/market, MCP integration, settings preset sharing, Page Picker, Electron/portable desktop distribution and multi-engine switching have been removed. Remote SSH workspaces, Sandbox, Delegate, Plan and the native subagent UI entry points are disabled in this Harness configuration.
 
 ### 🎨 Themes & Internationalization
 
-- **25+ Built-in Color Schemes & Wallpaper Engine Integration**: Dark (default), Light (White), Cyberpunk, Nord, Dracula, and custom CSS stylesheets with live reloading; native integration with **Wallpaper Engine** dynamic wallpapers, frosted glass blur, adjustable interface opacity, and audio visualizer spectrums.
+- **Built-in themes**: Light and dark themes with matching terminal colors.
 - **Comprehensive Internationalization**: Built-in support for English, Simplified Chinese, Traditional Chinese (TW/HK), and custom community locale packs.
 
 ---
 
-## 🖼️ Screenshots
+## Upstream historical screenshots and video
+
+The following media is retained as upstream reference material. It shows the original pi-web-ui, including desktop, multi-engine, sandbox and wallpaper features that are removed or disabled here; it does not describe the current Harness feature set.
 
 ### 🎬 Demo Video
 
@@ -114,65 +99,62 @@ pi-web-ui is a full-featured web interface and desktop workspace for the pi codi
 
 ## 📦 Installation
 
-### System Requirements
+### Requirements and recommended installation
 
-- **Node.js**: `>= 22.19.0` (except the Portable Edition, which requires no pre-installed Node.js or Git)
-- Supported Platforms: Linux, macOS, Windows (or Android via Termux)
+- macOS / Linux, **Node.js >= 22.19.0**, npm, and access to npm and Baidu One API.
+- On macOS, install Xcode Command Line Tools if `node-pty` needs compilation.
 
-### 1. Global Installation via npm (Recommended)
+Clone the **current Harness repository** using its actual URL in place of the placeholder:
 
 ```bash
-npm i -g pi-web-ui
+git clone <current-repository-url> mini-harness
+cd mini-harness
+./setup.sh
 ```
 
-> **Note for npm ≥ 12**: npm 12+ blocks dependency install scripts by default. Since `node-pty` is a native binary module, allow its installation scripts:
->
-> ```bash
-> npm i -g --allow-scripts=node-pty,@google/genai,protobufjs pi-web-ui@latest
-> ```
+The root installer pins pi, builds this cockpit and configures domain skills, model metadata and the knowledge extension. On macOS it also creates a browser launcher. Packaging and first-run configuration are documented in the [repository guide](../README.md).
 
-### 2. Run Instantly with npx
+### Docker Container (cockpit only)
 
-Run the latest version directly without installing:
+Build from this checkout, with `pi-web-ui/` as the Docker build context. The container does not run the root installer; prepare the pi configuration and domain resources first. Because the config mount below is read-only, configure credentials on the host before starting it.
+
+> **Security**: Binding `0.0.0.0` exposes the full cockpit (chat, terminal, file access) to anyone who can reach the port. Set a strong `PI_WEB_TOKEN` before deploying.
 
 ```bash
-npx pi-web-ui
-```
-
-### 3. 🖥️ Windows USB Portable Edition (Plug & Play, Zero Dependencies)
-
-A completely self-contained portable distribution designed for USB drives and external SSDs:
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/xing-shuyin/pi-web-ui/main/assets/portable-edition.png" alt="Windows USB Portable Edition" width="100%" style="max-width: 800px; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.25);" />
-</p>
-
-- **[⬇️ Download `pi-web-ui-desktop-<version>-portable.zip` from Releases](https://github.com/xing-shuyin/pi-web-ui/releases/latest)**
-- **Zero Environment Dependencies**: Bundles PortableGit and bash/Linux CLI tools. **No pre-installed Node.js, Git, or Python is required** on the target computer.
-- **100% Data Isolation**: All configs, model credentials (`auth.json` / `models.json`), chat transcripts, plugins, and caches reside in the `data/` folder inside the portable directory. Unplugging the drive leaves zero traces on the host.
-- **Drive-Letter Agnostic**: All paths are computed dynamically relative to the executable, allowing seamless operation across varying drive letters.
-- **Startup**: Extract and double-click **`启动Pi.bat`** (or `PiPortable.bat`). Includes `CreateDesktopShortcut.bat` to optionally create a clean desktop shortcut.
-- **Build Locally**: Run `npm run desktop:portable:full` to create the full portable bundle with embedded Git locally.
-
-### 4. Desktop Application Installers (Electron)
-
-Download standalone installers automatically built by GitHub Actions:
-
-- **[⬇️ Download Desktop Installers from Releases](https://github.com/xing-shuyin/pi-web-ui/releases/latest)**
-- Available for Windows (`.exe` installer), macOS (`.dmg`), and Linux (`.AppImage`).
-
-### 5. Docker Container
-
-```bash
+docker build -t mini-harness-cockpit:local .
 docker run -d \
   --name pi-web-ui \
   -p 8787:8787 \
-  -v ~/.pi-web:/root/.pi-web \
-  -v ~/.pi/agent:/root/.pi/agent \
-  -v $(pwd):/workspace \
   -e PI_WEB_HOST=0.0.0.0 \
-  xing-shuyin/pi-web-ui:latest
+  -e PI_WEB_TOKEN=change-me \
+  -e PI_WEB_CWD=/workspace \
+  -e PI_CODING_AGENT_DIR=/pi-agent \
+  -v pi-web-data:/app/.pi-web \
+  -v ~/.pi/agent:/pi-agent:ro \
+  -v "$(pwd):/workspace" \
+  mini-harness-cockpit:local
 ```
+
+- `pi-web-data:/app/.pi-web` persists chat sessions and UI state across restarts (the image sets `PI_WEB_DATA_DIR=/app/.pi-web`).
+- `~/.pi/agent:/pi-agent:ro` mounts your pi config (`auth.json` / `models.json` / skills) read-only via `PI_CODING_AGENT_DIR`.
+- `$(pwd):/workspace` + `PI_WEB_CWD=/workspace` mounts your project as the agent's workspace.
+
+> **Compose deployment**: From `pi-web-ui/`, set a strong token and the project/config mounts in the bundled `docker-compose.yml`, then run `docker compose up -d --build` (named data volume + `restart: unless-stopped`).
+
+### Build from Source
+
+After completing setup, run from the current Harness repository root to rebuild the cockpit:
+
+```bash
+cd pi-web-ui
+npm ci
+npm run build
+npm start        # starts the compiled server on http://127.0.0.1:8787
+```
+
+`npm start` runs the cockpit server directly. For normal Harness use, start it with the hardened launcher described below.
+
+For development with hot reload (`npm run dev`), see [docs/development.md](docs/development.md).
 
 ### 🐧 Linux Build Prerequisites
 
@@ -191,119 +173,35 @@ sudo pacman -S --needed base-devel python
 
 ## 🚀 Quick Start & Usage
 
-### Starting the Server
+### Starting Harness
+
+Run from the repository root:
 
 ```bash
-pi-web-ui                                 # Starts in current folder, opens http://127.0.0.1:8787
-pi-web-ui --port 9000 --cwd /path/to/repo # Specify port and workspace path
-pi-web-ui --no-browser                    # Start server without auto-opening a browser tab
+./pi-web-cockpit/start-hardened.sh
+# Optional alternative port:
+PI_WEB_PORT=9000 ./pi-web-cockpit/start-hardened.sh
 ```
 
-### 🌐 Opening Remote SSH Server Projects
+The launcher binds to `127.0.0.1:8787`, uses the bundled pi SDK and enables token authentication. On macOS, the desktop launcher created by setup opens the browser with the token. For command-line startup, use the token stored in `~/.pi-web/pi-web-token` when opening the page.
 
-You can develop on remote servers through two simple ways:
+On first launch, enter your Baidu One API key in the setup dialog. The default Base URL is `https://oneapi-comate.baidu-int.com/v1`. Use the cluster button to configure kubeconfig for K8s work.
 
-1. **From Web UI**: In the top-bar workspace dropdown, click "Switch Directory" → select the **"Remote (SSH)"** tab, fill in the host (e.g. `192.168.1.100`), port, username, and password or SSH private key, then click "Connect & Probe". Browse and pick any remote folder. Profiles are encrypted and saved locally for one-click reconnection.
-2. **From Command Line**:
-   ```bash
-   pi-web-ui --cwd ssh://ubuntu@192.168.1.100:22/var/www/my-project
-   ```
+### Updates and local data
 
-### Common Flags & Environment Variables
-
-| CLI Flag             | Environment Variable | Default           | Description                                                                 |
-| :------------------- | :------------------- | :---------------- | :-------------------------------------------------------------------------- |
-| `--port <n>`         | `PI_WEB_PORT`        | `8787`            | HTTP port to listen on                                                      |
-| `--host <addr>`      | `PI_WEB_HOST`        | `127.0.0.1`       | Listen address (`0.0.0.0` for remote/LAN access)                            |
-| `--cwd <dir>`        | `PI_WEB_CWD`         | Current directory | Workspace root (local path or `ssh://user@host:port/path`)                  |
-| `--data-dir <dir>`   | `PI_WEB_DATA_DIR`    | `~/.pi-web`       | Directory for state, plugins, themes, and uploads                           |
-| `--engine <pi\|dsh>` | `PI_WEB_ENGINE`      | `pi`              | Agent engine: `pi` native or `dsh` (DeepSeek Harness)                       |
-| `--no-browser`       | —                    | off               | Do not auto-launch system browser on startup                                |
-| _Env only_           | `PI_WEB_TOKEN`       | empty             | Optional shared authentication token                                        |
-| _Env only_           | `PI_WEB_SDK`         | `global`          | Auto-follow newer pi SDK on ancestor path; set to `bundled` to pin built-in |
-
-### System Background Service (`pi-web-ui server`)
-
-Manage pi-web-ui as a background daemon with auto-start on boot (launchd on macOS, systemd on Linux, Windows Run key):
-
-```bash
-pi-web-ui server install --port 9000 --cwd /path/to/project  # Install and start background service
-pi-web-ui server status                                    # Inspect live status, PID, and connections
-pi-web-ui server restart                                   # Restart background server
-pi-web-ui server stop                                      # Stop background server
-pi-web-ui server uninstall                                 # Remove system service
-```
-
-### Updating & Uninstalling
-
-```bash
-# Update to latest version
-npm i -g pi-web-ui@latest
-pi-web-ui server restart
-
-# Uninstall (conversations in ~/.pi/agent/ and state in ~/.pi-web/ are safely preserved)
-npm uninstall -g pi-web-ui
-```
+Update this Harness checkout, rerun the root `./setup.sh`, then restart the service. Conversation/configuration data lives in `~/.pi/agent/` and `~/.pi-web/`. See the [repository guide](../README.md) for installation, packaging and maintenance.
 
 ---
 
-## 🧩 Plugins & Extensions
+## Documentation and upstream source
 
-- **Plugin Market**: Browse, install, and configure built-in and community-contributed extensions directly within the web UI (`Settings` → `Plugins`).
-- **CLI Plugin Installation**: Install directly from any GitHub repository or local directory:
-  ```bash
-  pi-web-ui install owner/repo
-  ```
-- **Page Picker Extension**: Download `page-picker-extension.zip` from [Releases](https://github.com/xing-shuyin/pi-web-ui/releases/latest), unpack, and load it into Chrome/Edge as an unpacked extension.
+- [Harness repository guide](../README.md): installation, first-run configuration, cluster access and packaging.
+- [Development workflow](docs/development.md): local development and checks.
+- [Provenance](PROVENANCE.md): upstream version and import record.
+- [Upstream pi-web-ui](https://github.com/xing-shuyin/pi-web-ui): original project; its product documentation describes the upstream feature set.
 
-### 🚀 Submit Third-Party Community Plugins (Fully Automated CI Review & Instant Publish)
+Report Harness-specific issues in the current repository.
 
-Whether you develop custom AI tools, workspace views, platform bots (Telegram, Discord, Slack, etc.), or themes, you are warmly invited to submit your plugin to the official community registry!
+## License
 
-- 📦 **Community Plugin Registry Repository**: 👉 [**xing-shuyin/pi-web-ui-plugins**](https://github.com/xing-shuyin/pi-web-ui-plugins)
-- 📖 **Quick 4-Step Submission (Supports Web-Only Submission)**:
-  1. Prepare your open-source GitHub repository with a standard open-source license and a valid `manifest.json`;
-  2. Visit and Fork [xing-shuyin/pi-web-ui-plugins](https://github.com/xing-shuyin/pi-web-ui-plugins);
-  3. Create `plugins/<your-plugin-id>/plugin.json` with metadata (name, source, description, icon) — you can do this directly on GitHub web via "Add file";
-  4. Submit a Pull Request!
-
-#### 🌟 Key Benefits of Publishing to the Official Registry
-
-| Benefit                                  | Description                                                                                                                                                                                                                   |
-| :--------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ⚡ **Zero-Touch Auto-Merge**             | Low-risk plugins (standard tools/views without privileged permissions) are audited by the GitHub Actions bot in real time. **Once checks pass, the bot automatically approves and auto-merges the PR** with zero manual wait! |
-| 🌐 **Global Instant Exposure**           | This registry is the **out-of-the-box default catalog** for `pi-web-ui`. Within ~1 minute after merge, your plugin is searchable and installable with one click across all running `pi-web-ui` client markets worldwide.      |
-| 🛡️ **Continuous Security Audit & Trust** | Every submission and **subsequent PR update** automatically triggers strict CI security scanning (JSON Schema compliance, SVG icon XSS filtering, permission boundary checks, and author anti-tampering verification).        |
-| 🧩 **Zero Merge Conflicts**              | Each plugin uses an isolated `plugins/<id>/plugin.json` directory structure, ensuring parallel PRs from multiple authors never conflict.                                                                                      |
-
----
-
-## 📖 Complete Documentation
-
-For detailed deployment guides, plugin development SDKs, and deep architectural specifications, visit the official documentation portal:
-
-👉 **[Documentation Portal](https://xing-shuyin.github.io/pi-web-ui-site/docs.html)**
-
-- 🌐 [Official Website & Feature Tour](https://xing-shuyin.github.io/pi-web-ui-site/)
-- 🌐 [Remote SSH Workspaces & Server Setup Guide](https://xing-shuyin.github.io/pi-web-ui-site/docs.html#remote-ssh)
-- 🖥️ [Desktop Portable Edition & Custom Build Guide](https://xing-shuyin.github.io/pi-web-ui-site/docs.html#portable)
-- 🛡️ [Reverse Proxy & Remote Access (Nginx / frp / SSL)](https://xing-shuyin.github.io/pi-web-ui-site/docs.html#reverse-proxy)
-- 🔌 [Plugin System & Plugin SDK Guide](https://xing-shuyin.github.io/pi-web-ui-site/docs.html#plugin-sdk)
-- ⚙️ [Full Environment Variables & Configuration Reference](https://xing-shuyin.github.io/pi-web-ui-site/docs.html#environment-variables)
-- 🏗️ [Core Architecture & WebSocket Protocol Specs](https://xing-shuyin.github.io/pi-web-ui-site/docs.html#architecture)
-- 🐋 [Docker, Systemd, and Production Deployment](https://xing-shuyin.github.io/pi-web-ui-site/docs.html#deployment)
-
----
-
-## 🤝 Contributing & Community
-
-Contributions are warmly welcomed! Every pull request, bug report, and feature idea helps make pi-web-ui better.
-
-- 💡 **Issues & Feature Requests**: [GitHub Issues](https://github.com/xing-shuyin/pi-web-ui/issues)
-- 🗣️ **Discussions**: [GitHub Discussions](https://github.com/xing-shuyin/pi-web-ui/discussions)
-- 💬 **Community QQ Group**: `1126050727`
-- 🔗 **Companion Project**: [dsh-ui-tools](https://github.com/xing-shuyin/dsh-ui-tools)
-
-## 📄 License
-
-[MIT](LICENSE)
+[MIT](LICENSE). Copyright (c) 2026 xing-shuyin. The upstream attribution and license are retained.

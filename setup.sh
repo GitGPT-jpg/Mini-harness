@@ -56,8 +56,18 @@ n_sk=0
 for d in "$HERE"/skills/*/; do
   [ -f "$d/SKILL.md" ] || continue
   name="$(basename "$d")"
-  rm -rf "$HOME/.pi/agent/skills/$name"
-  cp -R "$d" "$HOME/.pi/agent/skills/$name"
+  dest="$HOME/.pi/agent/skills/$name"
+  if [ -d "$dest" ]; then
+    if diff -rq "$dest" "$d" >/dev/null 2>&1; then
+      n_sk=$((n_sk+1)); continue   # 与仓库版本一致，无需重装
+    fi
+    # 同名 skill 与仓库版本不同（同事改过自己的）：先备份再安装，不覆盖用户内容
+    bak="$HOME/.pi/agent/skills-backup/$name-$(date +%Y%m%d%H%M%S)"
+    mkdir -p "$(dirname "$bak")"
+    mv "$dest" "$bak"
+    say "同名 skill「$name」与仓库版本不同，已备份到 $bak 后再安装"
+  fi
+  cp -R "$d" "$dest"
   n_sk=$((n_sk+1))
 done
 say "已安装 $n_sk 个领域 skill 到 ~/.pi/agent/skills"
@@ -102,9 +112,14 @@ SK_OFF="$HOME/.pi/agent/skills.disabled"
 for s in browser-tools transcribe brave-search gccli gdcli gmcli youtube-transcript; do
   if [ -d "$SK_SRC/$s" ]; then
     mkdir -p "$SK_OFF"
-    rm -rf "${SK_OFF:?}/$s"
-    mv "$SK_SRC/$s" "$SK_OFF/$s"
-    say "已停用 skill: $s（移到 $SK_OFF）"
+    if [ -e "$SK_OFF/$s" ]; then
+      # 已有同名停用备份：不删除，把新副本另存时间戳名，保留用户已有内容
+      mv "$SK_SRC/$s" "$SK_OFF/$s-$(date +%Y%m%d%H%M%S)"
+      say "已停用 skill: $s（已有旧备份 $SK_OFF/$s，本次另存 $SK_OFF/$s-*）"
+    else
+      mv "$SK_SRC/$s" "$SK_OFF/$s"
+      say "已停用 skill: $s（移到 $SK_OFF）"
+    fi
   fi
 done
 
@@ -164,13 +179,10 @@ build_mac_app(){
   cat > "$MACOS/launcher" <<LAUNCH
 #!/bin/bash
 COCKPIT="$COCKPIT"
-TOKENF="\$HOME/.pi-web/pi-web-token"
-if ! lsof -nP -iTCP:8787 -sTCP:LISTEN -t >/dev/null 2>&1; then
-  nohup "\$COCKPIT/start-hardened.sh" >/tmp/pi-web-harness.log 2>&1 &
+if ! "\$COCKPIT/launch-harness.sh"; then
+  osascript -e 'display dialog "训推引擎组 Harness 未在 8787 端口就绪（端口可能被其它程序占用）。请查看 /tmp/pi-web-harness.log。" with title "训推引擎组 Harness" buttons {"好"} default button "好"' >/dev/null 2>&1
+  exit 1
 fi
-for i in \$(seq 1 30); do lsof -nP -iTCP:8787 -sTCP:LISTEN -t >/dev/null 2>&1 && break; sleep 0.5; done
-TOKEN="\$(cat "\$TOKENF" 2>/dev/null)"
-open "http://localhost:8787/?token=\${TOKEN}"
 LAUNCH
   chmod +x "$MACOS/launcher"
   # 6c) Info.plist
@@ -193,15 +205,23 @@ PLIST
 }
 if [ "$OS" = "Darwin" ]; then build_mac_app || warn "生成 .app 失败，可手动运行 pi-web-cockpit/start-hardened.sh"; fi
 
-# ---- 7) 完成提示 ----
+# ---- 7) 启动服务并自动打开浏览器（装完即用；PI_WEB_NO_OPEN=1 可跳过自动打开）----
+# setup 是明确的升级动作：只替换已验证属于此安装目录的旧进程，未知占用绝不接收 token。
+if ! "$COCKPIT/launch-harness.sh" --upgrade; then
+  warn "自动启动/打开失败，可手动运行 $COCKPIT/launch-harness.sh"
+  exit 1
+fi
+
+# ---- 8) 完成提示 ----
 cat <<DONE
 
 ============================================================
  安装完成 ✅  —— ${APP_NAME}
 ------------------------------------------------------------
- 启动方式：
+ 本次已自动启动服务并打开浏览器（若未弹出，手动访问 http://127.0.0.1:8787）
+ 下次启动：
    • Mac：双击桌面「${APP_NAME}」图标
-   • 或命令行： "$COCKPIT/start-hardened.sh"  然后浏览器开 http://localhost:8787
+   • 或命令行： "$COCKPIT/start-hardened.sh"
  首次使用：
    页面会弹出「首次配置」对话框，已预选 Baidu One API，
    Base URL 已预填 https://oneapi-comate.baidu-int.com/v1，
@@ -212,4 +232,3 @@ cat <<DONE
    （若连 kubectl 都到不了集群，才用 "$HERE/tunnel/tunnel.sh" auto 兜底）
 ============================================================
 DONE
-

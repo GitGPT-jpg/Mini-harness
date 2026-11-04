@@ -39,7 +39,6 @@ import {
 } from "./client-state.js";
 import { normalizeSoftCapByModel, normalizeSoftCapTokens } from "./soft-cap.js";
 import { findVisionModels, SYSTEM_PROMPT } from "./vision-bridge.js";
-import { COMMITMSG_SYSTEM_PROMPT } from "./scm-commitmsg.js";
 import { PLAN_MODE_SYSTEM_PROMPT } from "./plan-mode.js";
 import { DEFAULT_TEMPLATES, localizeTemplate, type SubagentTemplatesStore } from "./subagent-templates.js";
 import type { ApprovalRulesStore } from "./approval-rules.js";
@@ -386,8 +385,6 @@ export class SettingsService {
 				visionBridgeModel: this.settings.visionBridgeModel,
 				visionBridgePromptMode: this.settings.visionBridgePromptMode,
 				visionBridgePrompt: this.settings.visionBridgePrompt,
-				scmCommitMsgPromptMode: this.settings.scmCommitMsgPromptMode,
-				scmCommitMsgPrompt: this.settings.scmCommitMsgPrompt,
 				planModePromptMode: this.settings.planModePromptMode,
 				planModePrompt: this.settings.planModePrompt,
 				reviewPrompt: this.settings.reviewPrompt,
@@ -404,7 +401,6 @@ export class SettingsService {
 				// 发给模型的工具 schema（name/description/parameters）—— 只读预览。
 				toolsSchema: promptSnap.toolsSchema,
 				visionBridgeDefaultPrompt: SYSTEM_PROMPT,
-				scmCommitMsgDefaultPrompt: COMMITMSG_SYSTEM_PROMPT,
 				planModeDefaultPrompt: PLAN_MODE_SYSTEM_PROMPT,
 				visionModels: this.collectVisionModels(),
 				disabledSkills: [...this.settings.disabledSkills],
@@ -532,8 +528,6 @@ export class SettingsService {
 		visionBridgeModel?: string | null;
 		visionBridgePromptMode?: PromptMode;
 		visionBridgePrompt?: string;
-		scmCommitMsgPromptMode?: PromptMode;
-		scmCommitMsgPrompt?: string;
 		planModePromptMode?: PromptMode;
 		planModePrompt?: string;
 		reviewPrompt?: string;
@@ -741,12 +735,6 @@ export class SettingsService {
 		}
 		if (partial.visionBridgePrompt !== undefined) {
 			this.settings.visionBridgePrompt = partial.visionBridgePrompt;
-		}
-		if (partial.scmCommitMsgPromptMode !== undefined) {
-			this.settings.scmCommitMsgPromptMode = partial.scmCommitMsgPromptMode;
-		}
-		if (partial.scmCommitMsgPrompt !== undefined) {
-			this.settings.scmCommitMsgPrompt = partial.scmCommitMsgPrompt;
 		}
 		if (partial.planModePromptMode !== undefined) {
 			this.settings.planModePromptMode = partial.planModePromptMode;

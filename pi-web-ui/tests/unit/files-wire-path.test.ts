@@ -1,14 +1,12 @@
 /**
  * files-wire-path.test.ts — workspacePath / isAbsoluteWirePath 的 Windows 绕过
- * 回归（盘符相对路径 "D:x"、UNC "\\host\share"、跨盘 relative 返回绝对路径）
- * 与 uploadFile 的保留名 / 尾点 / 已存在拒绝语义。
+ * 回归（盘符相对路径 "D:x"、UNC "\\host\share"、跨盘 relative 返回绝对路径）。
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FilesService, isAbsoluteWirePath, workspacePath } from "../../server/files-service.js";
-import type { ServerMessage } from "../../server/protocol.js";
+import { isAbsoluteWirePath, workspacePath } from "../../server/files-service.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -76,57 +74,5 @@ describe("workspacePath", () => {
 			const other = `${root[0] === "C" ? "D" : "C"}:\\somewhere`;
 			expect(workspacePath(root, other)).toBeNull();
 		});
-	});
-});
-
-function makeService(cwd: string) {
-	const seen: ServerMessage[] = [];
-	const svc = new FilesService({
-		emit: (m) => void seen.push(m),
-		isDisposed: () => false,
-		getCwd: () => cwd,
-		getActiveCwd: () => cwd,
-	});
-	return { svc, seen };
-}
-
-describe("uploadFile 文件名与覆盖语义", () => {
-	it("尾点 / 纯点文件名拒绝", async () => {
-		const cwd = tempRoot();
-		const { svc, seen } = makeService(cwd);
-		const data = Buffer.from("hi").toString("base64");
-		await svc.uploadFile("", "a..", data);
-		await svc.uploadFile("", "..", data);
-		const errs = seen.filter((m) => m.type === "notice" && m.level === "error");
-		expect(errs.length).toBe(2);
-		expect(existsSync(join(cwd, "a.."))).toBe(false);
-	});
-
-	it.skipIf(process.platform !== "win32")("Windows 保留名拒绝", async () => {
-		const cwd = tempRoot();
-		const { svc, seen } = makeService(cwd);
-		await svc.uploadFile("", "con.txt", Buffer.from("hi").toString("base64"));
-		const errs = seen.filter((m) => m.type === "notice" && m.level === "error");
-		expect(errs.length).toBe(1);
-		expect(existsSync(join(cwd, "con.txt"))).toBe(false);
-	});
-
-	it("目标已存在时拒绝而不是静默覆盖（与 file-transfer 路由同语义）", async () => {
-		const cwd = tempRoot();
-		const { svc, seen } = makeService(cwd);
-		writeFileSync(join(cwd, "a.txt"), "keep");
-		await svc.uploadFile("", "a.txt", Buffer.from("overwritten").toString("base64"));
-		const errs = seen.filter((m) => m.type === "notice" && m.level === "error");
-		expect(errs.length).toBe(1);
-		expect(readFileSync(join(cwd, "a.txt"), "utf8")).toBe("keep");
-	});
-
-	it("正常上传照常工作", async () => {
-		const cwd = tempRoot();
-		const { svc, seen } = makeService(cwd);
-		await svc.uploadFile("sub", "b.txt", Buffer.from("hello").toString("base64"));
-		expect(readFileSync(join(cwd, "sub", "b.txt"), "utf8")).toBe("hello");
-		const errs = seen.filter((m) => m.type === "notice" && m.level === "error");
-		expect(errs.length).toBe(0);
 	});
 });

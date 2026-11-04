@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_TITLE_SETTINGS, normalizeTitleSettings, projectNameFromCwd } from "../../web/src/title-settings.js";
 
 describe("normalizeTitleSettings", () => {
-	it("非对象回退默认（默认开启）", () => {
+	it("非对象回退默认（默认关闭项目名）", () => {
 		expect(normalizeTitleSettings(null)).toEqual(DEFAULT_TITLE_SETTINGS);
 		expect(normalizeTitleSettings(undefined)).toEqual(DEFAULT_TITLE_SETTINGS);
 		expect(normalizeTitleSettings("yes")).toEqual(DEFAULT_TITLE_SETTINGS);

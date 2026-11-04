@@ -1,0 +1,41 @@
+{
+  "id": "cache-loss",
+  "title": "缓存损耗（损耗率最小化）",
+  "summary": "修正指标口径：loss_pct = (1 - ITPS_ascache,uncache / ITPS_disable-radix-cache,uncache)*100（真实 ASCache 损耗）；cache_hit 是独立观测项，不是损耗。",
+  "goal": "降低缓存命中损耗：压低开启 ASCache 后 uncache ITPS 相对 disable-radix-cache 的比值损耗（越小越好），同时命中率与稳定性达标。",
+  "criteria": "以 HARNESS_METRIC.loss_pct 为主指标（越小越好），必须报出 HARNESS_SCENARIO=ascache-on-vs-radix-off；cache_hit、input_len、loss_std 为独立硬约束，缺一不可。",
+  "precheckCmd": "python3 validate.py --precheck",
+  "validateCmd": "python3 validate.py --validate",
+  "primaryMetric": "loss_pct",
+  "metricDirection": "minimize",
+  "metricThreshold": {
+    "op": "lt",
+    "value": 20
+  },
+  "metricScenario": "ascache-on-vs-radix-off",
+  "hardConstraints": [
+    {
+      "name": "命中率下限（独立观测）",
+      "metric": "cache_hit",
+      "op": "gte",
+      "value": 0.96
+    },
+    {
+      "name": "输入长度",
+      "metric": "input_len",
+      "op": "gte",
+      "value": 81920
+    },
+    {
+      "name": "稳定性（多轮方差）",
+      "metric": "loss_std",
+      "op": "lte",
+      "value": 0.5
+    }
+  ],
+  "artifactRoots": [
+    "runs"
+  ],
+  "maxRounds": 6,
+  "useReviewer": true
+}

@@ -276,32 +276,11 @@ describe("evaluateWhen（P0-3 条件表达式）", () => {
 });
 
 describe("buildWhenContext（按槽位 + target 现场构造）", () => {
-	it("文件菜单按 kind 给 file.isDir/isFile（列表空白处代表当前目录，同样具备 file.isDir，机器根除外）", () => {
-		expect(buildWhenContext("contextmenu.file", { id: "x", kind: "dir" })).toEqual({
-			"file.isDir": true,
-			"file.isFile": false,
-		});
-		expect(buildWhenContext("contextmenu.file", { id: "x", kind: "file" })["file.isFile"]).toBe(true);
-		expect(buildWhenContext("contextmenu.file", { id: "", kind: "list" })["file.isDir"]).toBe(true);
-		expect(buildWhenContext("contextmenu.file", { id: "src", kind: "list" })["file.isDir"]).toBe(true);
-		expect(buildWhenContext("contextmenu.file", { id: "@root", kind: "list" })["file.isDir"]).toBe(false);
-	});
-
 	it("会话菜单按 kind 给 session.isRunning", () => {
 		expect(buildWhenContext("contextmenu.session", { id: "x", kind: "running" })).toEqual({
 			"session.isRunning": true,
 		});
 		expect(buildWhenContext("contextmenu.session", { id: "x", kind: "history" })["session.isRunning"]).toBe(false);
-	});
-
-	it("组合：目录行的只对文件条目在目录上置灰、在文件上可用", () => {
-		const onlyFile = entry("only-file", { when: ["file.isFile"] });
-		const dirCtx = buildWhenContext("contextmenu.file", { id: "d", kind: "dir" });
-		const fileCtx = buildWhenContext("contextmenu.file", { id: "f", kind: "file" });
-		expect(isContextMenuEntryDisabled(onlyFile, dirCtx)).toBe(true);
-		expect(isContextMenuEntryDisabled(onlyFile, fileCtx)).toBe(false);
-		expect(nextEnabledIndex([onlyFile], -1, 1, dirCtx)).toBe(-1);
-		expect(nextEnabledIndex([onlyFile], -1, 1, fileCtx)).toBe(0);
 	});
 });
 
@@ -346,8 +325,8 @@ describe("context-menu-state store（打开 / 关闭 / 订阅）", () => {
 
 	it("后开的顶掉先开的（同一时刻只有一个菜单）", () => {
 		openContextMenu(req());
-		openContextMenu(req({ slot: "contextmenu.file", target: { id: "f1" } }));
-		expect(getContextMenu()?.slot).toBe("contextmenu.file");
+		openContextMenu(req({ slot: "contextmenu.session", target: { id: "f1" } }));
+		expect(getContextMenu()?.slot).toBe("contextmenu.session");
 		expect(getContextMenu()?.target.id).toBe("f1");
 	});
 
@@ -392,7 +371,7 @@ describe("expandSelectEntries（右键菜单里 select 展开成子菜单）", (
 	function selectEntry(partial: Partial<UiSlotEntry> = {}): UiSlotEntry {
 		return {
 			id: "p:tone",
-			slot: "contextmenu.file",
+			slot: "contextmenu.message",
 			source: "host",
 			label: "语气",
 			kind: "select",

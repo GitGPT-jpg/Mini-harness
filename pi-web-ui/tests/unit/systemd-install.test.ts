@@ -23,6 +23,7 @@ interface Options {
 	cwd?: string;
 	name?: string;
 	host?: string;
+	engine?: string;
 }
 interface Invocation {
 	command: string;
@@ -221,7 +222,6 @@ describe("Linux systemd installation", () => {
 			PI_WEB_TOKEN: "test-only-sensitive-value",
 			PI_WEB_CWD: "/home/installer/project",
 			PI_WEB_DATA_DIR: "/home/installer/data",
-			PI_WEB_ENGINE: "dsh",
 			PI_CODING_AGENT_DIR: "/home/installer/agent",
 		};
 		const preview = harness(env);
@@ -253,6 +253,17 @@ describe("Linux systemd installation", () => {
 		expect(environment(unit)).toMatchObject({ ...env, PATH: "/home/installer/bin:/usr/bin" });
 		expect(JSON.stringify(h.calls.map((c) => c.args))).not.toContain(env.PI_WEB_TOKEN);
 		expect(h.output.join("\n")).not.toContain(env.PI_WEB_TOKEN);
+	});
+	it("rejects retired engines before installing a service", () => {
+		for (const [env, opts] of [
+			[{ PI_WEB_ENGINE: "dsh" }, {}],
+			[{}, { engine: "dsh" }],
+		] as const) {
+			const h = harness(env);
+			expect(() => h.cli.installSystemd(opts)).toThrow(/Invalid engine: dsh|无效引擎: dsh/);
+			expect(h.calls).toHaveLength(0);
+			expect(h.writtenFiles.size).toBe(0);
+		}
 	});
 	it("runs privileged commands directly as root and retains SUDO_USER", () => {
 		const h = harness({ SUDO_USER: "installer", PI_WEB_TOKEN: "test-only-token" }, 0);

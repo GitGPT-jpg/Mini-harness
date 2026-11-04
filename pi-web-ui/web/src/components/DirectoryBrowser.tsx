@@ -92,9 +92,6 @@ export function DirectoryBrowser({
 	const homeDir = useAppField("homeDir");
 	const desktopDir = useAppField("desktopDir");
 
-	// 模式 Tab：本地 vs 远程 SSH（底座不支持远程 SSH 时强制本地）
-	const [activeTab] = useState<"local">("local");
-
 	// ===== 本地文件浏览状态 =====
 	const [browsePath, setBrowsePath] = useState("");
 	const [draft, setDraft] = useState("");
@@ -104,8 +101,6 @@ export function DirectoryBrowser({
 	const [compIndex, setCompIndex] = useState(-1);
 	const inputRef = useRef<HTMLInputElement>(null);
 	const newInputRef = useRef<HTMLInputElement>(null);
-
-	// ===== 远程 SSH 状态 =====
 
 	const dirs = pathCompletions.filter((c) => c.type === "dir");
 
@@ -126,7 +121,7 @@ export function DirectoryBrowser({
 			inputRef.current?.focus();
 		});
 		return () => cancelAnimationFrame(frame);
-	}, [activeTab]);
+	}, []);
 
 	// 全局 Escape 键监听
 	useEffect(() => {
@@ -147,21 +142,20 @@ export function DirectoryBrowser({
 
 	// 本地目录浏览请求（60ms 防抖）
 	useEffect(() => {
-		if (activeTab !== "local") return;
 		const timer = setTimeout(() => {
 			appSend({ type: "complete_path", path: browseQuery(browsePath) });
 		}, 60);
 		return () => clearTimeout(timer);
-	}, [browsePath, activeTab]);
+	}, [browsePath]);
 
 	// 本地自由路径打字补全（150ms 防抖）
 	useEffect(() => {
-		if (activeTab !== "local" || draft === browsePath) return;
+		if (draft === browsePath) return;
 		const timer = setTimeout(() => {
 			appSend({ type: "complete_path", path: draft });
 		}, 150);
 		return () => clearTimeout(timer);
-	}, [draft, browsePath, activeTab]);
+	}, [draft, browsePath]);
 
 	const commitLocal = (path: string) => {
 		const trimmed = path.trim();
@@ -261,243 +255,228 @@ export function DirectoryBrowser({
 				onMouseDown={(e) => e.stopPropagation()}
 				onWheel={(e) => e.stopPropagation()}
 			>
-				{/* 模式切换 Tab（支持远程 SSH 时显示选项卡切换，不支持时仅显示本地目录模式） */}
-				<div className="cwd-mode-tabs cwd-mode-tabs-single">
-					<div className="cwd-mode-tab active" style={{ cursor: "default" }}>
-						💻 {t("workspaceModeLocal")}
-					</div>
+				<div className="cwd-mode-tabs">
 					<button type="button" className="cwd-close" title={t("close")} aria-label={t("close")} onClick={onClose}>
 						<FiX />
 					</button>
 				</div>
 
 				{/* 本地目录视图 */}
-				{activeTab === "local" && (
-					<>
-						<div className="cwd-picker-head">
-							<span className="cwd-picker-title" title={browsePath === MACHINE_ROOT ? t("computer") : browsePath}>
-								{browsePath === MACHINE_ROOT ? <FiHardDrive /> : <FiFolder />}
-								<span>{browsePath === MACHINE_ROOT ? t("computer") : browsePath}</span>
-							</span>
+				<div className="cwd-picker-head">
+					<span className="cwd-picker-title" title={browsePath === MACHINE_ROOT ? t("computer") : browsePath}>
+						{browsePath === MACHINE_ROOT ? <FiHardDrive /> : <FiFolder />}
+						<span>{browsePath === MACHINE_ROOT ? t("computer") : browsePath}</span>
+					</span>
+				</div>
+				{/* 单行图标工具栏（旧 head 三按钮与跳转行合并，去掉重复的此电脑）：跳转 | 导航 | 新建 | 选定 */}
+				<div className="cwd-toolbar" role="toolbar" aria-label={t("projectPickerTitle")}>
+					<TipButton
+						className={`cwd-jump ${browsePath === MACHINE_ROOT ? "active" : ""}`}
+						tip={t("computer")}
+						onClick={() => goQuickJump(MACHINE_ROOT)}
+					>
+						<FiHardDrive />
+					</TipButton>
+					{homeDir !== "" && (
+						<TipButton
+							className={`cwd-jump ${norm(browsePath) === norm(homeDir) ? "active" : ""}`}
+							tip={`${t("homeDir")} ${homeDir}`}
+							onClick={() => goQuickJump(homeDir)}
+						>
+							<FiHome />
+						</TipButton>
+					)}
+					{desktopDir !== "" && (
+						<TipButton
+							className={`cwd-jump ${norm(browsePath) === norm(desktopDir) ? "active" : ""}`}
+							tip={`${t("desktopDir")} ${desktopDir}`}
+							onClick={() => goQuickJump(desktopDir)}
+						>
+							<FiMonitor />
+						</TipButton>
+					)}
+					<span className="cwd-toolbar-sep" aria-hidden="true" />
+					<TipButton
+						className="cwd-jump tool-up"
+						tip={upPath ? `${t("cwdGoUp")} · ${upPath}` : `${t("cwdGoUp")} · ${isZh ? "已在顶层" : "already at top"}`}
+						aria-disabled={!upPath}
+						onClick={() => {
+							if (upPath) goQuickJump(upPath);
+						}}
+					>
+						<FiArrowUp />
+					</TipButton>
+					<TipButton
+						className="cwd-jump tool-root"
+						tip={
+							canAddRoot
+								? t("addWorkspaceRootHint")
+								: browsePath === MACHINE_ROOT
+									? `${t("addWorkspaceRoot")} · ${isZh ? "此电脑本身不是目录" : "This PC is not a directory"}`
+									: cur === norm(currentCwd)
+										? `${t("addWorkspaceRoot")} · ${isZh ? "已是当前项目目录" : "Already the current project"}`
+										: `${t("addWorkspaceRoot")} · ${isZh ? "已在工作区根中" : "Already a workspace root"}`
+						}
+						aria-disabled={!canAddRoot}
+						onClick={() => {
+							if (!canAddRoot) return;
+							appSend({ type: "set_workspace_roots", roots: [...workspaceRoots, browsePath] });
+						}}
+					>
+						<FiBookmark />
+					</TipButton>
+					<TipButton
+						className={`cwd-jump tool-new ${showNew ? "active" : ""}`}
+						tip={
+							browsePath === MACHINE_ROOT
+								? `${t("cwdNewFolder")} · ${isZh ? "此电脑下不能新建" : "Cannot create here"}`
+								: showNew
+									? t("cwdCancel")
+									: t("cwdNewFolder")
+						}
+						aria-disabled={browsePath === MACHINE_ROOT}
+						onClick={() => {
+							if (browsePath === MACHINE_ROOT) return;
+							if (showNew) {
+								setShowNew(false);
+								setNewName("");
+								setLocalError(null);
+							} else {
+								setNewName("");
+								setLocalError(null);
+								setShowNew(true);
+							}
+						}}
+					>
+						<FiFolderPlus />
+					</TipButton>
+					<span className="cwd-toolbar-spacer" />
+					<TipButton
+						className="cwd-jump primary tool-pick"
+						tip={
+							browsePath === MACHINE_ROOT
+								? `${t("cwdPickCurrent")} · ${isZh ? "此电脑不能作为工作目录" : "This PC cannot be a workspace"}`
+								: `${t("cwdPickCurrent")} · ${browsePath}`
+						}
+						aria-disabled={browsePath === MACHINE_ROOT}
+						onClick={() => commitLocal(browsePath)}
+					>
+						<FiCheck />
+					</TipButton>
+				</div>
+				<div className="cwd-picker-row">
+					<input
+						ref={inputRef}
+						className="status-cwd-input cwd-picker-input"
+						value={draft}
+						placeholder={t("enterPath")}
+						spellCheck={false}
+						onChange={(e) => {
+							setDraft(e.target.value);
+							setCompIndex(-1);
+						}}
+						onKeyDown={onLocalKeyDown}
+					/>
+					{draft.trim() !== "" && draft !== browsePath && (
+						<TipButton
+							className="cwd-jump tool-enter"
+							tip={`${t("cwdEnter")} · ${draft.trim()}`}
+							onClick={() => {
+								setBrowsePath(draft.trim());
+								setCompIndex(-1);
+							}}
+						>
+							<FiArrowRight />
+						</TipButton>
+					)}
+				</div>
+				<div className="cwd-list">
+					{upPath && (
+						<div key=".." className="cwd-item">
+							<button
+								type="button"
+								className="cwd-enter"
+								title={`${t("cwdGoUp")} · ${upPath}`}
+								onClick={() => goQuickJump(upPath)}
+							>
+								<FiFolder />
+								<span className="cwd-name">..</span>
+							</button>
 						</div>
-						{/* 单行图标工具栏（旧 head 三按钮与跳转行合并，去掉重复的此电脑）：跳转 | 导航 | 新建 | 选定 */}
-						<div className="cwd-toolbar" role="toolbar" aria-label={t("projectPickerTitle")}>
-							<TipButton
-								className={`cwd-jump ${browsePath === MACHINE_ROOT ? "active" : ""}`}
-								tip={t("computer")}
-								onClick={() => goQuickJump(MACHINE_ROOT)}
-							>
-								<FiHardDrive />
-							</TipButton>
-							{homeDir !== "" && (
-								<TipButton
-									className={`cwd-jump ${norm(browsePath) === norm(homeDir) ? "active" : ""}`}
-									tip={`${t("homeDir")} ${homeDir}`}
-									onClick={() => goQuickJump(homeDir)}
-								>
-									<FiHome />
-								</TipButton>
-							)}
-							{desktopDir !== "" && (
-								<TipButton
-									className={`cwd-jump ${norm(browsePath) === norm(desktopDir) ? "active" : ""}`}
-									tip={`${t("desktopDir")} ${desktopDir}`}
-									onClick={() => goQuickJump(desktopDir)}
-								>
-									<FiMonitor />
-								</TipButton>
-							)}
-							<span className="cwd-toolbar-sep" aria-hidden="true" />
-							<TipButton
-								className="cwd-jump tool-up"
-								tip={
-									upPath ? `${t("cwdGoUp")} · ${upPath}` : `${t("cwdGoUp")} · ${isZh ? "已在顶层" : "already at top"}`
-								}
-								aria-disabled={!upPath}
+					)}
+					{dirs.length === 0 && !upPath && <div className="cwd-empty">{t("cwdEmpty")}</div>}
+					{dirs.map((d) => (
+						<div key={d.path} className="cwd-item">
+							<button
+								type="button"
+								className="cwd-enter"
+								title={`${t("cwdEnter")} ${d.path}`}
 								onClick={() => {
-									if (upPath) goQuickJump(upPath);
+									setBrowsePath(d.path);
+									setDraft(d.path);
+									setCompIndex(-1);
 								}}
 							>
-								<FiArrowUp />
-							</TipButton>
+								<FiFolder />
+								<span className="cwd-name">{d.name}</span>
+							</button>
 							<TipButton
-								className="cwd-jump tool-root"
-								tip={
-									canAddRoot
-										? t("addWorkspaceRootHint")
-										: browsePath === MACHINE_ROOT
-											? `${t("addWorkspaceRoot")} · ${isZh ? "此电脑本身不是目录" : "This PC is not a directory"}`
-											: cur === norm(currentCwd)
-												? `${t("addWorkspaceRoot")} · ${isZh ? "已是当前项目目录" : "Already the current project"}`
-												: `${t("addWorkspaceRoot")} · ${isZh ? "已在工作区根中" : "Already a workspace root"}`
-								}
-								aria-disabled={!canAddRoot}
-								onClick={() => {
-									if (!canAddRoot) return;
-									appSend({ type: "set_workspace_roots", roots: [...workspaceRoots, browsePath] });
-								}}
-							>
-								<FiBookmark />
-							</TipButton>
-							<TipButton
-								className={`cwd-jump tool-new ${showNew ? "active" : ""}`}
-								tip={
-									browsePath === MACHINE_ROOT
-										? `${t("cwdNewFolder")} · ${isZh ? "此电脑下不能新建" : "Cannot create here"}`
-										: showNew
-											? t("cwdCancel")
-											: t("cwdNewFolder")
-								}
-								aria-disabled={browsePath === MACHINE_ROOT}
-								onClick={() => {
-									if (browsePath === MACHINE_ROOT) return;
-									if (showNew) {
-										setShowNew(false);
-										setNewName("");
-										setLocalError(null);
-									} else {
-										setNewName("");
-										setLocalError(null);
-										setShowNew(true);
-									}
-								}}
-							>
-								<FiFolderPlus />
-							</TipButton>
-							<span className="cwd-toolbar-spacer" />
-							<TipButton
-								className="cwd-jump primary tool-pick"
-								tip={
-									browsePath === MACHINE_ROOT
-										? `${t("cwdPickCurrent")} · ${isZh ? "此电脑不能作为工作目录" : "This PC cannot be a workspace"}`
-										: `${t("cwdPickCurrent")} · ${browsePath}`
-								}
-								aria-disabled={browsePath === MACHINE_ROOT}
-								onClick={() => commitLocal(browsePath)}
+								className="cwd-jump tool-choose"
+								tip={`${t("cwdChoose")} · ${d.path}`}
+								onClick={() => commitLocal(d.path)}
 							>
 								<FiCheck />
 							</TipButton>
 						</div>
-						<div className="cwd-picker-row">
+					))}
+				</div>
+				{showNew && (
+					<div className="cwd-picker-foot">
+						<div className="cwd-newrow">
 							<input
-								ref={inputRef}
-								className="status-cwd-input cwd-picker-input"
-								value={draft}
-								placeholder={t("enterPath")}
+								ref={newInputRef}
+								value={newName}
+								autoFocus
 								spellCheck={false}
+								placeholder={t("cwdNewName")}
 								onChange={(e) => {
-									setDraft(e.target.value);
-									setCompIndex(-1);
+									setNewName(e.target.value);
+									if (localError) setLocalError(null);
 								}}
-								onKeyDown={onLocalKeyDown}
+								onKeyDown={(e) => {
+									if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+										e.preventDefault();
+										handleCreateLocal();
+									} else if (e.key === "Escape") {
+										e.stopPropagation();
+										setShowNew(false);
+										setNewName("");
+										setLocalError(null);
+									}
+								}}
 							/>
-							{draft.trim() !== "" && draft !== browsePath && (
-								<TipButton
-									className="cwd-jump tool-enter"
-									tip={`${t("cwdEnter")} · ${draft.trim()}`}
-									onClick={() => {
-										setBrowsePath(draft.trim());
-										setCompIndex(-1);
-									}}
-								>
-									<FiArrowRight />
-								</TipButton>
-							)}
+							<TipButton className="cwd-jump primary" tip={t("cwdCreate")} onClick={handleCreateLocal}>
+								<FiCheck />
+							</TipButton>
+							<TipButton
+								className="cwd-jump"
+								tip={t("cwdCancel")}
+								onClick={() => {
+									setShowNew(false);
+									setNewName("");
+									setLocalError(null);
+								}}
+							>
+								<FiX />
+							</TipButton>
 						</div>
-						<div className="cwd-list">
-							{upPath && (
-								<div key=".." className="cwd-item">
-									<button
-										type="button"
-										className="cwd-enter"
-										title={`${t("cwdGoUp")} · ${upPath}`}
-										onClick={() => goQuickJump(upPath)}
-									>
-										<FiFolder />
-										<span className="cwd-name">..</span>
-									</button>
-								</div>
-							)}
-							{dirs.length === 0 && !upPath && <div className="cwd-empty">{t("cwdEmpty")}</div>}
-							{dirs.map((d) => (
-								<div key={d.path} className="cwd-item">
-									<button
-										type="button"
-										className="cwd-enter"
-										title={`${t("cwdEnter")} ${d.path}`}
-										onClick={() => {
-											setBrowsePath(d.path);
-											setDraft(d.path);
-											setCompIndex(-1);
-										}}
-									>
-										<FiFolder />
-										<span className="cwd-name">{d.name}</span>
-									</button>
-									<TipButton
-										className="cwd-jump tool-choose"
-										tip={`${t("cwdChoose")} · ${d.path}`}
-										onClick={() => commitLocal(d.path)}
-									>
-										<FiCheck />
-									</TipButton>
-								</div>
-							))}
-						</div>
-						{showNew && (
-							<div className="cwd-picker-foot">
-								<div className="cwd-newrow">
-									<input
-										ref={newInputRef}
-										value={newName}
-										autoFocus
-										spellCheck={false}
-										placeholder={t("cwdNewName")}
-										onChange={(e) => {
-											setNewName(e.target.value);
-											if (localError) setLocalError(null);
-										}}
-										onKeyDown={(e) => {
-											if (e.key === "Enter" && !e.nativeEvent.isComposing) {
-												e.preventDefault();
-												handleCreateLocal();
-											} else if (e.key === "Escape") {
-												e.stopPropagation();
-												setShowNew(false);
-												setNewName("");
-												setLocalError(null);
-											}
-										}}
-									/>
-									<TipButton className="cwd-jump primary" tip={t("cwdCreate")} onClick={handleCreateLocal}>
-										<FiCheck />
-									</TipButton>
-									<TipButton
-										className="cwd-jump"
-										tip={t("cwdCancel")}
-										onClick={() => {
-											setShowNew(false);
-											setNewName("");
-											setLocalError(null);
-										}}
-									>
-										<FiX />
-									</TipButton>
-								</div>
-								{localError && (
-									<div
-										className="project-picker-error"
-										style={{ color: "var(--red)", fontSize: "11px", marginTop: "4px" }}
-									>
-										{localError}
-									</div>
-								)}
+						{localError && (
+							<div className="project-picker-error" style={{ color: "var(--red)", fontSize: "11px", marginTop: "4px" }}>
+								{localError}
 							</div>
 						)}
-					</>
+					</div>
 				)}
-
-				{/* 远程 (SSH) 视图 */}
 			</div>
 		</>,
 		document.body,

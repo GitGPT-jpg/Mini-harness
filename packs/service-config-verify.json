@@ -1,0 +1,14 @@
+{
+  "id": "service-config-verify",
+  "title": "服务配置验证（decode 引擎就绪）",
+  "summary": "对齐 infer-forge perf-021：给定 kubeconfig 与 decode 部署 YAML，验证单 decode GPU 引擎带 fake transfer/dispatch flags 与 profiler 目录且 /health 200。",
+  "goal": "验证一个 decode-only 测量服务是否就绪：启动脚本携带 fake transfer/dispatch flags 与 profiler 目录，/health 返回 200，/metrics 导出 sglang: series。",
+  "criteria": "布尔验证，无主指标：Pod Running + /health 200 + /metrics sglang: series + 启动脚本 flags 齐全；kubectl 操作限定在传入 kubeconfig+namespace。",
+  "primaryMetric": null,
+  "metricDirection": null,
+  "artifactRoots": [
+    "runs"
+  ],
+  "maxRounds": 3,
+  "useReviewer": true
+}

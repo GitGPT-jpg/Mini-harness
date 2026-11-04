@@ -11,6 +11,7 @@ import {
 	canAcceptValidatorOnly,
 	loopRoundText,
 	loopStatus,
+	recoveryBadgeOf,
 	retryAcceptanceOf,
 	retryPrefillOf,
 	reviewerLine,
@@ -523,5 +524,26 @@ describe("按代码验证收下的可用条件（与服务端 acceptRunValidator
 		["已经收下了", { status: "done" }],
 	])("%s → 不行", (_name, patch) => {
 		expect(canAcceptValidatorOnly({ ...base, ...patch })).toBe(false);
+	});
+});
+
+describe("隔夜恢复徽标（recoveryBadgeOf，与服务端 recoveryInfoOf.unit 同口径）", () => {
+	const tone = (u: string) => recoveryBadgeOf({ unit: u }, tz)?.tone;
+	it("五种 unit 都映射到非空徽标", () => {
+		for (const u of ["running", "completed-valid", "failed-retryable", "cancelled", "unknown"]) {
+			expect(recoveryBadgeOf({ unit: u }, tz)?.label).toBeTruthy();
+		}
+	});
+	it("旧 state / 无 recovery → null（不渲染）", () => {
+		expect(recoveryBadgeOf(null, tz)).toBeNull();
+		expect(recoveryBadgeOf({}, tz)).toBeNull();
+		expect(recoveryBadgeOf({ unit: null }, tz)).toBeNull();
+	});
+	it("色调：running=busy / completed=ok / failed&unknown=warn / cancelled=idle", () => {
+		expect(tone("running")).toBe("busy");
+		expect(tone("completed-valid")).toBe("ok");
+		expect(tone("failed-retryable")).toBe("warn");
+		expect(tone("unknown")).toBe("warn");
+		expect(tone("cancelled")).toBe("idle");
 	});
 });

@@ -23,14 +23,6 @@ interface TopbarFitItem {
 }
 
 /**
- * 手机端钉在「⋯」右边的固定位（最右）：目前只有 📁 文件列表。
- * 它移出主直流渲染（见 TopBar 的 mobileAsideItems），不参与实测溢出、永远可见 ——
- * 这是手机端唯一的特殊入口；其余条目与桌面端同一套实测溢出（放不下才进「⋯」，
- * 不是按名单强制折叠，见 TopBar）。
- */
-export const MOBILE_ASIDE_TOPBAR_IDS: ReadonlySet<string> = new Set(["host:files"]);
-
-/**
  * 溢出菜单排序（折叠前后顺序一致的不变量）：先按对齐段（左→中→右），
  * 段内按 slot 顺序（= 布局页 ↑↓ 的顺序）。两个来源（用户隐藏的常驻项 +
  * 实测放不下的项）合并后统一排，而不是两截拼接（否则隐藏项永远插在最前，

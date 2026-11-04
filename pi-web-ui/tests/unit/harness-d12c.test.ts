@@ -9,7 +9,11 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { readHarnessEnv, syncHarnessEnv } from "../../server/harness-env.js";
 import { parseHarnessMetrics, pickBetterRound } from "../../server/loop/metrics.js";
-import { buildDistilledMarkdown, distillLoopRun } from "../../server/loop/distill.js";
+
+// extension.ts 在模块加载时读取 MINI_HARNESS_RUNTIME_ROOT 计算 ROOT（模块级 const）；
+// distill.ts 静态依赖 extension.ts，因此必须在任何会（transitively）加载 extension 的 import 之前指到临时目录，
+// 否则 createLoopRun 会写到真实的 ~/.mini-harness/runs（污染真实运行产物，在沙箱里还会 EPERM）。
+process.env.MINI_HARNESS_RUNTIME_ROOT = mkdtempSync(join(tmpdir(), "loop-d12c-runs-"));
 
 describe("HARNESS_* 自主环境变量桥（方向一）", () => {
 	it("HARNESS_* 优先于 PI_WEB_*，未设置时兼容回退 PI_WEB_*", () => {
@@ -61,13 +65,28 @@ describe("HARNESS_METRIC 解析与 bestRound 追踪（方向二）", () => {
 		best = pickBetterRound(best, r4);
 		expect(best?.round).toBe(3); // 第 4 轮吞吐退化，保持第 3 轮为最优 Checkpoint
 	});
+
+	it("pickBetterRound：声明主指标 + minimize 时只认主指标，不误选吞吐更高的坏轮次", () => {
+		// 目标是「降低 loss_pct」：即使某轮同时输出了更高的 tps，也只能按 loss_pct 选优。
+		const target = { metric: "loss_pct", direction: "minimize" as const };
+		const r1 = { round: 1, verdict: "pass", commitSha: "a", metrics: { loss_pct: 14.2, tps: 300 }, at: "t1" };
+		const r2 = { round: 2, verdict: "pass", commitSha: "b", metrics: { loss_pct: 13.8, tps: 100 }, at: "t2" };
+		const r3 = { round: 3, verdict: "pass", commitSha: "c", metrics: { loss_pct: 15.0, tps: 500 }, at: "t3" };
+
+		let best = pickBetterRound(null, r1, target);
+		expect(best?.round).toBe(1);
+		best = pickBetterRound(best, r2, target);
+		expect(best?.round).toBe(2); // loss 13.8 < 14.2
+		best = pickBetterRound(best, r3, target);
+		expect(best?.round).toBe(2); // loss 15.0 > 13.8，即便 tps 更高也不选
+	});
 });
 
 describe("L0 precheck 短路与经验卡片沉淀（方向二）", () => {
 	it("L0 precheck 失败时立即短路，不执行昂贵的 L1 validateCmd 与模型评审", async () => {
 		const runsDir = mkdtempSync(join(tmpdir(), "loop-d12c-runs-"));
 		process.env.MINI_HARNESS_RUNTIME_ROOT = runsDir;
-		const { createLoopExtension, createLoopRun, loadLoopState } = await import("../../server/loop/extension.js");
+		const { createLoopExtension, createLoopRun, loadLoopState, setLoopExecForTest } = await import("../../server/loop/extension.js");
 
 		const execCmds: string[] = [];
 		const tools = new Map<string, any>();
@@ -87,6 +106,11 @@ describe("L0 precheck 短路与经验卡片沉淀（方向二）", () => {
 			sendUserMessage: () => {},
 		};
 		createLoopExtension()(pi);
+		// validator/precheck 走同一个 mock exec，避免 extension 用真实 runCommand 离开测试工作区。
+		setLoopExecForTest(async (cmd: string, args: string[], opts?: { cwd?: string }) => {
+			const r = await pi.exec(cmd, args, opts);
+			return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.code ?? null, killed: false };
+		});
 		const sid = "sess-precheck-" + Date.now();
 		const created = createLoopRun({
 			sessionId: sid,
@@ -110,7 +134,8 @@ describe("L0 precheck 短路与经验卡片沉淀（方向二）", () => {
 		expect(st.lastEvidence).toContain("快速预检未通过");
 	});
 
-	it("distillLoopRun：把运行状态归档为结构化 Markdown 知识卡片", () => {
+	it("distillLoopRun：把运行状态归档为结构化 Markdown 知识卡片", async () => {
+		const { buildDistilledMarkdown, distillLoopRun } = await import("../../server/loop/distill.js");
 		const dataDir = mkdtempSync(join(tmpdir(), "loop-distill-"));
 		const fakeState: any = {
 			runId: "20261030230000-abc123",

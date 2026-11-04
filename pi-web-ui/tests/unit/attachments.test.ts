@@ -80,8 +80,6 @@ function makeCtx(opts: {
 			visionBridgeModel: null,
 			visionBridgePromptMode: "append" as const,
 			visionBridgePrompt: "",
-			scmCommitMsgPromptMode: "append" as const,
-			scmCommitMsgPrompt: "",
 			planModePromptMode: "append" as const,
 			planModePrompt: "",
 			reviewPrompt: "",

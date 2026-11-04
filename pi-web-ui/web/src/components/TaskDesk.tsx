@@ -4,7 +4,7 @@ import type { GoalStatus } from "../types";
 import { isZhLocale, useI18n, useT } from "../i18n";
 import { appSend } from "../app-globals";
 import { closeTaskDesk, mhGet, mhPost, openRunDetail, useCockpit } from "../loop-cockpit";
-import { loopStatus, type LoopTone } from "../loop-status";
+import { loopStatus, recoveryBadgeOf, type LoopTone } from "../loop-status";
 import { Modal } from "./Modal";
 
 /** GET /api/mini-harness/runs 的一行（server/loop/routes.ts 的 LoopRunBrief，这里只取用到的字段）。 */
@@ -21,6 +21,7 @@ interface RunBrief {
 	mode?: "code" | "llm";
 	stopReason?: string | null;
 	acceptance?: string | null;
+	recovery?: { unit?: string | null } | null;
 }
 
 /** 运行行左边那条色线：沿用任务台已有的三种（进行中紫 / 通过绿 / 出错红），另加一档黄。 */
@@ -77,6 +78,7 @@ interface Props {
  *  以及 LLM loop 永久目录与代码 loop 运行列表（都可删除；代码 loop 的行点开 = 任务详情）。打开时才轮询。 */
 export const TaskDesk = memo(function TaskDesk({ goal, activeConversationId }: Props) {
 	const open = useCockpit("taskDeskOpen");
+	const runsVersion = useCockpit("runsVersion");
 	const t = useT();
 	const { locale } = useI18n();
 	const [runs, setRuns] = useState<RunBrief[] | null>(null);
@@ -109,7 +111,7 @@ export const TaskDesk = memo(function TaskDesk({ goal, activeConversationId }: P
 			alive = false;
 			clearInterval(id);
 		};
-	}, [open, reload]);
+	}, [open, reload, runsVersion]);
 
 	useEffect(() => {
 		if (!open || !sessionId) {
@@ -263,6 +265,7 @@ export const TaskDesk = memo(function TaskDesk({ goal, activeConversationId }: P
 				) : (
 					runs.map((r) => {
 						const st = loopStatus(r, t);
+						const rec = recoveryBadgeOf(r.recovery, t);
 						const openDetail = () => openRunDetail(r.runId);
 						const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
 							if (e.target !== e.currentTarget) return;
@@ -287,13 +290,19 @@ export const TaskDesk = memo(function TaskDesk({ goal, activeConversationId }: P
 									className="task-desk-del"
 									onClick={(e) => {
 										e.stopPropagation();
-										void del("runs/delete", { runId: r.runId }, t("taskDeskDeleteRunConfirm"));
+										// 与任务详情共用删除确认：说明会移除什么、停止待确认 / 工作树有未提交改动时拦下
+										openRunDetail(r.runId, "delete");
 									}}
 								>
 									{t("taskDeskDelete")}
 								</button>
 								<span className="nm">{r.goal.slice(0, 70) || r.runId}</span>
 								<div className={`task-desk-run-status tone-${st.tone}`}>{st.text}</div>
+								{rec && (
+									<div className={`task-desk-recovery tone-${rec.tone}`} title={r.recovery?.unit ?? ""}>
+										{rec.label}
+									</div>
+								)}
 								<div className="out">
 									{[r.project, r.updatedAt ? String(r.updatedAt).replace("T", " ").slice(5, 16) : ""]
 										.filter(Boolean)

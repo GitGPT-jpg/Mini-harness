@@ -35,7 +35,7 @@ export function SaveImageDialog(): ReactNode {
 	const [title, setTitle] = useState("");
 	const [border, setBorder] = useState(false);
 	const [watermark, setWatermark] = useState(false);
-	const [watermarkText, setWatermarkText] = useState("pi-web-ui");
+	const [watermarkText, setWatermarkText] = useState("训推引擎组 Harness");
 	const [busy, setBusy] = useState(false);
 	const [previewBusy, setPreviewBusy] = useState(false);
 	const [copied, setCopied] = useState(false);

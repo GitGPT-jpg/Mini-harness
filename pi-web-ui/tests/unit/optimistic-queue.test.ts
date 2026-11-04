@@ -76,7 +76,6 @@ describe("前端排队与插队消息乐观更新与快照对账 (optimistic-que
 		const step1 = recordOptimisticQueueAdd(tracker0, state0, {
 			text: "先停一下，优先修这个 bug",
 			queue: false,
-			engine: "pi",
 			now: 1000,
 		});
 		expect(step1.state?.queue.steering).toEqual(["先停一下，优先修这个 bug"]);
@@ -87,7 +86,6 @@ describe("前端排队与插队消息乐观更新与快照对账 (optimistic-que
 		const step2 = recordOptimisticQueueAdd(step1.tracker, step1.state, {
 			text: "跑完后再帮我补一下单测",
 			queue: true,
-			engine: "pi",
 			now: 1010,
 		});
 		expect(step2.state?.queue.steering).toEqual(["先停一下，优先修这个 bug"]);

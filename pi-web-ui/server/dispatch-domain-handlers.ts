@@ -3,7 +3,7 @@
  *
  * 将 server/index.ts 中千行单体 switch-case 按业务领域横向解耦拆分：
  * - handleFileMessage: 文件树浏览、读写、检索、创建/重命名/删除/复制/路径补全、工作区根设置
- * - handleScmMessage: Git 状态查询、提交历史、文件差异、AI 提交信息生成
+ * - handleWorktreeMessage: 多根工作区切换 / 移除
  * - handleBgServerMessage: 后台常驻服务管理与端口清理
  * - handlePresetAndDshMessage: DSH 预设/补丁切换、审批规则与子代理模板持久化
  */
@@ -14,9 +14,6 @@ import { SchedulerValidationError, type SchedulerStore } from "./scheduler-tasks
 /** 文件与工作区相关操作 */
 export function handleFileMessage(msg: ClientMessage, cs: DispatchSession): boolean {
 	switch (msg.type) {
-		case "list_files":
-			void cs.listFiles(msg.path);
-			return true;
 		case "search_files":
 			void cs.searchFiles(msg.query, msg.reqId);
 			return true;
@@ -25,21 +22,6 @@ export function handleFileMessage(msg: ClientMessage, cs: DispatchSession): bool
 			return true;
 		case "write_file":
 			void cs.writeFile(msg.path, msg.text);
-			return true;
-		case "upload_file":
-			void cs.uploadFile(msg.dirPath, msg.name, msg.data);
-			return true;
-		case "file_create":
-			void cs.createEntry(msg.dir, msg.name, msg.kind);
-			return true;
-		case "file_rename":
-			void cs.renameEntry(msg.path, msg.newName);
-			return true;
-		case "file_delete":
-			void cs.deleteEntry(msg.path);
-			return true;
-		case "file_copy":
-			void cs.copyEntry(msg.src, msg.destDir, msg.move);
 			return true;
 		case "file_reveal":
 			void cs.revealEntry(msg.path);
@@ -119,39 +101,17 @@ export function handleFileMessage(msg: ClientMessage, cs: DispatchSession): bool
 	}
 }
 
-/** Git / SCM 相关操作 */
-export function handleScmMessage(msg: ClientMessage, cs: DispatchSession, send: (msg: ServerMessage) => void): boolean {
+/** 多根工作区切换 / 移除 */
+export function handleWorktreeMessage(msg: ClientMessage, cs: DispatchSession): boolean {
 	switch (msg.type) {
-		case "scm_status":
-			void cs.scmQuery("status", msg.reqId);
-			return true;
-		case "scm_history":
-			void cs.scmQuery("history", msg.reqId);
-			return true;
-		case "scm_filediff":
-			void cs.scmQuery("filediff", msg.reqId, { path: msg.path });
-			return true;
-		case "scm_commit":
-			void cs.scmQuery("commit", msg.reqId, { hash: msg.hash });
-			return true;
-		case "scm_commitmsg":
-			if (typeof cs.scmGenCommitMessage === "function") {
-				void cs.scmGenCommitMessage(msg.reqId);
-			} else {
-				send({
-					type: "scm_data",
-					reqId: msg.reqId,
-					kind: "commitmsg",
-					ok: false,
-					error: "当前引擎不支持 AI 生成提交信息（请用 pi 引擎）/ AI commit messages need the pi engine",
-				});
-			}
-			return true;
 		case "switch_worktree":
 			void cs.switchWorktree?.(msg.path);
 			return true;
 		case "remove_worktree":
 			void cs.removeWorktree?.(msg.path, msg.force);
+			return true;
+		case "refresh_worktree":
+			void cs.refreshWorktreeInfo?.();
 			return true;
 		default:
 			return false;
@@ -184,12 +144,6 @@ export function handleBgServerMessage(msg: ClientMessage, cs: DispatchSession): 
 /** DSH 预设与补丁、审批规则及模板持久化 */
 export function handlePresetAndDshMessage(msg: ClientMessage, cs: DispatchSession): boolean {
 	switch (msg.type) {
-		case "dsh_patches_list":
-			void cs.listDshPatches?.();
-			return true;
-		case "dsh_preset_list":
-			void cs.refreshAgentPresets?.();
-			return true;
 		case "dsh_preset_select":
 			void cs.selectAgentPreset?.(msg.preset);
 			return true;
@@ -201,18 +155,6 @@ export function handlePresetAndDshMessage(msg: ClientMessage, cs: DispatchSessio
 			return true;
 		case "dsh_permission_default":
 			void cs.setDefaultPermissionPreset?.(msg.preset);
-			return true;
-		case "dsh_patches_rescan":
-			void cs.rescanDshPatches?.();
-			return true;
-		case "dsh_patch_install":
-			void cs.installDshPatch?.(msg.spec, msg.id);
-			return true;
-		case "dsh_patch_toggle":
-			void cs.toggleDshPatch?.(msg.name, msg.enabled);
-			return true;
-		case "dsh_patch_delete":
-			void cs.deleteDshPatch?.(msg.name);
 			return true;
 		case "save_subagent_template":
 			void cs.saveSubagentTemplate(msg.template);
@@ -457,6 +399,7 @@ export function handlePlanAndGoalMessage(msg: ClientMessage, cs: DispatchSession
 				maxRounds: msg.maxRounds,
 				locked: msg.locked,
 				execModel: msg.execModel,
+				reviewerModel: msg.reviewerModel,
 			});
 			return true;
 		case "clear_goal":
@@ -481,6 +424,7 @@ export function handlePlanAndGoalMessage(msg: ClientMessage, cs: DispatchSession
 				maxRounds: msg.maxRounds,
 				locked: msg.locked,
 				execModel: msg.execModel,
+				reviewerModel: msg.reviewerModel,
 			});
 			return true;
 		case "loop_start_request":
@@ -492,11 +436,24 @@ export function handlePlanAndGoalMessage(msg: ClientMessage, cs: DispatchSession
 				maxRounds: msg.maxRounds,
 				plannerModel: msg.plannerModel,
 				reviewerModel: msg.reviewerModel,
+				executorModel: msg.executorModel,
 				useReviewer: msg.useReviewer,
 				worktree: msg.worktree,
 				taskId: msg.taskId,
 				criteria: msg.criteria,
 				artifactRoots: msg.artifactRoots,
+				primaryMetric: msg.primaryMetric,
+				metricDirection: msg.metricDirection,
+				metricPrecision: msg.metricPrecision,
+				metricUnit: msg.metricUnit,
+				metricThreshold: msg.metricThreshold,
+				metricThresholdOp: msg.metricThresholdOp,
+				metricTolerance: msg.metricTolerance,
+				metricScenario: msg.metricScenario,
+				hardConstraints: msg.hardConstraints,
+				packId: msg.packId,
+				workspace: msg.workspace,
+				inputs: msg.inputs,
 			});
 			return true;
 		case "loop_stop":

@@ -27,13 +27,12 @@ import type { ViewName } from "./BarItem";
 import { formatCostDisplay } from "../cost-format";
 import { isZhLocale, useI18n, localeShort } from "../i18n";
 import { REQUIRED_TOPBAR_ITEM_IDS, type UiSlotEntry } from "../ui-slots";
-import { fitTopbar, MOBILE_ASIDE_TOPBAR_IDS, sortOverflowMenuItems } from "../topbar-fit";
+import { fitTopbar, sortOverflowMenuItems } from "../topbar-fit";
 import {
 	appSend,
 	useAppField,
 	useAppGlobals,
 	useEngineCapabilities,
-	useIsDsh,
 	useIsManaged,
 	useServiceInfo,
 } from "../app-globals";
@@ -212,9 +211,8 @@ export function TopBar({
 	const cwd = useAppField("cwd");
 	const workspaceRoots = useAppField("workspaceRoots");
 	/* 临时会话能力由引擎底座 capabilities.ephemeralChat 事实源驱动（DSH 不提供，Pi 与 Universal 提供）。 */
-	const isDsh = useIsDsh();
 	const capabilities = useEngineCapabilities();
-	const supportsEphemeral = Boolean(capabilities.ephemeralChat !== false && !isDsh);
+	const supportsEphemeral = capabilities.ephemeralChat !== false;
 	/* 能力关闭的宿主入口（沙盒 / 临时对话）：顶栏直流与「⋯」溢出菜单都不画，
 	   被布局页隐藏或本断点放不下时也不会以扁平菜单行的形式漏回来。 */
 	const isCapabilityGatedOff = (id: string) =>
@@ -340,7 +338,7 @@ export function TopBar({
 	const [updateOpen, setUpdateOpen] = useState(false);
 	const [localeModalOpen, setLocaleModalOpen] = useState(false);
 
-	/** Run `npm i -g pi-web-ui@latest` in a visible terminal tab (SCM-style):
+	/** Run `npm i -g pi-web-ui@latest` in a visible terminal tab:
 	 *  reuse the tab with the same title, otherwise create one; switch to the
 	 *  terminal view so the user watches the install live. */
 	const updateTermIdsRef = useRef<Set<string>>(new Set());
@@ -401,7 +399,7 @@ export function TopBar({
 	};
 
 	/** Run the right update command for one or more components in a visible
-	 *  terminal tab (same SCM-style pattern as the self-update above): pi
+	 *  terminal tab (same pattern as the self-update above): pi
 	 *  extensions go through `pi update npm:<name>` (they live under
 	 *  <agentDir>/npm), everything globally installed via `npm i -g`.
 	 *  Multi-target runs are chained with `;` so one failing step never
@@ -684,7 +682,7 @@ export function TopBar({
 		</>
 	);
 
-	/** 手机端断点（见 useIsMobileTopbar）：旁置/实测按断点切（mobileAsideItems/fitInput）。 */
+	/** 手机端断点（见 useIsMobileTopbar）：实测溢出按断点切（fitInput）。 */
 	const isMobile = useIsMobileTopbar();
 	/**
 	 * 顶栏宿主内置条目的节点工厂（与 FooterBar 的 hostNodes 同模式）：`renderZoneFlow`
@@ -1106,20 +1104,13 @@ export function TopBar({
 	/** 桌面与手机同一套实测溢出：放不下的条目（droppedIds）退进「⋯」，放得下全留
 	 *  （手机端不再按名单强制折叠 —— 搜索等能放下就直接显示）。 */
 	const keptItems = flowItems.filter((it) => !droppedIds.has(it.id));
-	/** 手机端固定位（MOBILE_ASIDE_TOPBAR_IDS）：移出主直流、渲染在 ⋯ 右边最右，
-	 *  不参与实测溢出。桌面端为空，直流保持单一扁平（slot 顺序直排，不动）。 */
-	const mobileAsideItems = isMobile ? keptItems.filter((it) => MOBILE_ASIDE_TOPBAR_IDS.has(it.id)) : [];
-	/** 主直流里实际渲染的条目（手机端 = kept 去掉固定位）。 */
-	const flowKeptItems = isMobile ? keptItems.filter((it) => !MOBILE_ASIDE_TOPBAR_IDS.has(it.id)) : keptItems;
 	/** 实测与溢出的视觉顺序（左段→中段→右段，段内仍是 slot 顺序）：渲染层按这个顺序落位，
 	 *  fitTopbar 必须吃同样顺序才能做到「从视觉最右边开始收」。直接喂 slot 顺序会在
-	 *  align 混排时把视觉左边的条目先丢掉 —— 窄屏下排第 2 的都可能进 ⋯。手机端固定位
-	 *  （📁 挂在直流外面，不占直流宽度）同样不参与实测。 */
-	const fitBase = isMobile ? flowItems.filter((it) => !MOBILE_ASIDE_TOPBAR_IDS.has(it.id)) : flowItems;
+	 *  align 混排时把视觉左边的条目先丢掉 —— 窄屏下排第 2 的都可能进 ⋯。 */
 	const visualAll = [
-		...fitBase.filter((it) => zoneOf(it) === "start"),
-		...fitBase.filter((it) => zoneOf(it) === "center"),
-		...fitBase.filter((it) => zoneOf(it) === "end"),
+		...flowItems.filter((it) => zoneOf(it) === "start"),
+		...flowItems.filter((it) => zoneOf(it) === "center"),
+		...flowItems.filter((it) => zoneOf(it) === "end"),
 	];
 	/** 直流子节点（已滤掉 spacer）就是按这个顺序排的，宽度缓存必须按它一一对应 ——
 	 *  按 slot 顺序对应会在混排时把别人的宽度记到自己名下。 */
@@ -1185,10 +1176,10 @@ export function TopBar({
 		ro.observe(flow);
 		return () => ro.disconnect();
 	}, [measureKey]); // eslint-disable-line react-hooks/exhaustive-deps
-	/** 三段落位（段内仍是 slot 顺序 → 布局页 ↑↓ 的效果与界面一致；手机端固定位不在直流里）。 */
-	const segStart = flowKeptItems.filter((it) => zoneOf(it) === "start");
-	const segCenter = flowKeptItems.filter((it) => zoneOf(it) === "center");
-	const segEnd = flowKeptItems.filter((it) => zoneOf(it) === "end");
+	/** 三段落位（段内仍是 slot 顺序 → 布局页 ↑↓ 的效果与界面一致）。 */
+	const segStart = keptItems.filter((it) => zoneOf(it) === "start");
+	const segCenter = keptItems.filter((it) => zoneOf(it) === "center");
+	const segEnd = keptItems.filter((it) => zoneOf(it) === "end");
 	/** 溢出菜单 = 被隐藏/常驻条目 ＋ 本断点放不下的条目（同一个「⋯」，手机上也只有一个入口）。
 	 *  顺序与顶栏视觉一致（左→中→右，段内按 slot 顺序），见 sortOverflowMenuItems。 */
 	const droppedEntries = flowItems.filter((it) => droppedIds.has(it.id) && it.entry).map((it) => it.entry!);
@@ -1335,11 +1326,6 @@ export function TopBar({
 					</TopbarOverflowMenu>
 				</div>
 			)}
-
-			{/* 手机端固定位：📁 纯图标钉在 ⋯ 右边（整条顶栏最右），直流/溢出都不含它。 */}
-			{mobileAsideItems.map((it) => (
-				<Fragment key={it.id}>{it.node}</Fragment>
-			))}
 
 			{localeModalOpen && <LocaleModal onClose={() => setLocaleModalOpen(false)} />}
 			{projectPickerOpen && (

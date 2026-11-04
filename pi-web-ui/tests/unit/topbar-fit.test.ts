@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fitTopbar, MOBILE_ASIDE_TOPBAR_IDS, sortOverflowMenuItems } from "../../web/src/topbar-fit.js";
+import { fitTopbar, sortOverflowMenuItems } from "../../web/src/topbar-fit.js";
 
 /** 造一批等宽条目（宽度可变）——只关心「谁被丢」，不关心具体几何。 */
 const items = (list: [string, number][]) => list.map(([id, width]) => ({ id, width }));
@@ -72,14 +72,6 @@ describe("fitTopbar", () => {
 		]);
 		expect([...fitTopbar(rows, 150, gap, 0, new Set(["host:settings"]))]).toEqual(["plugin"]);
 		expect(fitTopbar(items([["host:settings", 200]]), 20, gap, 0, new Set(["host:settings"])).size).toBe(0);
-	});
-});
-
-describe("手机端固定位", () => {
-	// 手机端不再按名单强制折叠 —— 与桌面端同一套实测溢出（放不下才进「⋯」）；
-	// 唯一的特殊入口是钉在「⋯」右边的 📁（移出主直流、不参与实测、永远可见）。
-	it("固定位目前只有 📁 文件列表", () => {
-		expect([...MOBILE_ASIDE_TOPBAR_IDS]).toEqual(["host:files"]);
 	});
 });
 

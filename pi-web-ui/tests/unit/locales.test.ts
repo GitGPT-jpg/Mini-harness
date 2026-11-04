@@ -85,7 +85,9 @@ describe("language packs", () => {
 			// zh / zh-TW / ja packs are written in Han characters by design.
 			if (code === "zh" || code.startsWith("zh-") || code === "ja") continue;
 			for (const [k, v] of Object.entries(p.strings)) {
-				expect(/[\u4e00-\u9fff]/.test(v), `${code}.${k} 包含中文残留: ${v}`).toBe(false);
+				// The product's proper name is identical in every locale.
+				const translatedText = v.replaceAll("训推引擎组 Harness", "");
+				expect(/[\u4e00-\u9fff]/.test(translatedText), `${code}.${k} 包含中文残留: ${v}`).toBe(false);
 			}
 		}
 	});

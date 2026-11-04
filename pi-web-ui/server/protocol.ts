@@ -488,8 +488,7 @@ export type ClientMessage =
 	 *  (server keys it by sessionId in <dataDir>/composer-drafts.json).
 	 *  Debounced client-side; empty text deletes the stored draft. The server
 	 *  clears it when a prompt is accepted, and replays it in full snapshots
-	 *  (switch/get_state) so refresh/reconnect restores the composer.
-	 *  pi engine only — DSH clients never send this (gated by useIsDsh). */
+	 *  (switch/get_state) so refresh/reconnect restores the composer. */
 	| {
 			type: "draft_update";
 			/** 归属会话（uuidv7）：切会话时的「离开刷盘」晚于服务端切换到达，
@@ -575,21 +574,6 @@ export type ClientMessage =
 	 *  缺省时回退服务端最近一次快照的会话（老客户端兼容）。
 	 *  窗口化关闭或服务端未实现时该消息被忽略（无回执），前端保持现状。 */
 	| { type: "load_earlier_messages"; count?: number; all?: boolean; conversationId?: string }
-	// -- source-control panel (read-only git queries, server-side execFile) --
-	/** SCM refresh payload: status + branches + numstat (history loads
-	 *  lazily via scm_history so big repos don't pay for it every refresh). */
-	| { type: "scm_status"; reqId: number }
-	/** Commit graph for the history tab (lazy-loaded). */
-	| { type: "scm_history"; reqId: number }
-	/** Staged + worktree diffs for one file. */
-	| { type: "scm_filediff"; reqId: number; path: string }
-	/** Full patch of one commit. */
-	| { type: "scm_commit"; reqId: number; hash: string }
-	/** Ask the active model to draft a commit message from the current
-	 *  changes (one-off completion, NOT routed through the conversation).
-	 *  Answered exactly once by an scm_data with kind "commitmsg" — text
-	 *  carries the generated single-line message; ok:false on any failure. */
-	| { type: "scm_commitmsg"; reqId: number }
 	| { type: "new_chat"; preset?: string; ephemeral?: boolean }
 	/** Edit a past user question and re-ask it (forks a new session at that point). */
 	| {
@@ -640,36 +624,10 @@ export type ClientMessage =
 	 *  回答仍经 question_answer（带 owner）回去，不搬迁对话. */
 	| { type: "peek_elsewhere_question"; owner: string; id: string }
 	| { type: "list_projects" }
-	| { type: "list_files"; path?: string }
-	/** 列目录：path 省略 = 工作区根；也接受工作区外绝对路径（Windows "C:/…"、
-	 *  posix "/…"）与机器根 "@root"（盘符列表，见 files-service.ts MACHINE_ROOT）。
-	 *  机器浏览时返回的 entry.path 为绝对 wire 路径，可直接再用于列目录/预览/附件。 */
 	/** Read a workspace file for the preview panel (size-capped, binary-safe). */
 	| { type: "read_file"; path: string }
 	/** Save text edited in the file preview panel. */
 	| { type: "write_file"; path: string; text: string }
-	/**
-	 * Upload one file INTO a workspace directory (file manager right-click
-	 * context menu — blank area or a folder entry). data = raw base64 with
-	 * NO data: prefix; name is basename-sanitized server-side. The server
-	 * answers with a notice (+ file_changed so the listing refreshes).
-	 */
-	| { type: "upload_file"; dirPath: string; name: string; data: string }
-	/**
-	 * 文件树右键菜单的文件操作（`contextmenu.file` 槽位，见 RightPanel.tsx）。
-	 * path/dir/src/destDir 接受工作区相对路径与绝对 wire 路径（Windows "C:/…"、
-	 * posix "/…"），与 list_files/read_file/upload_file 同口径；机器根 "@root"
-	 * 本身不可作为操作对象。服务端一律回答 notice（+ file_changed 刷新列表）。
-	 */
-	/** 在 dir 下新建空文件或空文件夹（name 只取 basename，多余分隔符服务端清洗）。 */
-	| { type: "file_create"; dir: string; name: string; kind: "file" | "dir" }
-	/** 同目录内重命名（newName 只取 basename，不跨目录移动；跨目录请用 file_copy+move）。 */
-	| { type: "file_rename"; path: string; newName: string }
-	/** 删除文件或目录（目录递归；工作区根/机器根/盘符根拒绝）。 */
-	| { type: "file_delete"; path: string }
-	/** 复制或移动：move=true 即剪切粘贴（同盘 rename，跨盘复制+删源）；
-	 *  destDir 与 src 同目录时即「创建副本」（重名自动加 " copy" 后缀）。 */
-	| { type: "file_copy"; src: string; destDir: string; move?: boolean }
 	/** 在系统资源管理器中定位（issue #187）：文件→打开目录并选中，目录→直接打开。
 	 *  只读操作，保护根也允许；远端/headless 主机上服务端会回 warning notice。 */
 	| { type: "file_reveal"; path: string }
@@ -836,7 +794,12 @@ export type ClientMessage =
 	 *  subsequent turn; `false` clears it after the next turn (single-shot).
 	 *  `reviewModel` ("provider/id", optional) is remembered as the goal WIZARD
 	 *  model; the reviewer is the main conversation itself (no separate model).
-	 *  `execModel` ("provider/id", optional) picks the executor's model. */
+	 *  `execModel` ("provider/id", optional) picks the executor's model.
+	 *  `reviewerModel` ("provider/id", optional; empty = the main conversation
+	 *  reviews, the original default) runs each review round in an isolated
+	 *  read-only reviewer conversation on that model; the main chat model is
+	 *  untouched. Executor and reviewer must resolve to different families —
+	 *  the server rejects the goal before anything runs otherwise. */
 	| {
 			type: "set_goal";
 			goal: string;
@@ -845,6 +808,8 @@ export type ClientMessage =
 			locked: boolean;
 			/** 执行者模型（"provider/id"；空 = 跟随主对话）。 */
 			execModel?: string;
+			/** 审查者模型（"provider/id"；空 = 主对话审查）。 */
+			reviewerModel?: string;
 	  }
 	| { type: "clear_goal" }
 	/** 暂停目标：停掉执行者当前回合，保留目标与产物，不再自动派下一轮。 */
@@ -869,6 +834,8 @@ export type ClientMessage =
 			locked?: boolean;
 			/** 执行者模型偏好（"provider/id"；空 = 跟随），全局记忆。 */
 			execModel?: string;
+			/** 审查者模型偏好（"provider/id"；空 = 主对话审查），全局记忆。 */
+			reviewerModel?: string;
 	  }
 	// -- mini-harness Loop（受控代码/LLM Loop，server/loop/）------------------
 	/** 启动受控 Loop（D-12-2 结构化启动）：服务端先建 run 落盘（绑定本会话，快照 loop
@@ -885,6 +852,9 @@ export type ClientMessage =
 			maxRounds?: number;
 			plannerModel?: string;
 			reviewerModel?: string;
+			/** 执行模型（"provider/id" / "auto" 联立分配；缺省 = 主对话模型）。非主对话模型时
+			 *  任务在独立执行会话里跑，主对话的聊天模型不变。 */
+			executorModel?: string;
 			useReviewer?: boolean;
 			worktree?: boolean;
 			taskId?: string;
@@ -892,6 +862,37 @@ export type ClientMessage =
 			criteria?: string;
 			/** 产物目录（取证/验收用，原样传给 loop_start）。 */
 			artifactRoots?: string[];
+			/** 主指标名（如 loss_pct / tps / ttft_ms）；声明后最优轮次只按它比较。 */
+			primaryMetric?: string;
+			/** 主指标优化方向：maximize / minimize。 */
+			metricDirection?: "maximize" | "minimize";
+			/** @deprecated 旧「精度/硬约束」字段，仅向后兼容。 */
+			metricPrecision?: number;
+			/** 主指标声明单位（如 % / tokens/s / ms）。 */
+			metricUnit?: string;
+			/** 主指标目标阈值（与 metricThresholdOp 成对）。 */
+			metricThreshold?: number;
+			/** 主指标目标阈值运算符：lt / lte / gt / gte。 */
+			metricThresholdOp?: "lt" | "lte" | "gt" | "gte";
+			/** 最优轮次比较容差（相对量，仅择优）。 */
+			metricTolerance?: number;
+			/** 必要场景配置；声明后 validator 必须报出匹配场景。 */
+			metricScenario?: string;
+			/** 必要硬约束（主指标之外的证据门禁：精度 / 稳定性 / 输入长度等）。 */
+			hardConstraints?: Array<{
+				name: string;
+				metric: string;
+				op: "lt" | "lte" | "gt" | "gte";
+				value: number;
+				unit?: string;
+				scenario?: string;
+			}>;
+			/** 能力包 id：服务端按包内默认值填充未显式提供的字段（显式字段优先）。 */
+			packId?: string;
+			/** 用户填写的项目/工作区位置（缺省用会话 cwd）。 */
+			workspace?: string;
+			/** 用户已补全的必要输入（与上下文发现结果合并）。 */
+			inputs?: Record<string, string>;
 	  }
 	/** 停止当前会话的活跃 Loop（不传 runId = 快照 loop 里的当前 run）。停止
 	 *  即递增 epoch：在途/迟到回调全部失效，不得把 stopped 翻成 done。 */
@@ -996,10 +997,6 @@ export type ClientMessage =
 			 *  semantics as promptMode) + custom text (empty = built-in default). */
 			visionBridgePromptMode?: "append" | "replace";
 			visionBridgePrompt?: string;
-			/** SCM「AI 生成提交信息」提示词：模式（append/replace，语义同 promptMode）
-			 *  + 自定义文本（空 = 内置默认）。pi 引擎的 scm_commitmsg 生成用。 */
-			scmCommitMsgPromptMode?: "append" | "replace";
-			scmCommitMsgPrompt?: string;
 			/** 计划模式提示词：模式（append/replace，语义同 promptMode）+ 自定义
 			 *  文本（空 = 内置默认）。仅主会话计划模式注入用（硬闸门不受影响）。 */
 			planModePromptMode?: "append" | "replace";
@@ -1063,11 +1060,6 @@ export type ClientMessage =
 	 *  只收绝对路径（相对路径直接丢弃）、去重、最多 8 个；按项目（cwd）持久化在
 	 *  client-state.json，改了立刻推一次快照。 */
 	| { type: "set_workspace_roots"; roots?: string[] }
-	// -- DSH engine user patches (<dataDir>/dsh-patches) ---------------------
-	/** List <dataDir>/dsh-patches/*.yml (DSH engine only; pi engine ignores). */
-	| { type: "dsh_patches_list" }
-	/** DSH Agent 预设名录（DSH only；名录变化/attach 后推；legacy 下 presets 空）。 */
-	| { type: "dsh_preset_list" }
 	/** 空白会话切换预设（DSH only；首轮后锁定，失败收 warning notice）。 */
 	| { type: "dsh_preset_select"; preset: string }
 	/** 新会话默认预设（DSH only；非法 id 拒绝并提示）。 */
@@ -1076,15 +1068,6 @@ export type ClientMessage =
 	| { type: "dsh_permission_set"; preset: string }
 	/** 新会话默认权限预设（DSH only；非法 id 拒绝并提示）。 */
 	| { type: "dsh_permission_default"; preset: string }
-	/** Re-scan <dataDir>/dsh-patches and restart the DSH runtime so new/edited
-	 *  patch files take effect (patches are only loaded at runtime boot). */
-	| { type: "dsh_patches_rescan" }
-	/** 安装/添加 DSH 插件补丁（写入 <dataDir>/dsh-patches/<id>.yml 并重载运行时）。 */
-	| { type: "dsh_patch_install"; spec: string; id?: string }
-	/** 切换 DSH 插件补丁启用/禁用状态（追加/移除 .disabled 后缀并重载运行时）。 */
-	| { type: "dsh_patch_toggle"; name: string; enabled: boolean }
-	/** 删除 DSH 插件补丁文件（移除文件并重载运行时）。 */
-	| { type: "dsh_patch_delete"; name: string }
 	/** DSH engine: answer a model ask_user_question dialog (id echoes
 	 *  question_pending.id). `cancelled` (user ✗) rejects the pending ask.
 	 *  owner = 跨页作答：转给持有方会话（elsewhere_question 预告的那张问卷）。 */
@@ -1180,6 +1163,8 @@ export type ClientMessage =
 	| { type: "destroy_sandbox"; path: string }
 	| { type: "switch_worktree"; path: string }
 	| { type: "remove_worktree"; path: string; force?: boolean }
+	/** 重新读取当前工作区的 Git 工作树状态（任务工作树被删除后由界面发起）。 */
+	| { type: "refresh_worktree" }
 	/** Permanently delete a persisted session transcript file (history list). */
 	| { type: "delete_session"; path: string }
 	/** Append a session_info name entry to a persisted session transcript (history rename). */
@@ -1518,6 +1503,38 @@ export interface LoopUiState {
 		metrics?: Record<string, number>;
 		at: string;
 	};
+	/** 停止请求发出时间（区分「已发出停止请求」与「本地执行已确认停止」）。 */
+	stopRequestedAt?: string;
+	/** 本地执行（validator/precheck 子进程组）确认退出时间；未确认 = 仍可能在途或远端未知。 */
+	stopConfirmedAt?: string;
+	/** 主指标声明单位。 */
+	metricUnit?: string;
+	/** 主指标目标阈值。 */
+	metricThreshold?: number;
+	/** 主指标目标阈值运算符。 */
+	metricThresholdOp?: "lt" | "lte" | "gt" | "gte";
+	/** 最优轮次比较容差（相对量）。 */
+	metricTolerance?: number;
+	/** 必要场景配置。 */
+	metricScenario?: string;
+	/** 必要硬约束（主指标之外的证据门禁）。 */
+	hardConstraints?: Array<{
+		name: string;
+		metric: string;
+		op: "lt" | "lte" | "gt" | "gte";
+		value: number;
+		unit?: string;
+		scenario?: string;
+	}>;
+	/** 最近一轮指标门禁结果（命令 exit 0 不等于指标达标）。 */
+	lastMetricGate?: {
+		ok: boolean;
+		missingPrimary: boolean;
+		unitUnconfirmed: boolean;
+		scenarioMismatch: boolean;
+		violations: Array<{ name: string; detail: string }>;
+		reasons: string[];
+	};
 	/** run 创建时间（ISO）；UI 据此算耗时。pending 时为请求发出时间。 */
 	createdAt: string;
 }
@@ -1640,35 +1657,6 @@ export interface PptxSlidePayload {
 	bg?: string;
 }
 
-// -- source-control panel (wire shapes shared by scm_data) -------------------
-
-export interface ScmFileEntry {
-	/** Repo-relative path. */
-	path: string;
-	/** porcelain index (staged) status letter. */
-	x: string;
-	/** porcelain worktree status letter. */
-	y: string;
-}
-
-export interface ScmBranchEntry {
-	name: string;
-	current: boolean;
-	/** Remote name for remote-tracking refs ("origin/main" → "origin"). */
-	remote?: string | boolean;
-}
-
-export interface ScmCommitEntry {
-	hash: string;
-	shortHash: string;
-	author: string;
-	date: string;
-	subject: string;
-	decorations: string;
-	/** The graph prefix emitted by `git log --graph` (for example `| * `). */
-	graph: string;
-}
-
 export interface ModelInfo {
 	id: string;
 	name: string;
@@ -1753,8 +1741,10 @@ export interface GoalStatus {
 	history?: GoalHistoryEntry[];
 	/** 2.0：执行者模型（"provider/id"；null = 跟随主对话）。 */
 	execModel?: string | null;
-	/** 2.0：角色对话（审查者就是主对话，故这里只有 executor）。 */
-	roles?: { executor?: GoalRoleRef };
+	/** 审查者模型（"provider/id"；null = 主对话审查）。服务端恒下发该键：前端以键存在判定可选。 */
+	reviewerModel?: string | null;
+	/** 2.0：角色对话（默认审查者是主对话；显式 reviewerModel 时另有只读审查对话）。 */
+	roles?: { executor?: GoalRoleRef; reviewer?: GoalRoleRef };
 }
 
 /** Progress of the collaborative target wizard (see GoalStatus.wizard). */
@@ -1857,8 +1847,6 @@ export type UiSlotId =
 	| "composer.actions"
 	/** 每条消息 hover 时的工具条。 */
 	| "message.actions"
-	/** 右侧面板的 tab（默认是文件树）。 */
-	| "rightpanel.tabs"
 	/** 顶栏条目右键菜单。 */
 	| "contextmenu.topbar"
 	/** 消息右键菜单。 */
@@ -1867,8 +1855,6 @@ export type UiSlotId =
 	| "contextmenu.session"
 	/** 左栏项目行右键菜单（最近项目；target.kind="project"，target.id=项目路径）。 */
 	| "contextmenu.project"
-	/** 文件树条目右键菜单。 */
-	| "contextmenu.file"
 	/** 工具调用卡片的**工具名**右键菜单（ToolCallBlock；宿主内置条目只有「显示工具详细信息」）。 */
 	| "contextmenu.toolcall"
 	/** 设置面板里的一整页（插件用 mount() 自己渲染）。 */
@@ -1899,8 +1885,6 @@ export type UiSlotId =
 	| "file.preview.toolbar"
 	/** 终端工具条。 */
 	| "terminal.toolbar"
-	/** SCM 面板工具条。 */
-	| "scm.toolbar"
 	/** 目标条动作区。 */
 	| "goalbar.actions"
 	/** 通知条动作区（notice 上的快捷按钮）。 */
@@ -2418,10 +2402,6 @@ export interface UiSettingsState {
 	visionBridgePromptMode: "append" | "replace";
 	/** Custom vision-bridge transcription prompt text. */
 	visionBridgePrompt: string;
-	/** SCM「AI 生成提交信息」提示词模式：追加/替换内置默认（空文本 = 内置默认）。 */
-	scmCommitMsgPromptMode: "append" | "replace";
-	/** SCM「AI 生成提交信息」自定义提示词。 */
-	scmCommitMsgPrompt: string;
 	/** 计划模式提示词模式：追加/替换内置默认（空文本 = 内置默认）。 */
 	planModePromptMode: "append" | "replace";
 	/** 计划模式自定义提示词。 */
@@ -2449,8 +2429,6 @@ export interface UiSettingsState {
 	toolsSchema: string;
 	/** The built-in default vision-bridge transcription prompt. */
 	visionBridgeDefaultPrompt: string;
-	/** SCM「AI 生成提交信息」的内置默认提示词（设置面板 replace 模式预填用）。 */
-	scmCommitMsgDefaultPrompt: string;
 	/** 计划模式的内置默认提示词（设置面板 replace 模式预填用）。 */
 	planModeDefaultPrompt: string;
 	/** Vision-capable configured models available on this machine. */
@@ -2490,30 +2468,6 @@ export interface UiSettingsState {
 	subagentDefaultTemplates: string[];
 }
 
-/** DSH 用户补丁文件信息（<dataDir>/dsh-patches/*.yml 或 *.yml.disabled）。 */
-export interface DshPatchFileInfo {
-	name: string;
-	path: string;
-	size: number;
-	mtimeMs: number;
-	disabled?: boolean;
-}
-
-/** DSH 社区市场插件条目（来自 awesome-dsh-plugin / dsh-market 数据源）。 */
-export interface DshMarketPlugin {
-	name: string;
-	owner?: string;
-	url?: string;
-	category?: string;
-	description?: { en?: string; zh?: string };
-	npm?: string;
-	version?: string;
-	stars?: number;
-	downloads?: number;
-	capabilities?: string[];
-	install?: string;
-}
-
 export type UpdateItemKind = "webui" | "pi-core" | "package" | "git-extension" | "engine";
 
 export type ServerMessage =
@@ -2529,7 +2483,7 @@ export type ServerMessage =
 			type: "ready";
 			clientId: string;
 			serverVersion: string;
-			/** 引擎标识（pi | dsh）—— 前端据此显示引擎徽标（只读展示）。 */
+			/** 引擎标识（pi）—— 前端据此显示引擎徽标（只读展示）。 */
 			engine?: string;
 			/** 引擎能力声明（Capabilities）—— 前端据此自适应隐藏不支持的入口。 */
 			engineCapabilities?: AgentEngineCapabilities;
@@ -2641,9 +2595,6 @@ export type ServerMessage =
 	 *  and on request (get_commands). */
 	| { type: "slash_commands"; commands: SlashCommandInfo[] }
 	| { type: "notice"; level: "info" | "warning" | "error"; text: string; textEn?: string }
-	/** The watched git dir changed outside the panel (terminal commit,
-	 *  CLI, IDE) — the client should re-run its scm_status query. */
-	| { type: "scm_changed" }
 	/** Sent every ~2s so clients can detect half-open connections and display host metrics / network latency. */
 	| { type: "heartbeat"; hostMetrics?: UiHostMetrics; latencyMs?: number }
 	| { type: "sessions"; sessions: SessionSummary[] }
@@ -2667,29 +2618,7 @@ export type ServerMessage =
 			results: SessionSearchResult[];
 	  }
 	| { type: "projects"; projects: ProjectSummary[] }
-	| {
-			type: "files";
-			path: string;
-			parent: string | null;
-			entries: FileEntry[];
-			/**
-			 * The directory had more entries than the platform cap (win32: 2000,
-			 * posix: 500) — the list was cut short. UI shows a hint when true.
-			 */
-			truncated: boolean;
-			/**
-			 * true = 机器浏览模式：path/entries 为绝对路径（盘符根 "C:"、"@root"
-			 *  机器根，或 "/" 开头的 posix 路径），允许越过工作区根导航到别的盘。
-			 *  false/缺省 = 工作区相对视图（原语义）。
-			 */
-			absolute?: boolean;
-	  }
 	/** Content of a workspace file for the preview panel. */
-	/** The server fs.watches the currently-listed directory and pushes this on
-	 *  any file change so the client can refresh the listing instantly
-	 *  (path = the listed directory; unknown/unsupported fs falls back to the
-	 *  10s polling). */
-	| { type: "file_changed"; path: string }
 	| {
 			type: "file_content";
 			path: string;
@@ -2865,33 +2794,6 @@ export type ServerMessage =
 	  }
 	/** Result of an install_pi_agent run (npm i -g finished or failed). */
 	| { type: "install_result"; ok: boolean; detail: string }
-	// -- source-control panel results (see scm_status / scm_filediff / scm_commit) --
-	| {
-			type: "scm_data";
-			reqId: number;
-			kind: "status" | "history" | "filediff" | "commit" | "commitmsg";
-			ok: boolean;
-			error?: string;
-			/** status payload — fields optional so one wire type carries every
-			 *  kind; the client reads the ones matching `kind`. */
-			notRepo?: boolean;
-			branch?: string;
-			detached?: boolean;
-			upstream?: string | null;
-			ahead?: number;
-			behind?: number;
-			upstreamGone?: boolean;
-			files?: ScmFileEntry[];
-			branches?: ScmBranchEntry[];
-			stats?: Record<string, [number, number]>;
-			history?: ScmCommitEntry[];
-			/** filediff payload */
-			stagedText?: string;
-			worktreeText?: string;
-			untracked?: boolean;
-			/** commit payload / commitmsg payload (generated message) */
-			text?: string;
-	  }
 	| {
 			type: "path_completions";
 			completions: { name: string; path: string; type: "dir" | "file" }[];
@@ -2966,11 +2868,6 @@ export type ServerMessage =
 	/** Current settings state (system prompt mode/text, enabled skills &
 	 *  extensions). Pushed on attach and after every settings change. */
 	| { type: "settings_state"; settings: UiSettingsState }
-	// -- DSH engine user patches --------------------------------------------
-	/** List of <dataDir>/dsh-patches/*.yml files (DSH engine only; pi engine
-	 *  never emits it). Pushed on request (dsh_patches_list) and after a
-	 *  rescan (dsh_patches_rescan). */
-	| { type: "dsh_patches"; patchDir: string; files: DshPatchFileInfo[] }
 	/** DSH Agent 预设名录（DSH only；attach/启动/默认变化后推；legacy 下 presets 空）。 */
 	| {
 			type: "dsh_presets";

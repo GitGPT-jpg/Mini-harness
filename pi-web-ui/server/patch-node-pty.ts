@@ -9,8 +9,7 @@
  *
  *  · windowsConoutConnection.js — logs every unknown worker message via
  *    `console.warn`, producing hundreds of "Unexpected ConoutWorkerMessage"
- *    lines per terminal (the SCM panel's hidden query PTY triggers it on every
- *    git-view open).
+ *    lines per terminal.
  *  · windowsPtyAgent.js — the kill path's `_getConsoleProcessList()` treats ANY
  *    message from the forked console-list agent as its reply; a watch message
  *    has no `consoleProcessList` property, so `message.consoleProcessList` is

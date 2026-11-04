@@ -789,8 +789,7 @@ function shellEnv(): Record<string, string> {
 // tsx`), Node's watch mode pushes `watch:require` / `watch:import` messages over
 // the worker's message channel to track module dependencies; node-pty doesn't
 // recognize them and logs one `Unexpected ConoutWorkerMessage { … }` per message
-// — hundreds of lines per terminal (the SCM panel's hidden query PTY triggers it
-// on every git-view open). The messages are harmless: the worker only ever sends
+// — hundreds of lines per terminal. The messages are harmless: the worker only ever sends
 // its READY sentinel, which the handler does process. Filter that exact warning
 // at the console boundary so dev output stays readable. Production runs without
 // --watch and never produces these.
@@ -879,7 +878,7 @@ const TCC_HINT =
 		"\x1b[90m  · 需要隐私权限的命令会被系统静默拒绝：不弹授权窗，系统设置里也无法勾选，表现多为卡死或无输出。",
 		"  · 这类任务请在你自己已授权的前台终端里运行。",
 		"  · 本终端内可运行不需要隐私权限的命令（如文件处理、网络请求、远程设备流）。",
-		"  · 若改在前台终端里运行 pi-web-ui，本提示即不再出现。\x1b[0m",
+		"  · 若改在前台终端里运行 训推引擎组 Harness，本提示即不再出现。\x1b[0m",
 	].join("\r\n") + "\r\n";
 
 /** True when this server was spawned by launchd (or orphaned) on macOS — no GUI app in the ancestry, so camera/mic TCC grants are unavailable. */
@@ -994,6 +993,10 @@ export class TerminalManager {
 	 *  noteAgentActivity）。宿主自行判断会话是否在运行并决定是否注入。 */
 	onAgentIdle: ((terminalId: string, idleMs: number, title: string, lastLines: string) => void) | null = null;
 
+	/** 宿主回调：每次起 PTY 前调整环境（运行中任务的集群绑定）；null = 原样用 shellEnv()。
+	 *  agent = 由 Agent 发起（终端接管 bash 或终端工具创建），用户在界面手开的终端为 false。 */
+	envFor: ((env: Record<string, string>, ctx: { agent: boolean }) => Record<string, string>) | null = null;
+
 	constructor(
 		private emit: (msg: ServerMessage) => void,
 		private readonly workspaceRoot: string,
@@ -1015,7 +1018,7 @@ export class TerminalManager {
 		rows: number,
 		fallbackCwd: string,
 		title?: string,
-		opts?: { forceBash?: boolean; agentBash?: boolean; locale?: string },
+		opts?: { forceBash?: boolean; agentBash?: boolean; locale?: string; agentTool?: boolean },
 	): TerminalInfo | null {
 		const valid = this.validateId(id);
 		if (valid) {
@@ -1059,6 +1062,7 @@ export class TerminalManager {
 				opts?.forceBash,
 				priorAgentBash,
 				opts?.locale,
+				opts?.agentTool === true,
 			)
 		) {
 			this.maybeEmitTccHint(id);
@@ -1187,6 +1191,8 @@ export class TerminalManager {
 		forceBash?: boolean,
 		agentBash = false,
 		locale?: string,
+		/** 终端工具（terminal_create）由 Agent 创建：起进程的环境按 Agent 归属处理。 */
+		agentTool = false,
 	): boolean {
 		let abs = cwd;
 		let shell: string;
@@ -1246,7 +1252,7 @@ export class TerminalManager {
 					cols: Math.max(2, Math.floor(cols) || 80),
 					rows: Math.max(2, Math.floor(rows) || 24),
 					cwd: abs,
-					env: shellEnv(),
+					env: this.envFor ? this.envFor(shellEnv(), { agent: agentBash || agentTool }) : shellEnv(),
 				});
 			}
 		} catch (err) {
@@ -2441,7 +2447,9 @@ export function makePersistentTerminalTools(
 				const lang = getLang();
 				const safeCols = Math.max(2, Math.min(500, Math.floor(p.cols ?? 120)));
 				const safeRows = Math.max(2, Math.min(200, Math.floor(p.rows ?? 40)));
-				const info = terminals.create(p.terminalId, p.cwd ?? cwd, safeCols, safeRows, cwd, p.terminalId);
+				const info = terminals.create(p.terminalId, p.cwd ?? cwd, safeCols, safeRows, cwd, p.terminalId, {
+					agentTool: true,
+				});
 				const infoJson = JSON.stringify(info);
 				if (!info)
 					throw new Error(

@@ -30,25 +30,6 @@ export const DEFAULT_PI_CAPABILITIES: Readonly<AgentEngineCapabilities> = Object
 	ephemeralChat: false,
 });
 
-/** DSH 引擎能力：外部独立进程运行时（缺失 SSH 透明接管、conversation_read 等宿主特性） */
-export const DEFAULT_DSH_CAPABILITIES: Readonly<AgentEngineCapabilities> = Object.freeze({
-	remoteSsh: false,
-	sandboxes: false,
-	workspaceRoots: false,
-	conversationRef: false,
-	presentFiles: false,
-	planMode: false,
-	delegateMode: false,
-	subagents: false,
-	toolPromptOverride: false,
-	lazyTools: false,
-	softCap: false,
-	treeFork: false,
-	messageEdit: false,
-	steer: false,
-	ephemeralChat: false,
-});
-
 /** 通用基座保守默认能力：外部 CLI / 子进程默认仅支持纯线性消息对话 */
 export const DEFAULT_UNIVERSAL_CAPABILITIES: Readonly<AgentEngineCapabilities> = Object.freeze({
 	remoteSsh: false,

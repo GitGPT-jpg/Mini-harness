@@ -2,113 +2,112 @@
 /* theme-name-en: Aetheris HUD */
 /* theme-group: builtin */
 :root {
-	color-scheme: dark;
-	--bg: #040507;
-	--bg-elev: #0a0c13;
-	--bg-elev2: #10131d;
-	--bg-elev3: rgba(255, 255, 255, 0.05);
-	--border: rgba(255, 255, 255, 0.08);
-	--border-soft: rgba(255, 255, 255, 0.04);
-	--text: #f0f3f8;
-	--text-dim: #8e96aa;
-	--text-faint: #5a637c;
-	--accent: #00f5d4;
-	--accent-contrast: #0a0c13;
-	--accent-soft: rgba(0, 245, 212, 0.12);
-	--green: #10b981;
-	--green-soft: rgba(16, 185, 129, 0.12);
-	--red: #ff4a6e;
-	--on-red: #1a1a1a;
-	--red-soft: rgba(255, 74, 110, 0.12);
-	--amber: #fbbf24;
-	--blue: #6c6ff2;
-	--blue-soft: rgba(99, 102, 241, 0.12);
+    color-scheme: dark;
+    --bg: #040507;
+    --bg-elev: #0a0c13;
+    --bg-elev2: #10131d;
+    --bg-elev3: rgba(255, 255, 255, 0.05);
+    --border: rgba(255, 255, 255, 0.08);
+    --border-soft: rgba(255, 255, 255, 0.04);
+    --text: #f0f3f8;
+    --text-dim: #8e96aa;
+    --text-faint: #5a637c;
+    --accent: #00f5d4;
+    --accent-contrast: #0a0c13;
+    --accent-soft: rgba(0, 245, 212, 0.12);
+    --green: #10b981;
+    --green-soft: rgba(16, 185, 129, 0.12);
+    --red: #ff4a6e;
+    --on-red: #1a1a1a;
+    --red-soft: rgba(255, 74, 110, 0.12);
+    --amber: #fbbf24;
+    --blue: #6c6ff2;
+    --blue-soft: rgba(99, 102, 241, 0.12);
 
-	/* 终端 ANSI 调色板 */
-	--term-bg: #040507;
-	--term-fg: #f0f3f8;
-	--term-cursor: #00f5d4;
-	--term-cursor-accent: #040507;
-	--term-selection: rgba(0, 245, 212, 0.32);
-	--term-black: #10131d;
-	--term-red: #ff4a6e;
-	--term-green: #10b981;
-	--term-yellow: #fbbf24;
-	--term-blue: #6366f1;
-	--term-magenta: #c084fc;
-	--term-cyan: #00f5d4;
-	--term-white: #f0f3f8;
-	--term-bright-black: #525a70;
-	--term-bright-red: #ff6b8b;
-	--term-bright-green: #34d399;
-	--term-bright-yellow: #fde047;
-	--term-bright-blue: #818cf8;
-	--term-bright-magenta: #e879f9;
-	--term-bright-cyan: #5eead4;
-	--term-bright-white: #ffffff;
-
-	--mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
-	--mermaid-font-size: 12px;
-	--tooltip-bg: #141722;
-	--code-bg: #06070c;
-	--code-text: #e2e8f0;
-	--code-border: var(--border-soft);
-	--code-pad: 8px 10px;
-	--card-body-pad: 4px 14px 12px;
-	--err-text: #ff859c;
-	--red-text: #ffa3b4;
-	--amber-text: #fde68a;
-	--info-blue: #818cf8;
-	--link: #00f5d4;
-	--link-hover: #5eead4;
-	--link-soft: #99f6e4;
-	--md-strong: #ffffff;
-	--skill-blue: #818cf8;
-	--plugin-purple: #c084fc;
-	--auth-green: #34d399;
-	--scroll-thumb: rgba(255, 255, 255, 0.1);
-	--scroll-thumb-hover: rgba(0, 245, 212, 0.45);
-	--notice-err-bg: #2d0e16;
-	--notice-warn-bg: #281a0b;
-	--notice-info-bg: #11152a;
-	--notice-err-border: #ff4a6e;
-	--notice-warn-border: #fbbf24;
-	--notice-info-border: #6366f1;
-	--send-blue: #00f5d4;
-	--on-send-blue: #1a1a1a;
-	--send-blue-hover: #2dd4bf;
-	--stop-red: #ff4a6e;
-	--stop-red-hover: #e11d48;
-	--brand-grad-a: #00f5d4;
-	--brand-grad-b: #6366f1;
-	--on-amber: #1a1a1a;
-	--search-active-fg: #040507;
-	--switch-knob: #ffffff;
-	--sunken-bg: rgba(0, 0, 0, 0.45);
-	--glow-015: rgba(0, 245, 212, 0.015);
-	--glow-025: rgba(0, 245, 212, 0.025);
-	--glow-03: rgba(0, 245, 212, 0.03);
-	--glow-04: rgba(0, 245, 212, 0.04);
-	--glow-05: rgba(0, 245, 212, 0.05);
-	--glow-12: rgba(0, 245, 212, 0.12);
-	--glow-18: rgba(0, 245, 212, 0.18);
-	--glow-22: rgba(0, 245, 212, 0.22);
-	--glow-38: rgba(0, 245, 212, 0.38);
-	--control-fg: #8e96aa;
-	--control-bg: #10131d;
-	--control-border: rgba(255, 255, 255, 0.08);
-	--bg-image: none;
-	--bg-image-dim: 0.84;
-	--bg-image-blur: 0px;
-	--wallpaper-panel-alpha: 65%;
-	--topbar-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 65%), transparent);
-	--statusbar-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 65%), transparent);
-	--panel-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 65%), transparent);
-	--card-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 65%), transparent);
-	--chip-bg: color-mix(in srgb, var(--bg-elev2) var(--wallpaper-panel-alpha, 65%), transparent);
-	--msgs-bg: color-mix(in srgb, var(--bg) var(--wallpaper-panel-alpha, 65%), transparent);
-	--inputbox-bg: color-mix(in srgb, var(--bg-elev2) var(--wallpaper-panel-alpha, 65%), transparent);
-	--menu-bg: #10131d;
+    /* 终端 ANSI 调色板 */
+    --term-bg: #040507;
+    --term-fg: #f0f3f8;
+    --term-cursor: #00f5d4;
+    --term-cursor-accent: #040507;
+    --term-selection: rgba(0, 245, 212, 0.32);
+    --term-black: #10131d;
+    --term-red: #ff4a6e;
+    --term-green: #10b981;
+    --term-yellow: #fbbf24;
+    --term-blue: #6366f1;
+    --term-magenta: #c084fc;
+    --term-cyan: #00f5d4;
+    --term-white: #f0f3f8;
+    --term-bright-black: #525a70;
+    --term-bright-red: #ff6b8b;
+    --term-bright-green: #34d399;
+    --term-bright-yellow: #fde047;
+    --term-bright-blue: #818cf8;
+    --term-bright-magenta: #e879f9;
+    --term-bright-cyan: #5eead4;
+    --term-bright-white: #fff;
+    --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    --mermaid-font-size: 12px;
+    --tooltip-bg: #141722;
+    --code-bg: #06070c;
+    --code-text: #e2e8f0;
+    --code-border: var(--border-soft);
+    --code-pad: 8px 10px;
+    --card-body-pad: 4px 14px 12px;
+    --err-text: #ff859c;
+    --red-text: #ffa3b4;
+    --amber-text: #fde68a;
+    --info-blue: #818cf8;
+    --link: #00f5d4;
+    --link-hover: #5eead4;
+    --link-soft: #99f6e4;
+    --md-strong: #fff;
+    --skill-blue: #818cf8;
+    --plugin-purple: #c084fc;
+    --auth-green: #34d399;
+    --scroll-thumb: rgba(255, 255, 255, 0.1);
+    --scroll-thumb-hover: rgba(0, 245, 212, 0.45);
+    --notice-err-bg: #2d0e16;
+    --notice-warn-bg: #281a0b;
+    --notice-info-bg: #11152a;
+    --notice-err-border: #ff4a6e;
+    --notice-warn-border: #fbbf24;
+    --notice-info-border: #6366f1;
+    --send-blue: #00f5d4;
+    --on-send-blue: #1a1a1a;
+    --send-blue-hover: #2dd4bf;
+    --stop-red: #ff4a6e;
+    --stop-red-hover: #e11d48;
+    --brand-grad-a: #00f5d4;
+    --brand-grad-b: #6366f1;
+    --on-amber: #1a1a1a;
+    --search-active-fg: #040507;
+    --switch-knob: #fff;
+    --sunken-bg: rgba(0, 0, 0, 0.45);
+    --glow-015: rgba(0, 245, 212, 0.015);
+    --glow-025: rgba(0, 245, 212, 0.025);
+    --glow-03: rgba(0, 245, 212, 0.03);
+    --glow-04: rgba(0, 245, 212, 0.04);
+    --glow-05: rgba(0, 245, 212, 0.05);
+    --glow-12: rgba(0, 245, 212, 0.12);
+    --glow-18: rgba(0, 245, 212, 0.18);
+    --glow-22: rgba(0, 245, 212, 0.22);
+    --glow-38: rgba(0, 245, 212, 0.38);
+    --control-fg: #8e96aa;
+    --control-bg: #10131d;
+    --control-border: rgba(255, 255, 255, 0.08);
+    --bg-image: none;
+    --bg-image-dim: 0.84;
+    --bg-image-blur: 0px;
+    --wallpaper-panel-alpha: 65%;
+    --topbar-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 65%), transparent);
+    --statusbar-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 65%), transparent);
+    --panel-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 65%), transparent);
+    --card-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 65%), transparent);
+    --chip-bg: color-mix(in srgb, var(--bg-elev2) var(--wallpaper-panel-alpha, 65%), transparent);
+    --msgs-bg: color-mix(in srgb, var(--bg) var(--wallpaper-panel-alpha, 65%), transparent);
+    --inputbox-bg: color-mix(in srgb, var(--bg-elev2) var(--wallpaper-panel-alpha, 65%), transparent);
+    --menu-bg: #10131d;
 }
 
 /* =========================================================================
@@ -118,34 +117,34 @@
 /* ---------------- 1. 虚空点阵场与空间景深 (Cyber Matrix Backdrop) ---------------- */
 body,
 .app-root {
-	background-color: var(--bg);
-	background-image:
-		radial-gradient(rgba(255, 255, 255, 0.055) 1px, transparent 1px),
-		radial-gradient(ellipse 70% 55% at 20% 0%, rgba(0, 245, 212, 0.045) 0%, transparent 70%),
-		radial-gradient(ellipse 70% 55% at 80% 100%, rgba(99, 102, 241, 0.055) 0%, transparent 70%);
-	background-size:
-		32px 32px,
-		100% 100%,
-		100% 100%;
-	background-attachment: fixed;
+    background-color: var(--bg);
+    background-image:
+        radial-gradient(rgba(255, 255, 255, 0.055) 1px, transparent 1px),
+        radial-gradient(ellipse 70% 55% at 20% 0%, rgba(0, 245, 212, 0.045) 0%, transparent 70%),
+        radial-gradient(ellipse 70% 55% at 80% 100%, rgba(99, 102, 241, 0.055) 0%, transparent 70%);
+    background-size:
+        32px 32px,
+        100% 100%,
+        100% 100%;
+    background-attachment: fixed;
 }
 
 /* ---------------- 2. 悬浮机载平显顶栏 (Avionics HUD Topbar) ---------------- */
 .topbar {
-	background: rgba(4, 5, 7, 0.6);
-	backdrop-filter: blur(24px) saturate(180%);
-	-webkit-backdrop-filter: blur(24px) saturate(180%);
-	border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-	box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
+    background: rgba(4, 5, 7, 0.6);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
 }
 
 .topbar .chip,
 .topbar .tb-tab,
 .topbar .plugin-topbar-item {
-	border-radius: 8px;
-	border: 1px solid rgba(255, 255, 255, 0.06);
-	background: rgba(255, 255, 255, 0.02);
-	transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(255, 255, 255, 0.02);
+    transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* 与基线「顶栏归一」契约对齐（分层后的显式复刻）：
@@ -162,7 +161,7 @@ body,
 .topbar .chip.newchat,
 .topbar .chip.ephemeral-chat-btn,
 .topbar .chip.sandbox-chip {
-	border-color: transparent;
+    border-color: transparent;
 }
 
 .topbar button.chip,
@@ -170,438 +169,450 @@ body,
 .topbar .chip.newchat,
 .topbar .chip.ephemeral-chat-btn,
 .topbar .chip.sandbox-chip {
-	background: transparent;
+    background: transparent;
 }
 
 .topbar .chip.active,
 .topbar .tb-tab.active,
 .topbar .plugin-topbar-item.active {
-	background: var(--accent-soft);
+    background: var(--accent-soft);
 }
 
 .topbar .chip:hover,
 .topbar .tb-tab:hover,
 .topbar .plugin-topbar-item:hover {
-	border-color: rgba(0, 245, 212, 0.35);
-	background: rgba(0, 245, 212, 0.07);
-	box-shadow: 0 0 16px rgba(0, 245, 212, 0.12);
-	transform: translateY(-1px);
+    border-color: rgba(0, 245, 212, 0.35);
+    background: rgba(0, 245, 212, 0.07);
+    box-shadow: 0 0 16px rgba(0, 245, 212, 0.12);
+    transform: translateY(-1px);
 }
 
 .brand-name {
-	letter-spacing: 0.08em;
-	text-transform: uppercase;
-	font-weight: 700;
-	background: linear-gradient(135deg, #00f5d4 0%, #6366f1 100%);
-	-webkit-background-clip: text;
-	-webkit-text-fill-color: transparent;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 700;
+    background: linear-gradient(135deg, #00f5d4 0%, #6366f1 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
 }
 
 /* ---------------- 3. 悬浮指挥中岛 (Floating Command Dock) ---------------- */
 /* 彻底打破贴底通栏传统，将输入框重构为居中浮空战术控制台 */
 .inputbar {
-	background: transparent;
-	/* 上内边距走 --composer-pad-top（消息区的负 margin 按同一个值算），
+    background: transparent;
+    /* 上内边距走 --composer-pad-top（消息区的负 margin 按同一个值算），
 	   这个主题只是把下留白加大。 */
-	padding: var(--composer-pad-top) var(--chat-inset) 28px;
-	position: relative;
-	z-index: 30;
-	border-top: none;
+    padding: var(--composer-pad-top) var(--chat-inset) 28px;
+    position: relative;
+    z-index: 30;
+    border-top: none;
 }
 
 .inputbox {
-	background: rgba(10, 12, 20, 0.84);
-	backdrop-filter: blur(36px) saturate(220%);
-	-webkit-backdrop-filter: blur(36px) saturate(220%);
-	border: 1px solid rgba(255, 255, 255, 0.1);
-	border-radius: 22px;
-	padding: 14px 16px 12px;
-	box-shadow:
-		0 28px 70px -12px rgba(0, 0, 0, 0.85),
-		0 0 0 1px rgba(255, 255, 255, 0.04),
-		inset 0 1px 0 rgba(255, 255, 255, 0.16);
-	transition:
-		border-color 0.25s cubic-bezier(0.16, 1, 0.3, 1),
-		box-shadow 0.25s cubic-bezier(0.16, 1, 0.3, 1),
-		transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    background: rgba(10, 12, 20, 0.84);
+    backdrop-filter: blur(36px) saturate(220%);
+    -webkit-backdrop-filter: blur(36px) saturate(220%);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 22px;
+    padding: 14px 16px 12px;
+    box-shadow:
+        0 28px 70px -12px rgba(0, 0, 0, 0.85),
+        0 0 0 1px rgba(255, 255, 255, 0.04),
+        inset 0 1px 0 rgba(255, 255, 255, 0.16);
+    transition:
+        border-color 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+        box-shadow 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+        transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .inputbox:focus-within {
-	border-color: rgba(0, 245, 212, 0.5);
-	box-shadow:
-		0 36px 85px -12px rgba(0, 0, 0, 0.95),
-		0 0 35px rgba(0, 245, 212, 0.24),
-		inset 0 1px 0 rgba(255, 255, 255, 0.28);
-	transform: translateY(-3px);
+    border-color: rgba(0, 245, 212, 0.5);
+    box-shadow:
+        0 36px 85px -12px rgba(0, 0, 0, 0.95),
+        0 0 35px rgba(0, 245, 212, 0.24),
+        inset 0 1px 0 rgba(255, 255, 255, 0.28);
+    transform: translateY(-3px);
 }
 
 .composer-textarea {
-	font-size: 14.5px;
-	line-height: 1.65;
+    font-size: 14.5px;
+    line-height: 1.65;
 }
 
 /* 发送按键高阶能量发光体 */
 .btn-send {
-	background: linear-gradient(135deg, #00f5d4 0%, #05d5b9 100%);
-	color: #040507;
-	font-weight: 700;
-	border-radius: 12px;
-	box-shadow: 0 4px 16px rgba(0, 245, 212, 0.35);
-	transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    background: linear-gradient(135deg, #00f5d4 0%, #05d5b9 100%);
+    color: #040507;
+    font-weight: 700;
+    border-radius: 12px;
+    box-shadow: 0 4px 16px rgba(0, 245, 212, 0.35);
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .btn-send:hover {
-	transform: scale(1.05) translateY(-1px);
-	box-shadow: 0 6px 24px rgba(0, 245, 212, 0.6);
+    transform: scale(1.05) translateY(-1px);
+    box-shadow: 0 6px 24px rgba(0, 245, 212, 0.6);
 }
 
 /* ---------------- 4. 任务目标工单化 (Mission Objective Directives) ---------------- */
 /* 颠覆微信式右侧聊天气泡：用户提问直接升级为任务工程指令卡片 */
 .msg-user {
-	margin-top: 28px;
-	margin-bottom: 28px;
-	max-width: 100%;
+    margin-top: 28px;
+    margin-bottom: 28px;
+    max-width: 100%;
 }
 
 .msg-user .msg-meta {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
 }
 
 .msg-user .msg-role::before {
-	content: "MISSION DIRECTIVE // ";
-	font-family: var(--mono);
-	font-size: 10px;
-	letter-spacing: 0.15em;
-	font-weight: 700;
-	color: var(--accent);
-	opacity: 0.9;
+    content: "MISSION DIRECTIVE // ";
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    font-weight: 700;
+    color: var(--accent);
+    opacity: 0.9;
 }
 
 .msg-user .msg-body {
-	position: relative;
-	background: linear-gradient(145deg, rgba(16, 20, 32, 0.9) 0%, rgba(9, 11, 19, 0.9) 100%);
-	border: 1px solid rgba(0, 245, 212, 0.24);
-	border-left: 4px solid var(--accent);
-	border-radius: 14px;
-	padding: 16px 20px;
-	box-shadow:
-		0 14px 36px -6px rgba(0, 0, 0, 0.55),
-		0 0 28px rgba(0, 245, 212, 0.06),
-		inset 0 1px 0 rgba(255, 255, 255, 0.12);
-	backdrop-filter: blur(18px);
-	-webkit-backdrop-filter: blur(18px);
+    position: relative;
+    background: linear-gradient(145deg, rgba(16, 20, 32, 0.9) 0%, rgba(9, 11, 19, 0.9) 100%);
+    border: 1px solid rgba(0, 245, 212, 0.24);
+    border-left: 4px solid var(--accent);
+    border-radius: 14px;
+    padding: 16px 20px;
+    box-shadow:
+        0 14px 36px -6px rgba(0, 0, 0, 0.55),
+        0 0 28px rgba(0, 245, 212, 0.06),
+        inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
 }
 
 /* ---------------- 5. 神经主导线与自动化流水线 (Execution Neural Spine) ---------------- */
 /* 为 Agent 回复构建统一的垂直神经脉络导轨，将零散的 toolcall 串联为高科技流水线 */
 .msg-assistant .msg-body {
-	position: relative;
-	padding-left: 20px;
-	border-left: 2px solid rgba(0, 245, 212, 0.2);
-	margin-left: 6px;
+    position: relative;
+    padding-left: 20px;
+    border-left: 2px solid rgba(0, 245, 212, 0.2);
+    margin-left: 6px;
 }
 
 /* 工具调用节点微芯片化 */
 .toolcall {
-	position: relative;
-	border-radius: 10px;
-	border: 1px solid rgba(255, 255, 255, 0.08);
-	background: rgba(9, 11, 18, 0.72);
-	backdrop-filter: blur(14px);
-	-webkit-backdrop-filter: blur(14px);
-	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
-	margin: 8px 0;
-	transition:
-		border-color 0.2s cubic-bezier(0.16, 1, 0.3, 1),
-		box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1),
-		transform 0.15s ease;
+    position: relative;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(9, 11, 18, 0.72);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    margin: 8px 0;
+    transition:
+        border-color 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+        box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+        transform 0.15s ease;
 }
 
 /* 钉在神经导轨上的微型量子状态芯片引脚 */
 .msg-assistant .toolcall::before {
-	content: "";
-	position: absolute;
-	left: -26px;
-	top: 14px;
-	width: 10px;
-	height: 10px;
-	border-radius: 50%;
-	background: #040507;
-	border: 2px solid rgba(255, 255, 255, 0.25);
-	box-shadow: 0 0 6px rgba(0, 0, 0, 0.8);
-	transition: all 0.25s ease;
-	z-index: 2;
+    content: "";
+    position: absolute;
+    left: -26px;
+    top: 14px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #040507;
+    border: 2px solid rgba(255, 255, 255, 0.25);
+    box-shadow: 0 0 6px rgba(0, 0, 0, 0.8);
+    transition: all 0.25s ease;
+    z-index: 2;
 }
 
 .toolcall:hover {
-	border-color: rgba(255, 255, 255, 0.2);
-	transform: translateX(2px);
+    border-color: rgba(255, 255, 255, 0.2);
+    transform: translateX(2px);
 }
 
 .toolcall-head {
-	padding: 6px 14px;
-	font-family: var(--mono);
-	font-size: 13px;
+    padding: 6px 14px;
+    font-family: var(--mono);
+    font-size: 13px;
 }
 
 .toolcall-name {
-	color: #00f5d4;
-	font-weight: 600;
-	letter-spacing: 0.04em;
+    color: #00f5d4;
+    font-weight: 600;
+    letter-spacing: 0.04em;
 }
 
 /* 运行态量子发光流水线 */
 .toolcall.run {
-	border-color: rgba(0, 245, 212, 0.55);
-	box-shadow:
-		0 0 24px rgba(0, 245, 212, 0.16),
-		inset 0 0 16px rgba(0, 245, 212, 0.06);
-	animation: aetheris-pulse 2s ease-in-out infinite alternate;
+    border-color: rgba(0, 245, 212, 0.55);
+    box-shadow:
+        0 0 24px rgba(0, 245, 212, 0.16),
+        inset 0 0 16px rgba(0, 245, 212, 0.06);
+    animation: aetheris-pulse 2s ease-in-out infinite alternate;
 }
 
 .msg-assistant .toolcall.run::before {
-	border-color: var(--accent);
-	background: var(--accent);
-	box-shadow:
-		0 0 12px var(--accent),
-		0 0 20px var(--accent);
+    border-color: var(--accent);
+    background: var(--accent);
+    box-shadow:
+        0 0 12px var(--accent),
+        0 0 20px var(--accent);
 }
 
 @keyframes aetheris-pulse {
-	0% {
-		border-color: rgba(0, 245, 212, 0.3);
-		box-shadow: 0 0 12px rgba(0, 245, 212, 0.08);
-	}
-	100% {
-		border-color: rgba(0, 245, 212, 0.65);
-		box-shadow: 0 0 30px rgba(0, 245, 212, 0.25);
-	}
+    0% {
+        border-color: rgba(0, 245, 212, 0.3);
+        box-shadow: 0 0 12px rgba(0, 245, 212, 0.08);
+    }
+
+    100% {
+        border-color: rgba(0, 245, 212, 0.65);
+        box-shadow: 0 0 30px rgba(0, 245, 212, 0.25);
+    }
 }
 
 .toolcall.ok {
-	border-color: rgba(16, 185, 129, 0.35);
+    border-color: rgba(16, 185, 129, 0.35);
 }
 
 .msg-assistant .toolcall.ok::before {
-	border-color: #10b981;
-	background: #10b981;
-	box-shadow: 0 0 8px #10b981;
+    border-color: #10b981;
+    background: #10b981;
+    box-shadow: 0 0 8px #10b981;
 }
 
 .toolcall.ok .toolcall-status {
-	color: #10b981;
-	text-shadow: 0 0 10px rgba(16, 185, 129, 0.55);
+    color: #10b981;
+    text-shadow: 0 0 10px rgba(16, 185, 129, 0.55);
 }
 
 .toolcall.err {
-	border-color: rgba(255, 74, 110, 0.5);
-	box-shadow: 0 0 20px rgba(255, 74, 110, 0.18);
+    border-color: rgba(255, 74, 110, 0.5);
+    box-shadow: 0 0 20px rgba(255, 74, 110, 0.18);
 }
 
 .msg-assistant .toolcall.err::before {
-	border-color: #ff4a6e;
-	background: #ff4a6e;
-	box-shadow: 0 0 10px #ff4a6e;
+    border-color: #ff4a6e;
+    background: #ff4a6e;
+    box-shadow: 0 0 10px #ff4a6e;
 }
 
 .toolcall.err .toolcall-status {
-	color: #ff4a6e;
-	text-shadow: 0 0 10px rgba(255, 74, 110, 0.65);
+    color: #ff4a6e;
+    text-shadow: 0 0 10px rgba(255, 74, 110, 0.65);
 }
 
 /* ---------------- 6. 神经思维链暗舱 (Neural Synapse Vault) ---------------- */
 .thinking {
-	position: relative;
-	border-radius: 12px;
-	border: 1px dashed rgba(99, 102, 241, 0.35);
-	background: rgba(8, 10, 16, 0.65);
-	backdrop-filter: blur(14px);
-	-webkit-backdrop-filter: blur(14px);
-	margin: 12px 0;
-	transition: border-color 0.25s ease;
+    position: relative;
+    border-radius: 12px;
+    border: 1px dashed rgba(99, 102, 241, 0.35);
+    background: rgba(8, 10, 16, 0.65);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    margin: 12px 0;
+    transition: border-color 0.25s ease;
 }
 
 .thinking:hover {
-	border-color: rgba(99, 102, 241, 0.55);
+    border-color: rgba(99, 102, 241, 0.55);
 }
 
 .thinking-head {
-	font-family: var(--mono);
-	font-size: 12.5px;
-	letter-spacing: 0.05em;
-	color: #818cf8;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    letter-spacing: 0.05em;
+    color: #818cf8;
 }
 
 /* ---------------- 7. 工件画布与代码沉浸舱 (Artifact Canvas) ---------------- */
 /* 将代码产出物提升为主画布核心工件视觉 */
 .codeblock {
-	border-radius: 12px;
-	border: 1px solid rgba(255, 255, 255, 0.09);
-	background: #06070c;
-	box-shadow:
-		0 10px 30px -4px rgba(0, 0, 0, 0.65),
-		inset 0 1px 0 rgba(255, 255, 255, 0.08);
-	overflow: hidden;
-	margin: 14px 0;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    background: #06070c;
+    box-shadow:
+        0 10px 30px -4px rgba(0, 0, 0, 0.65),
+        inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    overflow: hidden;
+    margin: 14px 0;
 }
 
 .codeblock-head {
-	background: rgba(255, 255, 255, 0.035);
-	border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-	font-family: var(--mono);
-	font-size: 12px;
-	letter-spacing: 0.04em;
+    background: rgba(255, 255, 255, 0.035);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.04em;
 }
 
 .codeblock pre {
-	background: #06070c;
+    background: #06070c;
 }
 
 /* ---------------- 8. 遥测指示底栏 (Avionics Statusbar) ---------------- */
 .statusbar {
-	background: rgba(4, 5, 7, 0.75);
-	backdrop-filter: blur(24px);
-	-webkit-backdrop-filter: blur(24px);
-	border-top: 1px solid rgba(255, 255, 255, 0.06);
-	font-family: var(--mono);
-	font-size: 11.5px;
-	letter-spacing: 0.03em;
+    background: rgba(4, 5, 7, 0.75);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.03em;
 }
 
 /* 底部状态栏按钮同步极简行文（基线方案 C 纯平流）：按钮只走基线形态 */
 .statusbar .bar-item,
 .statusbar .bar-item.chip,
 .statusbar .chip {
-	height: 18px;
-	min-height: 18px;
-	padding: 0 4px;
-	font-size: 11px;
-	line-height: 18px;
-	gap: 3px;
-	color: var(--text-dim);
-	background: transparent;
-	border: 1px solid transparent;
-	border-radius: 2px;
-	box-shadow: none;
-	opacity: 1;
-	filter: none;
-	text-shadow: none;
-	cursor: pointer;
-	transform: none;
-	letter-spacing: normal;
+    height: 18px;
+    min-height: 18px;
+    padding: 0 4px;
+    font-size: 11px;
+    line-height: 18px;
+    gap: 3px;
+    color: var(--text-dim);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 2px;
+    box-shadow: none;
+    opacity: 1;
+    filter: none;
+    text-shadow: none;
+    cursor: pointer;
+    transform: none;
+    letter-spacing: normal;
 }
+
 .statusbar .bar-item:hover,
 .statusbar .bar-item.chip:hover,
 .statusbar .chip:hover {
-	background: var(--glow-12);
-	color: var(--text);
-	border-color: transparent;
-	border-radius: 2px;
-	box-shadow: none;
-	opacity: 1;
-	filter: none;
-	text-shadow: none;
-	transform: none;
+    background: var(--glow-12);
+    color: var(--text);
+    border-color: transparent;
+    border-radius: 2px;
+    box-shadow: none;
+    opacity: 1;
+    filter: none;
+    text-shadow: none;
+    transform: none;
 }
+
 .statusbar .bar-item.active,
 .statusbar .bar-item.chip.active,
 .statusbar .chip.active {
-	background: var(--bg-elev2);
-	color: var(--text);
+    background: var(--bg-elev2);
+    color: var(--text);
 }
+
 .statusbar .bar-item-text {
-	font-size: 11px;
-	line-height: 1.2;
-	color: inherit;
-	opacity: 1;
-	text-shadow: none;
+    font-size: 11px;
+    line-height: 1.2;
+    color: inherit;
+    opacity: 1;
+    text-shadow: none;
 }
+
 .statusbar .bar-item-char {
-	font-size: 11px;
-	line-height: 1;
-	font-weight: 600;
-	color: var(--text-faint);
-	opacity: 0.85;
-	text-shadow: none;
+    font-size: 11px;
+    line-height: 1;
+    font-weight: 600;
+    color: var(--text-faint);
+    opacity: 0.85;
+    text-shadow: none;
 }
+
 .statusbar .bar-item.status-cost {
-	gap: 0;
+    gap: 0;
 }
+
 .statusbar .bar-item-icon {
-	font-size: 11px;
-	width: 11px;
-	height: 11px;
-	min-width: 11px;
-	opacity: 0.75;
-	color: inherit;
-	filter: none;
-	text-shadow: none;
+    font-size: 11px;
+    width: 11px;
+    height: 11px;
+    min-width: 11px;
+    opacity: 0.75;
+    color: inherit;
+    filter: none;
+    text-shadow: none;
 }
+
 .statusbar .bar-item:hover .bar-item-icon {
-	opacity: 1;
-	color: inherit;
-	filter: none;
+    opacity: 1;
+    color: inherit;
+    filter: none;
 }
+
 .statusbar .bar-item-icon svg,
 .statusbar .bar-item-glyph {
-	width: 11px;
-	height: 11px;
-	color: inherit;
-	stroke: currentColor;
-	filter: none;
-	text-shadow: none;
+    width: 11px;
+    height: 11px;
+    color: inherit;
+    stroke: currentColor;
+    filter: none;
+    text-shadow: none;
 }
+
 .statusbar .bar-item-badge {
-	background: none;
-	color: var(--accent);
-	font-size: 10px;
-	font-weight: 700;
-	min-width: 0;
-	height: auto;
-	padding: 0;
-	margin-left: 0;
-	border-radius: 0;
-	opacity: 1;
-	text-shadow: none;
-	box-shadow: none;
+    background: none;
+    color: var(--accent);
+    font-size: 10px;
+    font-weight: 700;
+    min-width: 0;
+    height: auto;
+    padding: 0;
+    margin-left: 0;
+    border-radius: 0;
+    opacity: 1;
+    text-shadow: none;
+    box-shadow: none;
 }
+
 .statusbar .engine-picker-btn {
-	background: transparent;
-	border: 1px solid transparent;
-	border-radius: 2px;
-	padding: 0 4px;
-	color: var(--text-dim);
-	box-shadow: none;
-	opacity: 1;
-	filter: none;
-	text-shadow: none;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 2px;
+    padding: 0 4px;
+    color: var(--text-dim);
+    box-shadow: none;
+    opacity: 1;
+    filter: none;
+    text-shadow: none;
 }
+
 .statusbar .engine-picker-btn:hover {
-	background: var(--glow-12);
-	border-color: transparent;
-	color: var(--text);
+    background: var(--glow-12);
+    border-color: transparent;
+    color: var(--text);
 }
 
 /* ---------------- 9. 极客悬浮滚动条 (Quiet Cybernetic Scrollbar) ---------------- */
 ::-webkit-scrollbar {
-	width: 5px;
-	height: 5px;
+    width: 5px;
+    height: 5px;
 }
 
 ::-webkit-scrollbar-track {
-	background: transparent;
+    background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-	background: rgba(255, 255, 255, 0.08);
-	border-radius: 999px;
-	transition: background 0.2s ease;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 999px;
+    transition: background 0.2s ease;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-	background: rgba(0, 245, 212, 0.5);
-	box-shadow: 0 0 10px rgba(0, 245, 212, 0.45);
+    background: rgba(0, 245, 212, 0.5);
+    box-shadow: 0 0 10px rgba(0, 245, 212, 0.45);
 }

@@ -4,11 +4,10 @@ import { ALL_TABS, isTabAllowed, parseTabs, tabsRefusal } from "../../server/tab
 /**
  * PI_WEB_TABS — choose what an instance offers.
  *
- * Terminal opens a shell as the server's user; Git shows the working copy with
- * commit and diff a click away. On your own machine that is the point of the
- * tool. Exposed to other people — reviewers, colleagues, anybody who reaches
- * the page — they are not features, they are a shell and a repository handed
- * out over HTTP, and there is no way to turn them off today.
+ * Terminal opens a shell as the server's user. On your own machine that is the
+ * point of the tool. Exposed to other people — reviewers, colleagues, anybody
+ * who reaches the page — a terminal is not a feature, it is a shell handed out
+ * over HTTP, and there is no way to turn it off today.
  *
  * Absent variable means every tab, exactly as now: nobody who does not set it
  * sees any change.
@@ -41,9 +40,6 @@ describe("tab allow-list", () => {
 		for (const type of ["terminal_create", "terminal_input", "terminal_kill", "rename_terminal", "run_command"]) {
 			expect(tabsRefusal(type, t), type).toMatch(/terminal/i);
 		}
-		for (const type of ["scm_status", "scm_history", "scm_filediff", "scm_commit"]) {
-			expect(tabsRefusal(type, t), type).toMatch(/git/i);
-		}
 		for (const type of ["list_bg_servers", "kill_background_server", "kill_background_servers"]) {
 			expect(tabsRefusal(type, t), type).toBeTruthy();
 		}
@@ -57,7 +53,7 @@ describe("tab allow-list", () => {
 	});
 
 	it("refuses nothing at all when no list is set", () => {
-		for (const type of ["terminal_create", "scm_commit", "list_bg_servers", "search_files"]) {
+		for (const type of ["terminal_create", "list_bg_servers", "search_files"]) {
 			expect(tabsRefusal(type, null), type).toBeNull();
 		}
 	});

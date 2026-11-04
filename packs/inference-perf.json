@@ -1,0 +1,36 @@
+{
+  "id": "inference-perf",
+  "title": "推理性能（吞吐最大化）",
+  "summary": "对齐 infer-forge perf-016：以 prefill 端到端吞吐 input_throughput 为主指标（maximize），token 逐位一致 + span 无退化为硬约束。",
+  "goal": "优化推理服务的吞吐：在保持答案逐 token 一致、设备时间线 span 不劣化的前提下，尽量提高实测 prefill 吞吐。",
+  "criteria": "以 HARNESS_METRIC.input_throughput 为主指标（越大越好）；span_regression<=0.02、tokens_parity>=1、acc_drop<=0.01 为硬约束，缺一不可。",
+  "precheckCmd": "python3 validate.py --precheck",
+  "validateCmd": "python3 validate.py --validate",
+  "primaryMetric": "input_throughput",
+  "metricDirection": "maximize",
+  "hardConstraints": [
+    {
+      "name": "span 无退化",
+      "metric": "span_regression",
+      "op": "lte",
+      "value": 0.02
+    },
+    {
+      "name": "token 逐位一致",
+      "metric": "tokens_parity",
+      "op": "gte",
+      "value": 1
+    },
+    {
+      "name": "精度无退化",
+      "metric": "acc_drop",
+      "op": "lte",
+      "value": 0.01
+    }
+  ],
+  "artifactRoots": [
+    "runs"
+  ],
+  "maxRounds": 6,
+  "useReviewer": true
+}

@@ -3,45 +3,54 @@
  *
  * - runs：代码 loop 运行状态（~/.mini-harness/runs/<id>/state.json 的公开字段）；
  * - models：代码 loop 表单的规划/评审模型下拉（只给 provider/id/family，不含 baseUrl/密钥）；
+ * - roles：新任务各验收方式的规划/执行/审查实际模型与家族冲突预检（与服务端启动校验同一套规则）；
  * - task：执行者会话 jsonl 尾部 → 工具调用时间线（只读）；
  * - goals：LLM loop 永久目录（goal-history.jsonl）；
- * - cluster：保存 kubeconfig（0600）并用 kubectl cluster-info 实测连通性（结果缓存 8s）。
+ * - cluster：服务实际可见的 kubeconfig（Web 导入 > 启动时 KUBECONFIG > ~/.kube/config）+ /version 探测，
+ *   规则与新任务配置同源（cluster-config.ts）；响应只有错误码、固定文案和白名单元数据。
  *
  * PI_WEB_TOKEN 鉴权由 index.ts 的全局中间件覆盖，这里只做入参校验。
  */
-import { execFile } from "node:child_process";
-import {
-	chmodSync,
-	closeSync,
-	existsSync,
-	mkdirSync,
-	openSync,
-	readdirSync,
-	readFileSync,
-	readSync,
-	rmSync,
-	statSync,
-	writeFileSync,
-} from "node:fs";
+import { execFileSync } from "node:child_process";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
-import type { Express } from "express";
+import type { Express, NextFunction, Request, Response } from "express";
+import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import {
+	ClusterConfig,
+	setActiveClusterConfig,
+	type ClusterConfigOptions,
+	type ClusterStatus,
+} from "./cluster-config.js";
 import { deleteGoalLog, listGoalLog } from "../goal-history-log.js";
 import { distillLoopRun } from "./distill.js";
-import type { BestRoundRecord, HarnessMetrics } from "./metrics.js";
+import { findModel, resolveTaskRoles, type TaskMode } from "./model-roles.js";
+import { listOperations } from "./operation.js";
+import type { BestRoundRecord, HardConstraint, HarnessMetrics, MetricGateResult } from "./metrics.js";
+import { getPackKnowledge, getPackReference, listCapabilityPacks, listPackReferences } from "./packs.js";
+import { normalizeTaskInputs, renderDiscoverySummary, resolveTaskContext } from "./discovery.js";
 import {
+	deleteLoopRun,
 	familyOf,
 	listRuns,
 	loadLoopState,
+	recoverRun,
+	recoveryInfoOf,
 	reviewBrief,
 	reviewerEnabledOf,
 	runsRoot,
+	stopRunExternal,
 	type LoopAcceptance,
 } from "./extension.js";
 
 export interface LoopRoutesOptions {
 	dataDir: string;
 	agentDir: string;
+	/** 测试注入（假 kubectl / HOME / 环境对象）；缺省管理 process.env。 */
+	cluster?: Omit<ClusterConfigOptions, "dataDir">;
 }
+
+export type { ClusterStatus };
 
 export interface LoopRunBrief {
 	runId: string;
@@ -64,6 +73,16 @@ export interface LoopRunBrief {
 	reviewReasons: string[];
 	reviewerEnabled: boolean;
 	createdAt: string | null;
+	/** 隔夜恢复只读信息（unit / 租约 / 环境变化 / attempt）。 */
+	recovery?: {
+		unit: string;
+		leaseHeld: boolean;
+		environmentChanged: boolean;
+		attemptId: string | null;
+		generation: number;
+		owner: string | null;
+		remoteJobId: string | null;
+	} | null;
 }
 
 export interface ToolEvent {
@@ -76,14 +95,6 @@ export interface ToolEvent {
 	out: string;
 }
 
-export interface ClusterStatus {
-	configured: boolean;
-	connected: boolean;
-	/** not-configured / no-kubectl / error / ok（前端按它本地化，message 原样附后）。 */
-	code: "not-configured" | "no-kubectl" | "error" | "ok";
-	message: string;
-}
-
 const RUN_ID_RE = /^[0-9]{8,}-[a-z0-9]{4,}$/i;
 const GOAL_ID_RE = /^[0-9]{6,}-[a-z0-9]{2,16}$/i;
 /** 运行列表：非历史视图只看活跃 + 5 分钟内结束的。 */
@@ -91,7 +102,6 @@ const RECENT_MS = 5 * 60_000;
 /** 时间线只读会话文件尾部（会话文件可达数 MB，每 1.5s 轮询不能整读）。 */
 const TAIL_BYTES = 1024 * 1024;
 const KUBECONFIG_MAX = 256 * 1024;
-const CLUSTER_CACHE_MS = 8000;
 
 export function collectRuns(history: boolean, nowMs = Date.now()): LoopRunBrief[] {
 	const out: LoopRunBrief[] = [];
@@ -123,6 +133,7 @@ export function collectRuns(history: boolean, nowMs = Date.now()): LoopRunBrief[
 			reviewReasons: review?.reasons ?? [],
 			reviewerEnabled: reviewerEnabledOf(st),
 			createdAt: st.createdAt ?? null,
+			recovery: recoveryInfoOf(st.runId),
 		});
 	}
 	out.sort(
@@ -154,6 +165,7 @@ export interface LoopRunDetail {
 	acceptance: string | null;
 	setupError: string | null;
 	validator: {
+		started?: boolean;
 		precheckCmd?: string | null;
 		cmd: string | null;
 		verdict: string | null;
@@ -166,6 +178,9 @@ export interface LoopRunDetail {
 	workspace: string;
 	worktreeBranch: string | null;
 	worktreeCommitted: boolean;
+	worktreeFinalizeError?: string | null;
+	/** 任务工作树的只读状态（删除确认用）；dirty = null 表示 git 没能给出结论。 */
+	worktree: { path: string; exists: boolean; dirty: boolean | null; uncommitted: number } | null;
 	plannerOutput: string;
 	plan: string;
 	summary: string;
@@ -176,15 +191,36 @@ export interface LoopRunDetail {
 		at: string;
 		metrics?: HarnessMetrics;
 		commitSha?: string | null;
+		snapshotRef?: string | null;
 		precheckFailed?: boolean;
+		metricGateOk?: boolean;
+		metricGateReasons?: string[];
+		workspaceChangedDuringValidation?: boolean;
+		recoverable?: boolean;
 	}>;
 	lastMetrics?: HarnessMetrics | null;
 	bestRound?: BestRoundRecord | null;
+	stopRequestedAt?: string | null;
+	stopConfirmedAt?: string | null;
+	metricUnit?: string | null;
+	metricThreshold?: number | null;
+	metricThresholdOp?: "lt" | "lte" | "gt" | "gte" | null;
+	metricTolerance?: number | null;
+	metricScenario?: string | null;
+	hardConstraints?: HardConstraint[] | null;
+	lastMetricGate?: MetricGateResult | null;
 	rounds: LoopRoundEvidence[];
 	diff: string;
 	journal: Array<Record<string, unknown>>;
 	createdAt: string;
 	updatedAt: string | null;
+	packId?: string | null;
+	packVersion?: string | null;
+	attemptId?: string | null;
+	generation?: number;
+	owner?: string | null;
+	remoteJobId?: string | null;
+	recovery?: ReturnType<typeof recoveryInfoOf>;
 }
 
 const DETAIL_TEXT_MAX = 4000;
@@ -208,6 +244,23 @@ function readTextSafe(file: string, maxBytes: number): string {
 }
 
 /** 一个 run 的完整详情；run 不存在返回 null。 */
+/** 任务工作树是否还在、有没有未提交改动（含未跟踪文件）；只读，git 失败时 dirty = null。 */
+function worktreeStateOf(dir: string | null | undefined): LoopRunDetail["worktree"] {
+	if (!dir) return null;
+	if (!existsSync(dir)) return { path: dir, exists: false, dirty: false, uncommitted: 0 };
+	try {
+		const out = execFileSync("git", ["-C", dir, "status", "--porcelain"], {
+			encoding: "utf8",
+			timeout: 5000,
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+		const uncommitted = out.split("\n").filter((line) => line.trim()).length;
+		return { path: dir, exists: true, dirty: uncommitted > 0, uncommitted };
+	} catch {
+		return { path: dir, exists: true, dirty: null, uncommitted: 0 };
+	}
+}
+
 export function collectRunDetail(runId: string): LoopRunDetail | null {
 	const st = loadLoopState(runId);
 	if (!st) return null;
@@ -257,6 +310,7 @@ export function collectRunDetail(runId: string): LoopRunDetail | null {
 		acceptance: st.acceptance ?? null,
 		setupError: st.setupError ?? null,
 		validator: {
+			started: listOperations(runId).some((op) => op.stage === "validate" && op.round === st.round && !!op.entity),
 			precheckCmd: st.precheckCmd ?? null,
 			cmd: st.validateCmd ?? null,
 			verdict: st.lastVerdict ?? null,
@@ -273,6 +327,8 @@ export function collectRunDetail(runId: string): LoopRunDetail | null {
 		workspace: ws,
 		worktreeBranch: st.worktreeBranch ?? null,
 		worktreeCommitted: Boolean(st.worktreeCommitted),
+		worktreeFinalizeError: st.worktreeFinalizeError ?? null,
+		worktree: worktreeStateOf(st.worktreeDir),
 		plannerOutput: clipTail(st.plannerOutput, DETAIL_TEXT_MAX),
 		plan: clipTail(st.plan, DETAIL_TEXT_MAX),
 		summary: clipTail(st.summary, DETAIL_TEXT_MAX),
@@ -283,15 +339,36 @@ export function collectRunDetail(runId: string): LoopRunDetail | null {
 			at: h.at,
 			...(h.metrics ? { metrics: h.metrics } : {}),
 			...(h.commitSha ? { commitSha: h.commitSha } : {}),
+			...(h.snapshotRef ? { snapshotRef: h.snapshotRef } : {}),
 			...(h.precheckFailed ? { precheckFailed: true } : {}),
+			...(typeof h.metricGateOk === "boolean" ? { metricGateOk: h.metricGateOk } : {}),
+			...(h.metricGateReasons?.length ? { metricGateReasons: h.metricGateReasons } : {}),
+			...(h.workspaceChangedDuringValidation ? { workspaceChangedDuringValidation: true } : {}),
+			...(typeof h.recoverable === "boolean" ? { recoverable: h.recoverable } : {}),
 		})),
 		...(st.lastMetrics ? { lastMetrics: st.lastMetrics } : {}),
 		...(st.bestRound ? { bestRound: st.bestRound } : {}),
+		...(st.stopRequestedAt ? { stopRequestedAt: st.stopRequestedAt } : {}),
+		...(st.stopConfirmedAt ? { stopConfirmedAt: st.stopConfirmedAt } : {}),
+		...(st.metricUnit ? { metricUnit: st.metricUnit } : {}),
+		...(st.metricThreshold != null ? { metricThreshold: st.metricThreshold } : {}),
+		...(st.metricThresholdOp ? { metricThresholdOp: st.metricThresholdOp } : {}),
+		...(st.metricTolerance != null ? { metricTolerance: st.metricTolerance } : {}),
+		...(st.metricScenario ? { metricScenario: st.metricScenario } : {}),
+		...(st.hardConstraints?.length ? { hardConstraints: st.hardConstraints } : {}),
+		...(st.lastMetricGate ? { lastMetricGate: st.lastMetricGate } : {}),
 		rounds: [...byRound.values()].sort((a, b) => a.round - b.round),
 		diff: clipTail(st.lastDiff, DETAIL_DIFF_MAX),
 		journal: journal.slice(-DETAIL_JOURNAL_MAX),
 		createdAt: st.createdAt,
 		updatedAt: st.updatedAt ?? null,
+		packId: st.packId ?? null,
+		packVersion: st.packVersion ?? null,
+		attemptId: st.attemptId ?? null,
+		generation: st.generation ?? 0,
+		owner: st.owner ?? null,
+		remoteJobId: st.remoteJobId ?? null,
+		recovery: recoveryInfoOf(st.runId),
 	};
 }
 
@@ -379,15 +456,32 @@ export function parseToolTimeline(jsonl: string, limit = 40): ToolEvent[] {
 
 export function registerLoopRoutes(app: Express, opts: LoopRoutesOptions): void {
 	const sessionsRoot = join(opts.agentDir, "sessions");
-	const kubeconfig = join(opts.dataDir, "kubeconfig");
-	// 已保存过集群：服务进程（及其派生的 bash/终端）默认就用它，除非用户自己设了 KUBECONFIG。
-	if (existsSync(kubeconfig) && !process.env.KUBECONFIG) process.env.KUBECONFIG = kubeconfig;
+	// 启动即按优先级对齐服务进程的 KUBECONFIG（新派生的 bash/终端/validator 继承它）。
+	const cluster = new ClusterConfig({ dataDir: opts.dataDir, ...opts.cluster });
+	setActiveClusterConfig(cluster);
+	// 上次进程留下的 run 绑定：run 记录还在就保留（续跑 / 恢复时按快照核实），不在了就释放。
+	cluster.pruneBindings((key) => {
+		if (!key.startsWith("run:")) return false;
+		try {
+			return !!loadLoopState(key.slice(4));
+		} catch {
+			return true;
+		}
+	});
 
 	app.get("/api/mini-harness/runs", (req, res) => {
-		res.json({ runs: collectRuns(Boolean(req.query.history)) });
+		try {
+			res.json({ runs: collectRuns(Boolean(req.query.history)) });
+		} catch {
+			res.status(503).json({ error: "Run list unavailable: scan budget exceeded or storage requires inspection" });
+		}
 	});
 	app.get("/api/mini-harness/runs/latest", (req, res) => {
-		res.json(collectRuns(Boolean(req.query.history))[0] ?? null);
+		try {
+			res.json(collectRuns(Boolean(req.query.history))[0] ?? null);
+		} catch {
+			res.status(503).json({ error: "Run list unavailable: scan budget exceeded or storage requires inspection" });
+		}
 	});
 	app.get("/api/mini-harness/runs/:runId/detail", (req, res) => {
 		const id = String(req.params.runId ?? "");
@@ -400,7 +494,30 @@ export function registerLoopRoutes(app: Express, opts: LoopRoutesOptions): void 
 			res.status(404).json({ error: "run not found" });
 			return;
 		}
-		res.json(detail);
+		// 集群绑定只给白名单标识（来源 / 状态 / context / 代次），不含路径与凭据。
+		res.json({ ...detail, clusterBinding: cluster.taskBinding(`run:${id}`) });
+	});
+	app.post("/api/mini-harness/runs/:runId/recover", (req, res) => {
+		const id = String(req.params.runId ?? "");
+		if (!RUN_ID_RE.test(id)) {
+			res.status(400).json({ error: "bad runId" });
+			return;
+		}
+		const r = recoverRun(id);
+		if (!r.ok) {
+			res.status(404).json(r);
+			return;
+		}
+		res.status(r.blockedReason ? 409 : 200).json(r);
+	});
+	app.post("/api/mini-harness/runs/:runId/stop", (req, res) => {
+		const id = String(req.params.runId ?? "");
+		if (!RUN_ID_RE.test(id)) {
+			res.status(400).json({ error: "bad runId" });
+			return;
+		}
+		const result = stopRunExternal(id);
+		res.status(!result.ok ? 409 : result.stopConfirmedAt || result.status === "done" ? 200 : 202).json(result);
 	});
 	app.post("/api/mini-harness/runs/:runId/distill", (req, res) => {
 		const id = String(req.params.runId ?? "");
@@ -420,17 +537,108 @@ export function registerLoopRoutes(app: Express, opts: LoopRoutesOptions): void 
 		}
 	});
 	app.post("/api/mini-harness/runs/delete", (req, res) => {
-		const id = String(req.body?.runId ?? "");
-		if (!RUN_ID_RE.test(id)) {
-			res.status(400).json({ error: "bad runId" });
+		const runId = String(req.body?.runId ?? "");
+		const deleted = deleteLoopRun(runId);
+		if (!deleted.ok) {
+			const status =
+				deleted.code === "invalid" ? 400 : deleted.code === "missing" ? 404 : deleted.code === "active" ? 409 : 500;
+			res.status(status).json(deleted);
 			return;
 		}
-		rmSync(join(runsRoot(), id), { recursive: true, force: true });
-		res.json({ ok: true });
+		// 记录已删：不存在接续引用，释放它的集群绑定（删快照 / 回收导入版本）。
+		cluster.releaseTask(`run:${runId}`);
+		res.status(200).json(deleted);
 	});
 
 	app.get("/api/mini-harness/models", (_req, res) => {
 		res.json({ models: collectModels(opts.agentDir) });
+	});
+	app.post("/api/mini-harness/roles", async (req, res) => {
+		const b = req.body ?? {};
+		const mode = String(b.mode ?? "");
+		if (mode !== "code-review" && mode !== "code" && mode !== "llm") {
+			res.status(400).json({ error: "bad mode" });
+			return;
+		}
+		const spec = (v: unknown) => (typeof v === "string" ? v.trim().slice(0, 200) : "");
+		let registry: ModelRegistry;
+		try {
+			registry = new ModelRegistry(
+				await ModelRuntime.create({
+					authPath: join(opts.agentDir, "auth.json"),
+					modelsPath: join(opts.agentDir, "models.json"),
+				}),
+			);
+		} catch {
+			res.status(503).json({ error: "model catalog unavailable" });
+			return;
+		}
+		// 主对话模型可能来自扩展注册的 provider（不在这份目录里）：家族只看 id，按 "provider/id" 原样参与比较。
+		const mainSpec = spec(b.main);
+		const slash = mainSpec.indexOf("/");
+		const main =
+			findModel(registry, mainSpec) ??
+			(mainSpec
+				? slash > 0
+					? { provider: mainSpec.slice(0, slash), id: mainSpec.slice(slash + 1) }
+					: { id: mainSpec }
+				: null);
+		res.json(
+			resolveTaskRoles(registry, main, {
+				mode: mode as TaskMode,
+				planner: spec(b.planner),
+				executor: spec(b.executor),
+				reviewer: spec(b.reviewer),
+			}),
+		);
+	});
+
+	app.get("/api/mini-harness/packs", (_req, res) => {
+		res.json({ packs: listCapabilityPacks() });
+	});
+	app.get("/api/mini-harness/packs/:id/knowledge", (req, res) => {
+		const k = getPackKnowledge(String(req.params.id ?? ""));
+		if (!k) {
+			res.status(404).json({ error: "unknown pack" });
+			return;
+		}
+		res.json(k);
+	});
+	app.get("/api/mini-harness/packs/:id/references", (req, res) => {
+		res.json({ references: listPackReferences(String(req.params.id ?? "")) });
+	});
+	app.get("/api/mini-harness/packs/:id/references/:refId", (req, res) => {
+		const r = getPackReference(String(req.params.id ?? ""), String(req.params.refId ?? ""));
+		if (!r) {
+			res.status(404).json({ error: "unknown reference" });
+			return;
+		}
+		res.json(r);
+	});
+	app.post("/api/mini-harness/discover", (req, res) => {
+		const packId = typeof req.body?.packId === "string" ? req.body.packId : "";
+		const workspace = typeof req.body?.workspace === "string" ? req.body.workspace : "";
+		if (!packId || !workspace) {
+			res.status(400).json({ error: "packId and workspace required" });
+			return;
+		}
+		const normalized = normalizeTaskInputs(req.body ?? {});
+		if (!normalized.ok) {
+			res.status(400).json({
+				error: normalized.error,
+				summary: normalized.error,
+				context: { error: normalized.error, inputConflicts: normalized.conflicts, normalizedInputs: normalized.inputs },
+				conflicts: normalized.conflicts,
+				typeErrors: normalized.typeErrors,
+			});
+			return;
+		}
+		const ctx = resolveTaskContext(packId, workspace, normalized.inputs);
+		if (ctx.error) {
+			res.status(404).json({ error: ctx.error, context: ctx, summary: renderDiscoverySummary(ctx) });
+			return;
+		}
+		res.json({ context: ctx, summary: renderDiscoverySummary(ctx) });
 	});
 
 	// 会话文件定位缓存：sid → 路径（每 1.5s 一次的轮询不重复扫目录）。
@@ -492,63 +700,35 @@ export function registerLoopRoutes(app: Express, opts: LoopRoutesOptions): void 
 		res.json({ ok: true, removed: deleteGoalLog(id, opts.dataDir) });
 	});
 
-	let clusterCache: { at: number; result: ClusterStatus | null } = { at: 0, result: null };
-	const clusterCheck = async (force: boolean): Promise<ClusterStatus> => {
-		const now = Date.now();
-		if (!force && clusterCache.result && now - clusterCache.at < CLUSTER_CACHE_MS) return clusterCache.result;
-		let result: ClusterStatus;
-		if (!existsSync(kubeconfig)) {
-			result = { configured: false, connected: false, code: "not-configured", message: "" };
-		} else {
-			result = await new Promise<ClusterStatus>((resolve) => {
-				execFile(
-					"kubectl",
-					["--kubeconfig", kubeconfig, "cluster-info", "--request-timeout=5s"],
-					{ timeout: 9000 },
-					(err, stdout, stderr) => {
-						const out = `${stdout ?? ""}${stderr ?? ""}`.trim();
-						if (!err) {
-							resolve({ configured: true, connected: true, code: "ok", message: out.slice(0, 400) });
-							return;
-						}
-						const noKubectl = (err as NodeJS.ErrnoException).code === "ENOENT";
-						resolve({
-							configured: true,
-							connected: false,
-							code: noKubectl ? "no-kubectl" : "error",
-							message: noKubectl ? "" : (out || err.message).slice(0, 400),
-						});
-					},
-				);
-			});
-		}
-		clusterCache = { at: Date.now(), result };
-		return result;
-	};
-	app.get("/api/mini-harness/cluster", async (_req, res) => {
-		res.json(await clusterCheck(false));
+	app.get("/api/mini-harness/cluster", async (req, res) => {
+		res.json(await cluster.status(Boolean(req.query.refresh)));
 	});
 	app.post("/api/mini-harness/cluster", async (req, res) => {
 		const text = typeof req.body?.kubeconfig === "string" ? req.body.kubeconfig : "";
 		if (!text.trim()) {
-			res.status(400).json({ error: "empty kubeconfig" });
+			res.status(400).json({ error: "empty kubeconfig", code: "empty" });
 			return;
 		}
 		if (text.length > KUBECONFIG_MAX) {
-			res.status(400).json({ error: "kubeconfig too large" });
+			res.status(400).json({ error: "kubeconfig too large", code: "too-large" });
 			return;
 		}
-		mkdirSync(opts.dataDir, { recursive: true });
-		writeFileSync(kubeconfig, text, { mode: 0o600 });
-		// mode 只在新建时生效：覆盖已有文件时显式收紧权限
-		chmodSync(kubeconfig, 0o600);
-		process.env.KUBECONFIG = kubeconfig;
-		res.json(await clusterCheck(true));
+		const saved = cluster.save(text);
+		if (!saved.ok) {
+			// 写入失败：原配置保持不变，状态照常返回（不带异常文本）。
+			res.status(500).json({ error: "save failed", code: saved.code, status: await cluster.status(true) });
+			return;
+		}
+		res.json(await cluster.status(true));
 	});
-	app.post("/api/mini-harness/cluster/clear", (_req, res) => {
-		rmSync(kubeconfig, { force: true });
-		if (process.env.KUBECONFIG === kubeconfig) delete process.env.KUBECONFIG;
-		clusterCache = { at: 0, result: null };
-		res.json({ ok: true });
+	app.post("/api/mini-harness/cluster/clear", async (_req, res) => {
+		const cleared = cluster.clear();
+		// 清除后按优先级回退到仍有效的外部配置，并立即重探。
+		res.json({ ...cleared, ...(await cluster.status(true)) });
+	});
+	// express.json 的解析错误会带出请求体片段（kubeconfig 里可能有 token）：集群接口统一回固定错误，不记日志。
+	app.use("/api/mini-harness/cluster", (err: unknown, _req: Request, res: Response, next: NextFunction) => {
+		if (!err) return next();
+		res.status(400).json({ error: "bad request", code: "bad-request" });
 	});
 }

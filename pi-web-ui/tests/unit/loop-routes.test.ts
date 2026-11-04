@@ -6,11 +6,20 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import express from "express";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { collectModels, parseToolTimeline, registerLoopRoutes } from "../../server/loop/routes.js";
 import { configureGoalLog, deleteGoalLog, listGoalLog, recordGoalEvent } from "../../server/goal-history-log.js";
+
+// routes.ts loads extension.ts, whose run root is fixed at module initialization.
+const LOOP_RUNS_ROOT = mkdtempSync(join(tmpdir(), "loop-routes-runs-"));
+const previousLoopRunsRoot = process.env.MINI_HARNESS_RUNTIME_ROOT;
+process.env.MINI_HARNESS_RUNTIME_ROOT = LOOP_RUNS_ROOT;
+const { collectModels, parseToolTimeline, registerLoopRoutes } = await import("../../server/loop/routes.js");
+const { createLoopRun, stopRunExternal } = await import("../../server/loop/extension.js");
+if (previousLoopRunsRoot === undefined) delete process.env.MINI_HARNESS_RUNTIME_ROOT;
+else process.env.MINI_HARNESS_RUNTIME_ROOT = previousLoopRunsRoot;
 
 const entry = (kind: string, goal = "补齐 README") => ({
 	convId: "conv-1",
@@ -122,7 +131,8 @@ describe("/api/mini-harness/*", () => {
 		recordGoalEvent(entry("created"), dataDir);
 		const app = express();
 		app.use(express.json());
-		registerLoopRoutes(app, { dataDir, agentDir });
+		// 集群探测用空环境 + 临时 HOME：结果不受本机 KUBECONFIG / ~/.kube/config 影响。
+		registerLoopRoutes(app, { dataDir, agentDir, cluster: { env: {}, home: dataDir } });
 		server = app.listen(0, "127.0.0.1");
 		await new Promise<void>((r) => server.once("listening", () => r()));
 		base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -132,6 +142,7 @@ describe("/api/mini-harness/*", () => {
 		server?.close();
 		rmSync(dataDir, { recursive: true, force: true });
 		rmSync(agentDir, { recursive: true, force: true });
+		rmSync(LOOP_RUNS_ROOT, { recursive: true, force: true });
 	});
 
 	const post = (path: string, body: unknown) =>
@@ -163,16 +174,81 @@ describe("/api/mini-harness/*", () => {
 		expect(del).toEqual({ ok: true, removed: 1 });
 	});
 
-	it("runs/delete 拒绝非法 runId（防路径穿越）", async () => {
+	it("runs/delete 按删除结果映射 malformed/missing/active/cleanup-error/success 状态", async () => {
 		expect((await post("/api/mini-harness/runs/delete", { runId: "../../.ssh" })).status).toBe(400);
-		const j = await (await fetch(`${base}/api/mini-harness/runs?history=1`)).json();
-		expect(Array.isArray(j.runs)).toBe(true);
+		expect((await post("/api/mini-harness/runs/delete", { runId: "20261102000000-deadbe" })).status).toBe(404);
+
+		const active: any = createLoopRun({ sessionId: `route-active-${Date.now()}`, cwd: dataDir, goal: "active" });
+		expect(active.ok).toBe(true);
+		const activeResponse = await post("/api/mini-harness/runs/delete", { runId: active.runId });
+		expect(activeResponse.status).toBe(409);
+		expect(await activeResponse.json()).toMatchObject({ ok: false, code: "active" });
+
+		expect(stopRunExternal(active.runId).ok).toBe(true);
+		const success = await post("/api/mini-harness/runs/delete", { runId: active.runId });
+		expect(success.status).toBe(200);
+		expect(await success.json()).toMatchObject({ ok: true, runId: active.runId });
+		expect(existsSync(join(LOOP_RUNS_ROOT, active.runId))).toBe(false);
+
+		const malformedCleanup: any = createLoopRun({
+			sessionId: `route-cleanup-${Date.now()}`,
+			cwd: dataDir,
+			goal: "terminal malformed cleanup",
+		});
+		expect(malformedCleanup.ok).toBe(true);
+		writeFileSync(
+			join(LOOP_RUNS_ROOT, malformedCleanup.runId, "state.json"),
+			JSON.stringify({
+				...malformedCleanup.st,
+				status: "stopped",
+				stage: "stopped",
+				worktreeDir: "/tmp/not-this-run-worktree",
+				worktreeBranch: "mini-harness/not-this-run",
+			}),
+		);
+		const cleanupError = await post("/api/mini-harness/runs/delete", { runId: malformedCleanup.runId });
+		expect(cleanupError.status).toBe(500);
+		expect(await cleanupError.json()).toMatchObject({ ok: false, code: "cleanup-error" });
+		rmSync(join(LOOP_RUNS_ROOT, malformedCleanup.runId), { recursive: true, force: true });
+	});
+
+	it("run detail 只读给出任务工作树状态：干净 / 有未提交改动 / 目录已不在 / git 给不出结论", async () => {
+		const run: any = createLoopRun({ sessionId: `route-tree-${Date.now()}`, cwd: dataDir, goal: "tree state" });
+		expect(run.ok).toBe(true);
+		const tree = mkdtempSync(join(tmpdir(), "loop-routes-tree-"));
+		const git = (...args: string[]) => execFileSync("git", ["-C", tree, ...args], { stdio: "ignore" });
+		git("init", "-q");
+		git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init");
+		const writeState = (worktreeDir: string) =>
+			writeFileSync(
+				join(LOOP_RUNS_ROOT, run.runId, "state.json"),
+				JSON.stringify({ ...run.st, status: "stopped", stage: "stopped", worktreeDir }),
+			);
+		const treeOf = async () =>
+			(await (await fetch(`${base}/api/mini-harness/runs/${run.runId}/detail`)).json()).worktree;
+		writeState(tree);
+		expect(await treeOf()).toEqual({ path: tree, exists: true, dirty: false, uncommitted: 0 });
+		writeFileSync(join(tree, "draft.txt"), "keep me");
+		expect(await treeOf()).toEqual({ path: tree, exists: true, dirty: true, uncommitted: 1 });
+		expect(existsSync(join(tree, "draft.txt"))).toBe(true);
+		const plain = mkdtempSync(join(tmpdir(), "loop-routes-plain-"));
+		writeState(plain);
+		expect(await treeOf()).toMatchObject({ exists: true, dirty: null });
+		writeState(join(plain, "gone"));
+		expect(await treeOf()).toMatchObject({ exists: false, dirty: false });
+		rmSync(join(LOOP_RUNS_ROOT, run.runId), { recursive: true, force: true });
+		rmSync(tree, { recursive: true, force: true });
+		rmSync(plain, { recursive: true, force: true });
 	});
 
 	it("cluster：未配置时报 not-configured；空 kubeconfig 拒绝；clear 幂等", async () => {
 		const j = await (await fetch(`${base}/api/mini-harness/cluster`)).json();
 		expect(j).toMatchObject({ configured: false, connected: false, code: "not-configured" });
 		expect((await post("/api/mini-harness/cluster", { kubeconfig: "  " })).status).toBe(400);
-		expect(await (await post("/api/mini-harness/cluster/clear", {})).json()).toEqual({ ok: true });
+		expect(await (await post("/api/mini-harness/cluster/clear", {})).json()).toMatchObject({
+			ok: true,
+			code: "not-configured",
+			source: "none",
+		});
 	});
 });

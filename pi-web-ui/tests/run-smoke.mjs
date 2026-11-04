@@ -61,14 +61,17 @@ const ALL = [
 	"goal-test",
 	// 目标模式 2.0「委托执行」（Plan A）：角色对话接线（拉起/左栏可见/清目标收回，零 token）。
 	"goal-delegated-test",
+	// 仅模型评审的显式审查模型：审查请求用所选模型、主对话聊天模型不变、同家族直接请求被拒（替身 provider）。
+	"goal-reviewer-model-test",
+	// 新任务三模型：规划 / 执行 / 评审各收到所选家族的模型，主聊天模型不变；绕过 UI 的同家族请求、旧请求缺字段（替身 provider）。
+	"task-three-models-test",
+	// 运行中任务的集群绑定：从 loop_start_request 起任务，导入 / 清除 / 重启后 Bash 与 validator 仍连启动时的集群（替身 kubectl）。
+	"cluster-binding-loop-test",
 	// 计划模式（只规划不实施）：开关快照 + 写类/非常规 bash 硬闸门 + 关闭后恢复（零 token）。
 	"plan-mode-test",
 	// 审查者模式（自动委派）：开关快照 + prompt 自动转给常驻执行对话 + 关闭后恢复（零 token）。
 	"delegate-mode-test",
 	"left-panel-delete-test",
-	"list-files-missing-dir-test",
-	// #262 regression: directory symlinks classify as dir on all platforms + "~/" expansion in the panel path bar (Android/Termux).
-	"list-files-symlink-home-test",
 	// 后台任务「自动清理」的协议面（阈值落库/归一化、钉住、立即清理反馈）。
 	"bg-cleanup-test",
 	"preview-test",
@@ -80,7 +83,6 @@ const ALL = [
 	// 自定义审批规则协议面（规则增删改查 / 批量重排 / 内置规则重置 / 持久化播种）。
 	"approval-rules-test",
 	"question-bridge-test",
-	"recursive-watch-test",
 	"refresh-models-test",
 	"restart-handoff-test",
 	"restart-service-test",

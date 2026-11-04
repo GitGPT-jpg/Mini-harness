@@ -8,7 +8,6 @@ import {
 	FiEdit2,
 	FiEdit3,
 	FiEye,
-	FiHelpCircle,
 	FiMessageSquare,
 	FiPlus,
 	FiRefreshCw,
@@ -25,12 +24,11 @@ import {
 	FiX,
 } from "react-icons/fi";
 import { HintTip } from "./HintTip";
-import { sortAgentPresets, presetText } from "./DshPresetBar";
-import { DSH_PERMISSION_ORDER, permDescKey, permLabelKey } from "./DshPermissionBar";
+import { presetText } from "./DshPresetBar";
+import { DSH_PERMISSION_ORDER, permLabelKey } from "./DshPermissionBar";
 import { ToolPromptEditor } from "./ToolPromptEditor";
 import type {
 	CommandDef,
-	DshPatchFileInfo,
 	DshPermissionOption,
 	RemoteSkillSummary,
 	SchedulerTaskView,
@@ -72,7 +70,7 @@ import {
 	type UiSlotEntry,
 } from "../ui-slots";
 import { ICON_EDIT_ALIGNS, sideAlignLabel } from "../ui-layout-edit";
-import { appSend, useAppGlobals } from "../app-globals";
+import { appSend } from "../app-globals";
 import { QUICK_PHRASE_DEFAULTS } from "../quick-phrases";
 import {
 	AGENT_TOOL_CATALOG,
@@ -94,8 +92,6 @@ interface SettingsModalProps {
 	initialSection?: SettingsTab;
 	chat: {
 		settings: UiSettingsState | null;
-		/** DSH engine: <dataDir>/dsh-patches user patch files. */
-		dshPatches: { patchDir: string; files: DshPatchFileInfo[] } | null;
 		/** DSH engine: Agent 预设名录（null/空 = legacy，隐藏预设区）。 */
 		dshPresets: { presets: UiAgentPreset[]; defaultPreset: string } | null;
 		/** DSH engine: 权限预设选项表 + 新会话默认（null = 未就绪/legacy，隐藏权限区）。 */
@@ -223,7 +219,7 @@ function FieldRow({
 	);
 }
 
-/** 通用提示词覆盖区块（SCM commit msg、计划模式、视觉桥等共用）：包含模式选择、草稿防抖与默认值契约。 */
+/** 通用提示词覆盖区块（计划模式、视觉桥等共用）：包含模式选择、草稿防抖与默认值契约。 */
 function PromptOverrideEditor({
 	mode,
 	onModeChange,
@@ -298,7 +294,6 @@ export type SettingsTab =
 	| "scheduler"
 	| "tools"
 	| "approval-rules"
-	| "question"
 	| "display"
 	| "sound"
 	| "quick"
@@ -306,7 +301,6 @@ export type SettingsTab =
 	| "skills"
 	| "layout"
 	| "vision"
-	| "dsh-presets"
 	| "subagent-templates";
 
 /** set_settings 允许的字段（原 setPartial 内联类型提出为具名类型，供乐观合并层复用）。 */
@@ -369,8 +363,6 @@ interface SettingsPatch {
 	visionBridgeModel?: string | null;
 	visionBridgePromptMode?: "append" | "replace";
 	visionBridgePrompt?: string;
-	scmCommitMsgPromptMode?: "append" | "replace";
-	scmCommitMsgPrompt?: string;
 	planModePromptMode?: "append" | "replace";
 	planModePrompt?: string;
 	planModeDefaultPrompt?: string;
@@ -441,11 +433,6 @@ export function SettingsModal({
 	// 审批放行策略（仅内存、随对话走；审批弹窗的「允许同类 / 全部允许」在这里撤销）。
 	const approvalPolicy = settings?.approvalPolicy;
 	// 全局运行态（引擎 / 受管）：不再从 App 一路传进来，见 web/src/app-globals.ts。
-	const { engine } = useAppGlobals();
-	// 引擎特性分支判断：动态适应引擎，隐藏不可用的分区
-	const isDsh = engine === "dsh";
-	const isClaude = engine === "claude";
-	const isPi = !isDsh && !isClaude;
 	// 默认分区：模型与服务商
 	const defaultTab: SettingsTab = "models";
 	const [tab, setTab] = useState<SettingsTab>(initialSection ?? defaultTab);
@@ -462,13 +449,6 @@ export function SettingsModal({
 
 	// 技能市场子页签、远程仓库与筛选
 	const [skillSubTab] = useState<"installed">("installed");
-
-	// DSH 引擎：打开设置时自动拉取用户 patch 列表（pi 引擎忽略该消息）。
-	useEffect(() => {
-		if (isDsh) {
-			appSend({ type: "dsh_patches_list" });
-		}
-	}, [isDsh]);
 
 	// 打开设置面板或当前工作区/会话切换时，主动拉取一次最新设置快照（确保 {{context}}、生效提示词与 token 估算为当前项目最新值）。
 	useEffect(() => {
@@ -506,9 +486,10 @@ export function SettingsModal({
 			return next;
 		});
 	};
-	/** 工具行右端的「编辑文案」按钮（三个工具列表共用）。DSH 引擎无 pi 工具注册面，不显示。 */
-	const toolEditAction = (name: string) =>
-		isDsh ? null : <ToolPromptButton name={name} edited={editedToolNames.has(name)} onEdit={setEditingToolPrompt} />;
+	/** 工具行右端的「编辑文案」按钮（三个工具列表共用）。 */
+	const toolEditAction = (name: string) => (
+		<ToolPromptButton name={name} edited={editedToolNames.has(name)} onEdit={setEditingToolPrompt} />
+	);
 	/** 保存/清除某工具的文案覆盖（空对象 = 清除，服务端逐工具合并）。 */
 	const applyToolPromptOverride = (name: string, override: UiToolPromptOverride | null) =>
 		setPartial({ toolPromptOverrides: { [name]: override ?? {} } });
@@ -654,7 +635,7 @@ export function SettingsModal({
 	// pi 引擎默认预设的二次过滤（server/tool-manager.ts filterToolsByPreset）：预设是
 	// 禁用名单之外的第二层门控。默认预设为极简/代码/只读/纯对话时，大批开关看似开着
 	// 实则对新对话不生效——此处算出实效，被过滤的行置灰并在顶部挂横幅（一键切回全功能）。
-	const piPresetId = isDsh ? null : (chat.dshPresets?.defaultPreset ?? null);
+	const piPresetId = chat.dshPresets?.defaultPreset ?? null;
 	const piPresetFiltering = !!piPresetId && piPresetId !== "standard";
 	const piPresetAllowed: Set<string> = piPresetFiltering
 		? new Set(
@@ -677,20 +658,6 @@ export function SettingsModal({
 	const blockedPresetCount = piPresetFiltering
 		? AGENT_TOOL_CATALOG.filter((e) => !piPresetAllowed.has(e.name)).length
 		: 0;
-
-	// 预设区（合并为一个卡片后）用到的两处「当前值」说明文案：默认 Agent 预设 + 默认权限。
-	// 原来的只读列表被删掉，说明文字改挂在下拉框下方一行（信息不丢、纵向占用大幅缩水）。
-	const defaultAgentPreset = chat.dshPresets
-		? sortAgentPresets(chat.dshPresets.presets).find((p) => p.id === chat.dshPresets!.defaultPreset)
-		: undefined;
-	const defaultAgentPresetDesc = defaultAgentPreset
-		? (defaultAgentPreset.broken ?? presetText(defaultAgentPreset, locale, t).description)
-		: undefined;
-	const hasUserAgentPreset = !!chat.dshPresets?.presets.some((p) => p.trust === "user");
-	// 合并后的预设配置块是否有内容（两个下拉都在时才渲染，免得留个空框）。
-	const showPresetConfig =
-		!!(chat.dshPresets && chat.dshPresets.presets.length > 0) ||
-		!!(chat.dshPermission && chat.dshPermission.options.length > 0);
 
 	const tabs: {
 		id: SettingsTab;
@@ -721,35 +688,25 @@ export function SettingsModal({
 			count: phCount,
 		},
 		// 定时任务（仅 Pi 引擎具备后台执行通道）
-		...(isPi
-			? [
-					{
-						id: "scheduler" as const,
-						icon: <FiClock />,
-						label: t("settingsScheduler"),
-						count: chat.schedulerTasks.length || undefined,
-					},
-				]
-			: []),
-		// 工具 & 审批规则 / DSH 问卷提问
-		...(isDsh
-			? [{ id: "question" as const, icon: <FiHelpCircle />, label: t("settingsQuestionnaire") }]
-			: isPi
-				? [
-						{
-							id: "tools" as const,
-							icon: <FiTool />,
-							label: t("settingsTools"),
-							count: disabledToolsCount + (settings.disabledMarkers?.length ?? 0) || undefined,
-						},
-						{
-							id: "approval-rules" as const,
-							icon: <FiShield />,
-							label: t("settingsApprovalRules"),
-							count: (settings.approvalRules ?? []).length || undefined,
-						},
-					]
-				: []),
+		{
+			id: "scheduler" as const,
+			icon: <FiClock />,
+			label: t("settingsScheduler"),
+			count: chat.schedulerTasks.length || undefined,
+		},
+		// 工具 & 审批规则
+		{
+			id: "tools" as const,
+			icon: <FiTool />,
+			label: t("settingsTools"),
+			count: disabledToolsCount + (settings.disabledMarkers?.length ?? 0) || undefined,
+		},
+		{
+			id: "approval-rules" as const,
+			icon: <FiShield />,
+			label: t("settingsApprovalRules"),
+			count: (settings.approvalRules ?? []).length || undefined,
+		},
 		// 对话展示（全引擎通用）
 		{ id: "display", icon: <FiMessageSquare />, label: t("settingsMessageDisplay") },
 		// 声音与语音（全引擎通用）
@@ -757,35 +714,18 @@ export function SettingsModal({
 		// 快捷短语（全引擎通用）
 		{ id: "quick", icon: <FiSend />, label: t("quickPhrases"), count: settings.quickPhrases.length },
 		// 技能（仅 Pi 引擎支持 .pi/skills）
-		...(isPi
-			? [{ id: "skills" as const, icon: <FiCpu />, label: t("settingsSkills"), count: settings.skills.length }]
-			: []),
+		{ id: "skills" as const, icon: <FiCpu />, label: t("settingsSkills"), count: settings.skills.length },
 		// 界面布局（全引擎通用）
 		{ id: "layout", icon: <FiSliders />, label: t("uiLayoutTitle") },
 		// 视觉桥（仅 Pi 引擎支持）
-		...(isPi ? [{ id: "vision" as const, icon: <FiEye />, label: t("settingsVisionBridge") }] : []),
-		// DSH 预设与权限三档（仅 DSH 引擎支持：极简模式/代码运行时/PTC 预设 + 权限三档）
-		...(isDsh
-			? [
-					{
-						id: "dsh-presets" as const,
-						icon: <FiSliders />,
-						label: `${t("dshPreset")} & ${t("dshPerm")}`,
-						hint: t("dshDefaultPresetDesc"),
-					},
-				]
-			: []),
+		{ id: "vision" as const, icon: <FiEye />, label: t("settingsVisionBridge") },
 		// 子代理模板（仅 Pi 引擎支持）
-		...(isPi
-			? [
-					{
-						id: "subagent-templates" as const,
-						icon: <FiUsers />,
-						label: t("settingsSubagentTemplates"),
-						count: settings.subagentTemplates.length,
-					},
-				]
-			: []),
+		{
+			id: "subagent-templates" as const,
+			icon: <FiUsers />,
+			label: t("settingsSubagentTemplates"),
+			count: settings.subagentTemplates.length,
+		},
 	];
 
 	// 侧栏搜索与四维分组（方案 1: Linear 风格）
@@ -793,12 +733,10 @@ export function SettingsModal({
 
 	const TAB_GROUPS: Record<string, "core" | "tools" | "ui" | "advanced"> = {
 		models: "core",
-		"dsh-presets": "core",
 		"subagent-templates": "core",
 
 		tools: "tools",
 		"approval-rules": "tools",
-		question: "tools",
 		skills: "tools",
 
 		layout: "ui",
@@ -1135,7 +1073,7 @@ export function SettingsModal({
 									<HintTip text={t("settingsModelsDesc")} />
 								</div>
 								<p className="set-desc" style={{ marginTop: 4, marginBottom: 12 }}>
-									{isClaude ? t("engineClaudeModelDesc") : isDsh ? t("engineDshModelDesc") : t("enginePiModelDesc")}
+									{t("enginePiModelDesc")}
 								</p>
 
 								{onOpenManageModels && (
@@ -1167,7 +1105,7 @@ export function SettingsModal({
 						)}
 
 						{/* ---- prompt history -------------------------------------------- */}
-						{tab === "scheduler" && !isDsh && (
+						{tab === "scheduler" && (
 							<SchedulerPanel
 								tasks={chat.schedulerTasks}
 								cwd={chat.state?.cwd ?? ""}
@@ -1306,32 +1244,28 @@ export function SettingsModal({
 									enabled={settings.readDirEnabled !== false}
 									onToggle={() => setPartial({ readDirEnabled: settings.readDirEnabled === false })}
 								/>
-								{/* 工具延迟加载（DSH 无 pi 工具注册面，不显示）：开 = 只有核心工具常驻，
+								{/* 工具延迟加载：开 = 只有核心工具常驻，
 								    其余工具在提示词里只有名字 + 一行摘要，模型用 load_tools 按需拉取。 */}
-								{!isDsh && (
-									<ToggleRow
-										title={t("toolLazyLoading")}
-										tip={t("toolLazyLoadingDesc")}
-										enabled={settings.toolLazyLoading === true}
-										onToggle={() => setPartial({ toolLazyLoading: settings.toolLazyLoading !== true })}
-									/>
-								)}
+								<ToggleRow
+									title={t("toolLazyLoading")}
+									tip={t("toolLazyLoadingDesc")}
+									enabled={settings.toolLazyLoading === true}
+									onToggle={() => setPartial({ toolLazyLoading: settings.toolLazyLoading !== true })}
+								/>
 								<ToggleRow
 									title={t("toolApprovalEnabled")}
 									tip={t("toolApprovalEnabledDesc")}
 									enabled={settings.toolApprovalEnabled !== false}
 									onToggle={() => setPartial({ toolApprovalEnabled: settings.toolApprovalEnabled === false })}
 									action={
-										!isDsh ? (
-											<button
-												type="button"
-												className="tpl-chip"
-												onClick={() => setTab("approval-rules")}
-												title={t("settingsApprovalRulesDesc")}
-											>
-												<FiShield /> {t("manageApprovalRules")}
-											</button>
-										) : undefined
+										<button
+											type="button"
+											className="tpl-chip"
+											onClick={() => setTab("approval-rules")}
+											title={t("settingsApprovalRulesDesc")}
+										>
+											<FiShield /> {t("manageApprovalRules")}
+										</button>
 									}
 								/>
 								{chat.dshPermission && chat.dshPermission.options.length > 0 && (
@@ -1639,22 +1573,6 @@ export function SettingsModal({
 										</div>
 									);
 								})}
-							</div>
-						)}
-
-						{/* ---- questionnaire (DSH only; pi moved into Tools) -------------- */}
-						{tab === "question" && (
-							<div className="set-section">
-								<div className="set-section-title">
-									<FiHelpCircle className="set-section-icon" />
-									{t("settingsQuestionnaire")}
-								</div>
-								<ToggleRow
-									title={t("questionnaireEnabled")}
-									tip={`${t("questionnaireEnabledDesc")}\n${t("questionnaireOffHint")}`}
-									enabled={settings.questionnaireEnabled}
-									onToggle={() => setPartial({ questionnaireEnabled: !settings.questionnaireEnabled })}
-								/>
 							</div>
 						)}
 
@@ -2214,7 +2132,7 @@ export function SettingsModal({
 								{/* 1. 已安装技能列表 */}
 								{skillSubTab === "installed" && (
 									<>
-										{!isDsh && piPresetFiltering && !presetShowsSkillCatalog(piPresetId ?? undefined) && (
+										{piPresetFiltering && !presetShowsSkillCatalog(piPresetId ?? undefined) && (
 											<p className="set-catalog-hint warn">{t("skillsHiddenByPreset", { name: piPresetName })}</p>
 										)}
 										<div className="set-catalog-opts">
@@ -2261,7 +2179,7 @@ export function SettingsModal({
 												<div className="mcp-empty-icon">
 													<FiCpu />
 												</div>
-												<div className="mcp-empty-title">{isDsh ? t("dshSkillsNote") : t("noSkills")}</div>
+												<div className="mcp-empty-title">{t("noSkills")}</div>
 												<div className="mcp-empty-desc">{t("skillEmptyDesc")}</div>
 											</div>
 										) : (
@@ -2365,11 +2283,10 @@ export function SettingsModal({
 								{uiLayoutSections.map(({ slot, labelKey }) => {
 									const entries = (uiSlots[slot] ?? []).filter(
 										(e) =>
-											(isDsh ||
-												(e.id !== "host:composer-dsh-perm" &&
-													e.id !== "host:composer-dsh-preset" &&
-													// 计划模式靠 pi 引擎的工具硬闸门，DSH 无 customTools 注册面 → 不列。
-													e.id !== "host:goal-plan")) &&
+											(e.id !== "host:composer-dsh-perm" &&
+												e.id !== "host:composer-dsh-preset" &&
+												// 计划模式靠 pi 引擎的工具硬闸门 → 不列。
+												e.id !== "host:goal-plan") &&
 											!HIDDEN_FROM_LAYOUT_ITEM_IDS.has(e.id),
 									);
 									const q = uiLayoutFilter.trim().toLowerCase();
@@ -2580,73 +2497,6 @@ export function SettingsModal({
 										focusRef={vbPromptFocus}
 									/>
 								)}
-							</div>
-						)}
-
-						{/* ---- DSH 预设与权限三档（极简模式/代码运行时/PTC 预设 + 权限三档） ---- */}
-						{tab === "dsh-presets" && isDsh && (
-							<div className="set-section">
-								<div className="set-section-title">
-									<FiSliders className="set-section-icon" />
-									{t("dshPreset")} & {t("dshPerm")}
-									<HintTip text={t("dshDefaultPresetDesc")} />
-								</div>
-								<p className="set-desc" style={{ marginTop: 4, marginBottom: 12 }}>
-									{t("settingsEngineDshDesc")}
-								</p>
-								{showPresetConfig && (
-									<div className="set-preset-config" style={{ marginTop: 8 }}>
-										{chat.dshPresets && chat.dshPresets.presets.length > 0 && (
-											<>
-												<div className="set-mode-row">
-													<label className="set-field-label">
-														{t("dshDefaultPreset")}
-														<HintTip text={t("dshDefaultPresetDesc")} />
-													</label>
-													<select
-														className="set-select"
-														value={chat.dshPresets.defaultPreset}
-														onChange={(e) => appSend({ type: "dsh_preset_default", preset: e.target.value })}
-													>
-														{sortAgentPresets(chat.dshPresets.presets).map((p) => (
-															<option key={p.id} value={p.id} disabled={!!p.broken}>
-																{presetText(p, locale, t).name}
-																{p.trust === "user" ? ` · ${t("dshPresetUser")}` : ""}
-																{p.broken ? ` · ${t("dshPresetBroken")}` : ""}
-															</option>
-														))}
-													</select>
-												</div>
-												{defaultAgentPresetDesc && <p className="set-preset-config-desc">{defaultAgentPresetDesc}</p>}
-											</>
-										)}
-										{chat.dshPermission && chat.dshPermission.options.length > 0 && (
-											<>
-												<div className="set-mode-row" style={{ marginTop: 14 }}>
-													<label className="set-field-label">
-														{t("dshPermDefault")}
-														<HintTip text={t("dshPermDefaultDesc")} />
-													</label>
-													<select
-														className="set-select"
-														value={chat.dshPermission.defaultPreset}
-														onChange={(e) => appSend({ type: "dsh_permission_default", preset: e.target.value })}
-													>
-														{DSH_PERMISSION_ORDER.filter((v) =>
-															chat.dshPermission!.options.some((o) => o.value === v),
-														).map((v) => (
-															<option key={v} value={v}>
-																{t(permLabelKey(v))}
-															</option>
-														))}
-													</select>
-												</div>
-												<p className="set-preset-config-desc">{t(permDescKey(chat.dshPermission.defaultPreset))}</p>
-											</>
-										)}
-									</div>
-								)}
-								{hasUserAgentPreset && <p className="set-hint">{t("dshPresetUserNote")}</p>}
 							</div>
 						)}
 
@@ -2977,8 +2827,8 @@ export function SettingsModal({
 							</div>
 						)}
 
-						{/* ---- approval rules（全局共享；DSH 引擎隐藏该分区） ---------- */}
-						{tab === "approval-rules" && !isDsh && (
+						{/* ---- approval rules（全局共享） ---------- */}
+						{tab === "approval-rules" && (
 							<div className="set-section">
 								<div className="set-section-title">
 									<FiShield className="set-section-icon" />

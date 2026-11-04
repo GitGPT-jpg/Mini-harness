@@ -2,7 +2,7 @@ import { Fragment, memo, useEffect, useMemo, useRef, useState, type ReactNode } 
 import { FiList, FiSquare, FiPaperclip, FiArrowUp, FiBookOpen } from "react-icons/fi";
 import type { FileSearchResult, ModelInfo, ProviderKeyInfo, SlashCommandInfo, UiMessage, UiState } from "../types";
 import { isZhLocale, useT, useI18n } from "../i18n";
-import { appSend, useAppField, useIsDsh, useEngineCapabilities } from "../app-globals";
+import { appSend, useAppField, useEngineCapabilities } from "../app-globals";
 import {
 	applyTemplateFill,
 	mergeRecalledDraft,
@@ -55,6 +55,25 @@ const COMPOSER_AUTO_H = 220;
 const COMPOSER_MAX_H = 720;
 const COMPOSER_H_KEY = "pi-web-ui:composer-height";
 
+/** 从正文里删掉一个 `@提及`（附件 chip 移除时联动；单个 ✕ 与「全部移除」共用）。 */
+const MENTION_SPECIALS = new Set([".", "*", "+", "?", "^", "$", "{", "}", "(", ")", "|", "[", "]", "\\"]);
+function stripMention(text: string, mention: string): string {
+	const escaped = mention
+		.split("")
+		.map((ch) => (MENTION_SPECIALS.has(ch) ? "\\" + ch : ch))
+		.join("");
+	const regex = new RegExp("(^|\\s)" + escaped + "(?:\\s|$)", "g");
+	const next = text.replace(regex, (_m, p) => (p === " " ? " " : ""));
+	return next.replace(/ {2,}/g, " ").trim();
+}
+
+/** 附件在正文里对应的 `@提及`（与 App.removeAttachment 同口径：文件类是相对路径，对话引用是标题；
+ *  粘贴图片/上传文件/文字引用没有提及，返回 null）。 */
+function attachmentMention(a: { path: string; name: string; mode?: string }): string | null {
+	const name = a.mode === "conversation" ? a.name : a.path;
+	return name ? `@${name}` : null;
+}
+
 /** Props are deliberately NARROW (no whole-ChatState object): every field is
  *  stable while tokens stream in (the messages ARRAY reference is kept stable
  *  by the server when the persisted set is unchanged), so the shallow-compared
@@ -100,6 +119,8 @@ interface ChatInputProps {
 		key?: string;
 	}[];
 	onRemoveAttachment: (path: string) => void;
+	/** 一次移除全部待发附件（附件 ≥2 条时显示「全部移除」；不传则不显示）。 */
+	onClearAttachments?: () => void;
 	/** Images pasted into the input / dropped onto it / picked via upload. */
 	onAddImageFiles: (files: File[]) => void;
 	/** Any dropped/uploaded file (images go through onAddImageFiles instead). */
@@ -166,6 +187,7 @@ export const ChatInput = memo(function ChatInput({
 	modelsLoading,
 	attachments,
 	onRemoveAttachment,
+	onClearAttachments,
 	onAddImageFiles,
 	onAddLocalFiles,
 	onAddPathAttachment,
@@ -197,7 +219,6 @@ export const ChatInput = memo(function ChatInput({
 	const ready = useAppField("ready");
 	/** DSH 无 mid-run steering（isStreaming 时 prompt 全部走 followUp，
 	 *  见 server/dsh/dsh-agent-service.ts）—— 只渲染「排队」半段，不摆一个说了不算的「插队」。 */
-	const isDsh = useIsDsh();
 	const capabilities = useEngineCapabilities();
 	const effectivePlanMode = Boolean(planMode && capabilities.planMode);
 	const { locale } = useI18n();
@@ -362,29 +383,7 @@ export const ChatInput = memo(function ChatInput({
 	useEffect(() => {
 		registerRemoveMentionSink((mention) => {
 			setText((prev) => {
-				const special = new Set([
-					".",
-					"*",
-					"+",
-					"?",
-					"^",
-					"$",
-					"{",
-					"}",
-					"(",
-					")",
-					"|",
-					"[",
-					"]",
-					String.fromCharCode(92),
-				]);
-				const escaped = mention
-					.split("")
-					.map((ch) => (special.has(ch) ? String.fromCharCode(92) + ch : ch))
-					.join("");
-				const regex = new RegExp("(^|\\s)" + escaped + "(?:\\s|$)", "g");
-				let next = prev.replace(regex, (m, p) => (p === " " ? " " : ""));
-				next = next.replace(/ {2,}/g, " ").trim();
+				const next = stripMention(prev, mention);
 				menuTextRef.current = next;
 				return next;
 			});
@@ -481,6 +480,24 @@ export const ChatInput = memo(function ChatInput({
 				persistComposerDraft(sid, localKey, textMirrorRef.current, ts);
 			}, DRAFT_SAVE_DEBOUNCE_MS);
 		}
+	};
+
+	/** 「全部移除」：清空待发附件，并一次性从正文里删掉它们的 `@提及`
+	 *  （逐个走 removeMentionFromComposer 会连发 N 次 setText，这里合成一次）。 */
+	const clearAllAttachments = () => {
+		if (!onClearAttachments) return;
+		const current = textRef.current;
+		const next = attachments.reduce((acc, a) => {
+			const mention = attachmentMention(a);
+			return mention ? stripMention(acc, mention) : acc;
+		}, current);
+		onClearAttachments();
+		if (next !== current) {
+			menuTextRef.current = next;
+			setText(next);
+			noteComposerEdit(next);
+		}
+		if (!IS_TOUCH) taRef.current?.focus();
 	};
 
 	const handleTextChange = (value: string, cursor: number | null) => {
@@ -1371,7 +1388,7 @@ export const ChatInput = memo(function ChatInput({
 	// 本回合立刻响应）；两半同宽、中间一条细分隔线。DSH 引擎没有 mid-run
 	// 是否支持 mid-run steering（插话打断）：由引擎底座 capabilities 声明驱动。
 	// 不支持时只留下左半边单一排队按钮（.single 收成 38px）。
-	const canSteer = Boolean(capabilities.steer !== false && !isDsh);
+	const canSteer = capabilities.steer !== false;
 	const renderActions = () => (
 		<div className="inputbox-actions">
 			{/* 连接集群：发送键左侧的小图标，角标点 = 连通状态（点击填 kubeconfig）。 */}
@@ -1580,6 +1597,11 @@ export const ChatInput = memo(function ChatInput({
 						),
 					)}
 					<span className="attach-hint">{t("attachHint")}</span>
+					{onClearAttachments && attachments.length >= 2 && (
+						<button type="button" className="attach-clear" onClick={clearAllAttachments}>
+							{t("removeAllAttachments")}
+						</button>
+					)}
 				</div>
 			)}
 			{menu && menu.items.length > 0 && (
@@ -1755,9 +1777,7 @@ export const ChatInput = memo(function ChatInput({
 					placeholder={
 						connected
 							? streaming
-								? isDsh
-									? t("placeholderStreamingQueued")
-									: t("placeholderStreaming")
+								? t("placeholderStreaming")
 								: effectivePlanMode
 									? t("placeholderPlanMode")
 									: isModEnter

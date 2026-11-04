@@ -60,19 +60,17 @@ cat > "$RES/install.command" <<'CMD'
 set -e
 RES="$(cd "$(dirname "$0")" && pwd)"
 DEST="$HOME/mini-harness"
-if [ ! -f "$DEST/setup.sh" ]; then
-  mkdir -p "$DEST"
-  tar -xzf "$RES/mini-harness-src.tar.gz" -C "$DEST" --strip-components=1
-fi
+# 首次安装与升级都走这里：总是重新解包并跑幂等的 setup.sh（覆盖受管副本，明确执行更新）
+mkdir -p "$DEST"
+tar -xzf "$RES/mini-harness-src.tar.gz" -C "$DEST" --strip-components=1
 cd "$DEST"
-./setup.sh
+PI_WEB_NO_OPEN=1 ./setup.sh
 [ -f "$HOME/.mini-harness/proxy.env" ] && . "$HOME/.mini-harness/proxy.env"
-if ! lsof -nP -iTCP:8787 -sTCP:LISTEN -t >/dev/null 2>&1; then
-  nohup "$DEST/pi-web-cockpit/start-hardened.sh" >/tmp/pi-web-harness.log 2>&1 &
+if ! "$DEST/pi-web-cockpit/launch-harness.sh"; then
+  echo "训推引擎组 Harness 未在 8787 端口就绪（端口可能被其它程序占用）。请查看 /tmp/pi-web-harness.log。"
+  read -p "按回车关闭本窗口"
+  exit 1
 fi
-for i in $(seq 1 30); do lsof -nP -iTCP:8787 -sTCP:LISTEN -t >/dev/null 2>&1 && break; sleep 0.5; done
-TOKEN="$(cat "$HOME/.pi-web/pi-web-token" 2>/dev/null)"
-open "http://localhost:8787/?token=${TOKEN}"
 echo
 read -p "已启动，按回车关闭本窗口"
 CMD
@@ -82,18 +80,19 @@ cat > "$MACOS/harness" <<'LAUNCH'
 #!/bin/bash
 RES="$(cd "$(dirname "$0")/../Resources" && pwd)"
 DEST="$HOME/mini-harness"
-# 构建产物在 = 已装好（start-hardened.sh 本身随源码入库，解压即在，不能拿它判断）
-if [ ! -f "$DEST/pi-web-ui/dist/server/index.js" ]; then
+# 构建产物在 = 已装好（start-hardened.sh 本身随源码入库，解压即在，不能拿它判断）。
+# 版本不一致 = 需要升级：走 install.command 重新解包 + setup.sh（幂等）。
+BUNDLED_VER="$(tar -xOzf "$RES/mini-harness-src.tar.gz" ./VERSION 2>/dev/null | tr -d '[:space:]')"
+INSTALLED_VER="$(cat "$DEST/VERSION" 2>/dev/null | tr -d '[:space:]')"
+if [ ! -f "$DEST/pi-web-ui/dist/server/index.js" ] || { [ -n "$BUNDLED_VER" ] && [ "$BUNDLED_VER" != "$INSTALLED_VER" ]; }; then
   open -a Terminal "$RES/install.command"
   exit 0
 fi
 [ -f "$HOME/.mini-harness/proxy.env" ] && . "$HOME/.mini-harness/proxy.env"
-if ! lsof -nP -iTCP:8787 -sTCP:LISTEN -t >/dev/null 2>&1; then
-  nohup "$DEST/pi-web-cockpit/start-hardened.sh" >/tmp/pi-web-harness.log 2>&1 &
-fi
-for i in $(seq 1 30); do lsof -nP -iTCP:8787 -sTCP:LISTEN -t >/dev/null 2>&1 && break; sleep 0.5; done
-TOKEN="$(cat "$HOME/.pi-web/pi-web-token" 2>/dev/null)"
-open "http://localhost:8787/?token=${TOKEN}"
+"$DEST/pi-web-cockpit/launch-harness.sh" || {
+  osascript -e 'display dialog "训推引擎组 Harness 未在 8787 端口就绪（端口可能被其它程序占用）。请查看 /tmp/pi-web-harness.log。" with title "训推引擎组 Harness" buttons {"好"} default button "好"' >/dev/null 2>&1
+  exit 1
+}
 LAUNCH
 chmod +x "$MACOS/harness"
 

@@ -1,6 +1,6 @@
 # 终端架构
 
-> 覆盖 PTY 管理、按键编码、输出合并、SCM git 查询、活力检测、终端接管 bash 等。
+> 覆盖 PTY 管理、按键编码、输出合并、活力检测和终端接管 bash。原 Git 面板已删除。
 
 ## 终端管理
 
@@ -21,33 +21,12 @@
 
 `server/patch-node-pty.ts`（必须排在 node-pty 之前 import）：dev 脚本用 `node --watch`，watch 模式会向 node-pty 的 ConPTY worker / console-list agent 的 IPC 通道推 `watch:require`/`watch:import` 消息——node-pty 1.1.0 不识别，导致①每条都 `console.warn('Unexpected ConoutWorkerMessage')` 刷屏；②kill 路径把 watch 消息当 agent 回复，`message.consoleProcessList` 为 undefined 直接 `.forEach` 崩溃。补丁模块在启动时幂等地改写安装副本（仿 spawn-helper chmod 先例）；`terminals.ts` 里另有一层 console.warn 过滤兜底。生产（无 `--watch`）不受影响。
 
-## SCM 源代码管理
+## Git 操作边界
 
-`SCMPanel`（视图 `git`）的只读 git 查询走服务端 `server/scm.ts`，用 `execFile("git", …)` 直跑（不经过 shell——无提示符/回显/ANSI/zsh 差异），解析成结构化 JSON。
-
-### 协议
-
-客户端发 `scm_status`（status+branches(含远程,for-each-ref)+numstat）/ `scm_history`（提交图，懒加载——切到「提交树」tab 才查）/ `scm_filediff`（单文件 staged+worktree diff）/ `scm_commit`（hash 白名单校验后 git show），服务端必回一条 `scm_data`（echo reqId + kind，ok/error/notRepo），前端按 reqId 匹配 pending 槽位——每个请求必有且仅有一个响应，UI 不可能卡 loading；sendScm 在 socket 断开时不占槽位不置 busy（防转圈卡死）。路径校验：filediff 的 path 必须 resolve 后仍在工作区内；非 git 仓库返回 ok:true + notRepo:true（面板显示提示而非报错）。15s 超时/maxBuffer 16MB。
-
-### 左栏宽度可调（issue #139）
-
-改动文件 / 提交历史那一栏默认 300px，可拖它右边的分隔条（`.scm-divider`，双击复位到默认）：宽度写在 `.scm-body` 的内联 CSS 变量 `--scm-sidebar-w` 上，拖动中按容器宽度给 diff 区留最小宽度、松手才写 `localStorage`（键 `pi-web-ui:scm-sidebar-width`）。夹取与存档解析是纯函数（`web/src/scm-sidebar.ts` 的 `clampScmSidebarWidth` / `parseScmSidebarWidth`，单测 `tests/unit/scm-sidebar.test.ts`；浏览器回归 `tests/scm-test.mjs`：拖 +120px → 刷新保持 → 双击回 300）。CSS 那侧还有一条 `max-width: calc(100% - 220px)` 兜底：窗口变窄时不会把 diff 区挤没。
-
-### git 目录 watcher
-
-首次 scm_status 时 `git rev-parse --absolute-git-dir` 定位 .git 并 fs.watch（非递归——HEAD/index/packed-refs 都在顶层，覆盖 commit/stage/checkout），事件去抖 600ms 推 `scm_changed` → 前端静默 refresh（外部 CLI/IDE 改仓库实时反映）；setCwd/dispose/notRepo 时 unwatch；watch 失败静默降级为 30s 可见轮询兜底。
-
-### 自动刷新触发器
-
-全部走 silent refresh 不闪 spinner：scm_changed / 终端 tab 里 SCM 生成的 git 写命令 running→exit（标题 `/^git /`）/ 视图激活 / cwd 切换 / 30s 轮询。
-
-### 写操作
-
-仍走可见终端 tab（TerminalPanel 同款 tab 复用逻辑）并切到终端视图：提交/推送/拉取/切换分支（远程分支 `origin/x` → `git checkout -b x origin/x || git checkout x`）/ 单文件暂存（`git add -- <path>`，行 hover 显示 + 按钮）/ 取消暂存（`git reset HEAD -- <path>`，− 按钮），路径经单引号转义。分支下拉本地/远程分组（optgroup，i18n scmRemoteBranches）。
-
-### 历史教训（已废弃的旧实现）
-
-曾用隐藏 PTY + shell 变量拼接 sentinel 切分文本，踩过 xterm writer 覆盖解析器、zsh 提示符无尾换行粘行吞掉 `## main` 状态头、全局队列被流式期间的慢查询阻塞等三个坑。
+原 SCMPanel 和相关界面操作已退役。运行详情中的 diff 属于 Loop 证据查看，
+入口是 `RunDetailModal.tsx` 与 `server/loop/routes.ts`，不代表恢复了 Git 管理面板。
+需要结构化只读 git 查询时沿用 execFile 的安全原则，避免通过隐藏 PTY 解析提示符/ANSI 文本；
+实际写操作仍须经过各自工具的审批与工作区检查。
 
 ## 终端活力检测（liveness watchdog）
 

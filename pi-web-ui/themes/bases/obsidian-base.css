@@ -12,37 +12,37 @@
 .chat-scroll,
 .messages,
 .inputbar {
-	background: transparent;
+    background: transparent;
 }
 
 .topbar {
-	background: rgba(6, 6, 8, 0.48);
-	border-bottom: 1px solid rgba(255, 255, 255, 0.14);
-	backdrop-filter: none;
-	-webkit-backdrop-filter: none;
-	box-shadow: none;
-	z-index: 50;
+    background: rgba(6, 6, 8, 0.48);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    box-shadow: none;
+    z-index: 50;
 }
 
 .footer-bar,
 .statusbar {
-	background: rgba(6, 6, 8, 0.48);
-	border-top: 1px solid rgba(255, 255, 255, 0.14);
-	backdrop-filter: none;
-	-webkit-backdrop-filter: none;
-	box-shadow: none;
-	z-index: 50;
+    background: rgba(6, 6, 8, 0.48);
+    border-top: 1px solid rgba(255, 255, 255, 0.14);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    box-shadow: none;
+    z-index: 50;
 }
 
 .panel,
 .drawer-left .panel,
 .drawer-right .panel,
 .lp-panel {
-	background: rgba(8, 8, 12, 0.45);
-	border-color: rgba(255, 255, 255, 0.12);
-	backdrop-filter: none;
-	-webkit-backdrop-filter: none;
-	box-shadow: none;
+    background: rgba(8, 8, 12, 0.45);
+    border-color: rgba(255, 255, 255, 0.12);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    box-shadow: none;
 }
 
 .panel-header,
@@ -51,14 +51,14 @@
 .panel-sessions,
 .lp-group-title,
 .panel-body {
-	background: transparent;
+    background: transparent;
 }
 
 .lp-conv-row:hover,
 .lp-conv-row.active,
 .ft-row:hover,
 .panel-item:hover {
-	background: rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.1);
 }
 
 /* 3.1 左侧分区标题（最近项目、运行对话、历史对话等）彻底提亮为清爽亮白，告别暗黑发脏 */
@@ -68,72 +68,74 @@
 .lp-section-chevron,
 .lp-section-count,
 .panel-section-title {
-	color: #f8fafc;
-	opacity: 0.96;
-	text-shadow:
-		0 0 1px rgba(0, 0, 0, 0.98),
-		0 1px 1.5px rgba(0, 0, 0, 0.88);
+    color: #f8fafc;
+    opacity: 0.96;
+    text-shadow:
+        0 0 1px rgba(0, 0, 0, 0.98),
+        0 1px 1.5px rgba(0, 0, 0, 0.88);
 }
 
 /* 4. 单个气泡独立圆角与轻微毛玻璃背景（内部工具与正文平整连贯无空隙） */
 .messages-wrap,
 .chat-scroll,
 .messages {
-	background: transparent;
+    background: transparent;
 }
 
 .msg {
-	background: transparent;
-	border: none;
-	box-shadow: none;
+    background: transparent;
+    border: none;
+    box-shadow: none;
 }
 
 /* 回合工具集群在黑曜冷月模式下保持优雅垂直堆叠（方案 B：自上而下单列卡片，连成一体无空隙） */
 .turn-tools-trail {
-	display: flex;
-	flex-direction: column;
-	width: 100%;
-	min-width: 0;
-	max-width: 100%;
-	margin: 4px 0 8px 0;
-	gap: 0;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    margin: 4px 0 8px 0;
+    gap: 0;
 }
+
 .turn-tools-trail > .msg,
 .turn-tools-trail > .msg-assistant {
-	display: block;
-	width: 100%;
-	min-width: 0;
-	margin: 0;
-	padding: 0;
+    display: block;
+    width: 100%;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
 }
+
 .turn-tools-trail > .msg .msg-body,
 .turn-tools-trail > .msg-assistant .msg-body {
-	display: block;
-	width: 100%;
-	min-width: 0;
-	border-radius: 12px;
-	margin: 2px 0;
-	overflow: hidden;
+    display: block;
+    width: 100%;
+    min-width: 0;
+    border-radius: 12px;
+    margin: 2px 0;
+    overflow: hidden;
 }
 
 .msg-assistant .msg-body {
-	background: rgba(12, 18, 32, 0.38);
-	border: 1px solid rgba(255, 255, 255, 0.05);
-	border-radius: 16px;
-	box-shadow: none;
-	backdrop-filter: blur(2px) saturate(115%);
-	-webkit-backdrop-filter: blur(2px) saturate(115%);
-	overflow: hidden;
+    background: rgba(12, 18, 32, 0.38);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 16px;
+    box-shadow: none;
+    backdrop-filter: blur(2px) saturate(115%);
+    -webkit-backdrop-filter: blur(2px) saturate(115%);
+    overflow: hidden;
 }
 
 /* 正文消息（最终文本回复）与上方工具卡、思考块左侧完全对齐留出边距，消除顶格突兀感 */
 .msg-text {
-	padding: 6px 12px;
-	border-radius: 8px;
+    padding: 6px 12px;
+    border-radius: 8px;
 }
 
 .msg-assistant .msg-text {
-	display: block;
+    display: block;
 }
 
 /* 4.1 全页面可见文字防眩光阴影（标题、项目名、会话名、正文字等），1像素紧致高锐度边缘，绝不晕染发糊 */
@@ -166,9 +168,9 @@
 .tool-title,
 button:not(.icon-btn):not(.lp-section-action),
 .btn {
-	text-shadow:
-		0 0 1px rgba(0, 0, 0, 0.98),
-		0 1px 1.5px rgba(0, 0, 0, 0.88);
+    text-shadow:
+        0 0 1px rgba(0, 0, 0, 0.98),
+        0 1px 1.5px rgba(0, 0, 0, 0.88);
 }
 
 /* 4.2 次要与偏黑小字全面保护（项目路径、时间戳、会话副标题、分区计数、底栏所有小指标等）：提亮并应用零扩散紧致微暗边缘，绝不隐形，绝不糊黑 */
@@ -201,58 +203,58 @@ button:not(.icon-btn):not(.lp-section-action),
 .version-text,
 .template-desc,
 .inputbox textarea {
-	color: #e2e8f0;
-	opacity: 0.95;
-	text-shadow:
-		0 0 1px rgba(0, 0, 0, 0.98),
-		0 1px 1px rgba(0, 0, 0, 0.88);
+    color: #e2e8f0;
+    opacity: 0.95;
+    text-shadow:
+        0 0 1px rgba(0, 0, 0, 0.98),
+        0 1px 1px rgba(0, 0, 0, 0.88);
 }
 
 .project-path,
 .session-meta {
-	color: #f1f5f9;
-	opacity: 0.92;
+    color: #f1f5f9;
+    opacity: 0.92;
 }
 
 .project-time,
 .session-time {
-	color: #e2e8f0;
-	opacity: 0.95;
+    color: #e2e8f0;
+    opacity: 0.95;
 }
 
 .msg-user {
-	background: transparent;
-	box-shadow: none;
+    background: transparent;
+    box-shadow: none;
 }
 
 .msg-user .msg-body {
-	background: linear-gradient(135deg, rgba(30, 32, 40, 0.68) 0%, rgba(18, 19, 24, 0.58) 100%);
-	border: 1px solid rgba(255, 255, 255, 0.12);
-	border-radius: 16px;
-	box-shadow: none;
-	backdrop-filter: blur(2px) saturate(115%);
-	-webkit-backdrop-filter: blur(2px) saturate(115%);
+    background: linear-gradient(135deg, rgba(30, 32, 40, 0.68) 0%, rgba(18, 19, 24, 0.58) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 16px;
+    box-shadow: none;
+    backdrop-filter: blur(2px) saturate(115%);
+    -webkit-backdrop-filter: blur(2px) saturate(115%);
 }
 
 .inputbox {
-	background: rgba(12, 14, 20, 0.48);
-	border: 1px solid rgba(255, 255, 255, 0.22);
-	border-radius: 20px;
-	box-shadow: none;
-	backdrop-filter: blur(10px) saturate(130%);
-	-webkit-backdrop-filter: blur(10px) saturate(130%);
-	transition: border-color 0.2s ease;
+    background: rgba(12, 14, 20, 0.48);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 20px;
+    box-shadow: none;
+    backdrop-filter: blur(10px) saturate(130%);
+    -webkit-backdrop-filter: blur(10px) saturate(130%);
+    transition: border-color 0.2s ease;
 }
 
 .inputbox:focus-within {
-	border-color: rgba(255, 255, 255, 0.65);
-	box-shadow: none;
+    border-color: rgba(255, 255, 255, 0.65);
+    box-shadow: none;
 }
 
 .inputbox textarea {
-	background: transparent;
-	color: #ffffff;
-	/* text-shadow 归上方 `.inputbox textarea` 所在的成组规则（同选择器；那条原本靠优先级补丁恒胜，
+    background: transparent;
+    color: #fff;
+    /* text-shadow 归上方 `.inputbox textarea` 所在的成组规则（同选择器；那条原本靠优先级补丁恒胜，
 	   本条的同名声明从未生效过）。分层后两条同权重，删掉这条死声明才能让成组规则继续胜出，
 	   视觉与重构前完全一致。 */
 }
@@ -262,33 +264,33 @@ button:not(.icon-btn):not(.lp-section-action),
 .composer-tools-left,
 .composer-tools-center,
 .composer-tools-right {
-	color: #ffffff;
+    color: #fff;
 }
 
 .composer-tools .chip {
-	background: rgba(14, 15, 22, 0.48);
-	border: 1px solid rgba(255, 255, 255, 0.22);
-	color: #ffffff;
-	box-shadow: none;
-	transition:
-		background 0.15s ease,
-		border-color 0.15s ease;
+    background: rgba(14, 15, 22, 0.48);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    color: #fff;
+    box-shadow: none;
+    transition:
+        background 0.15s ease,
+        border-color 0.15s ease;
 }
 
 .composer-tools .chip:hover {
-	background: rgba(14, 15, 22, 0.7);
-	border-color: #ffffff;
+    background: rgba(14, 15, 22, 0.7);
+    border-color: #fff;
 }
 
 .composer-tools .chip > span,
 .composer-tools .chip > span.chip-model,
 .composer-tools .chip > span.chip-sub,
 .composer-tools .chip-sub {
-	color: #ffffff;
-	opacity: 0.98;
-	text-shadow:
-		0 0 1px rgba(0, 0, 0, 0.98),
-		0 1px 1.5px rgba(0, 0, 0, 0.88);
+    color: #fff;
+    opacity: 0.98;
+    text-shadow:
+        0 0 1px rgba(0, 0, 0, 0.98),
+        0 1px 1.5px rgba(0, 0, 0, 0.88);
 }
 
 .composer-tools .chip > svg,
@@ -297,15 +299,15 @@ button:not(.icon-btn):not(.lp-section-action),
 .inputbox .composer-tools-left button svg,
 .inputbox .btn.composer-plugin-action svg,
 .inputbox .composer-tools-left .btn svg {
-	color: #ffffff;
-	stroke: #ffffff;
-	filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.95)) drop-shadow(0 1px 1.2px rgba(0, 0, 0, 0.85));
+    color: #fff;
+    stroke: #fff;
+    filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.95)) drop-shadow(0 1px 1.2px rgba(0, 0, 0, 0.85));
 }
 
 .inputbox .composer-tools-left button,
 .inputbox .btn.composer-plugin-action,
 .inputbox .composer-tools-left .btn {
-	filter: none;
+    filter: none;
 }
 
 /* 胶囊按钮（模型、思考、权限、预设等下拉）恒定保持 8px 圆角矩形，悬停绝不变形为扁平椭圆 */
@@ -315,156 +317,167 @@ button:not(.icon-btn):not(.lp-section-action),
 .composer-tools .dropdown > button:hover,
 .dropdown > button.chip,
 .dropdown > button.chip:hover {
-	border-radius: 8px;
+    border-radius: 8px;
 }
 
 /* 仅针对左侧附件等纯图标小按钮悬停时轻微高光，绝不改变任何下拉胶囊圆角 */
 .inputbox .btn.composer-plugin-action:not(.chip):hover,
 .inputbox .composer-tools-left > button:not(.chip):not(.dropdown):hover {
-	color: #ffffff;
-	background: rgba(255, 255, 255, 0.14);
-	border-radius: 6px;
+    color: #fff;
+    background: rgba(255, 255, 255, 0.14);
+    border-radius: 6px;
 }
 
 /* 发送按钮（冷白银辉高光圆钮 + 深黑箭头，高对比度清晰锋利，绝不白底隐形） */
 .inputbox .btn.send {
-	background: #f8fafc;
-	border-color: #ffffff;
-	color: #050507;
-	box-shadow: 0 2px 12px rgba(255, 255, 255, 0.35);
+    background: #f8fafc;
+    border-color: #fff;
+    color: #050507;
+    box-shadow: 0 2px 12px rgba(255, 255, 255, 0.35);
 }
+
 .inputbox .btn.send svg {
-	stroke: #050507;
-	color: #050507;
-	filter: none;
+    stroke: #050507;
+    color: #050507;
+    filter: none;
 }
+
 .inputbox .btn.send:hover:not(:disabled) {
-	background: #ffffff;
-	border-color: #ffffff;
-	color: #000000;
-	box-shadow: 0 0 16px rgba(255, 255, 255, 0.55);
-	transform: translateY(-1px);
+    background: #fff;
+    border-color: #fff;
+    color: #000;
+    box-shadow: 0 0 16px rgba(255, 255, 255, 0.55);
+    transform: translateY(-1px);
 }
+
 .inputbox .btn.send:disabled {
-	opacity: 0.35;
-	box-shadow: none;
-	cursor: default;
+    opacity: 0.35;
+    box-shadow: none;
+    cursor: default;
 }
+
 .inputbox .btn.send:disabled svg {
-	stroke: #050507;
-	color: #050507;
-	filter: none;
+    stroke: #050507;
+    color: #050507;
+    filter: none;
 }
 
 /* 运行中插队/排队分裂胶囊按钮（银白双段胶囊，黑箭黑单，分界清晰） */
 .inputbox .split-send {
-	background: #f8fafc;
-	border-color: #ffffff;
-	box-shadow: 0 2px 12px rgba(255, 255, 255, 0.35);
+    background: #f8fafc;
+    border-color: #fff;
+    box-shadow: 0 2px 12px rgba(255, 255, 255, 0.35);
 }
+
 .inputbox .split-send button {
-	color: #050507;
+    color: #050507;
 }
+
 .inputbox .split-send button svg {
-	stroke: #050507;
-	color: #050507;
-	filter: none;
+    stroke: #050507;
+    color: #050507;
+    filter: none;
 }
+
 .inputbox .split-send .split-queue {
-	background: rgba(0, 0, 0, 0.08);
+    background: rgba(0, 0, 0, 0.08);
 }
+
 .inputbox .split-send button + button {
-	border-left: 1px solid rgba(0, 0, 0, 0.18);
+    border-left: 1px solid rgba(0, 0, 0, 0.18);
 }
+
 .inputbox .split-send:hover {
-	background: #ffffff;
-	border-color: #ffffff;
-	box-shadow: 0 0 16px rgba(255, 255, 255, 0.55);
+    background: #fff;
+    border-color: #fff;
+    box-shadow: 0 0 16px rgba(255, 255, 255, 0.55);
 }
+
 .inputbox .split-send button:hover:not(:disabled) {
-	background: rgba(0, 0, 0, 0.12);
+    background: rgba(0, 0, 0, 0.12);
 }
 
 /* 7. 卡片、代码块与工具调用：方案 B（纯净无界微透流 · 连成一体无空隙） */
 .card {
-	background: rgba(255, 255, 255, 0.04);
-	border: none;
-	border-radius: 10px;
-	box-shadow: none;
+    background: rgba(255, 255, 255, 0.04);
+    border: none;
+    border-radius: 10px;
+    box-shadow: none;
 }
 
 /* 工具调用（.toolcall）、思考块（.thinking）彻底消除外边距，连成一体，杜绝百叶窗斑马线切碎背景 */
 .toolcall,
 .thinking {
-	background: transparent;
-	border: none;
-	border-radius: 0;
-	margin: 0;
-	display: block;
-	width: 100%;
-	min-width: 0;
-	max-width: 100%;
-	box-shadow: none;
-	backdrop-filter: none;
-	-webkit-backdrop-filter: none;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    margin: 0;
+    display: block;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
 }
 
 /* 折叠条（.chead）：紧凑平整悬浮，完全不设边框与独立外边距，内边距与 .msg-text 对齐 */
 .chead {
-	display: flex;
-	width: 100%;
-	min-width: 0;
-	max-width: 100%;
-	background: transparent;
-	border: none;
-	border-radius: 0;
-	padding: 6px 12px;
-	margin: 0;
-	position: relative;
-	box-shadow: none;
-	backdrop-filter: none;
-	-webkit-backdrop-filter: none;
-	transition: background 0.15s ease;
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 6px 12px;
+    margin: 0;
+    position: relative;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    transition: background 0.15s ease;
 }
 
 .chead:hover {
-	background: rgba(255, 255, 255, 0.06);
+    background: rgba(255, 255, 255, 0.06);
 }
 
 /* 条目之间仅以 1px 极微弱细线无缝分割，消除任何漏景空隙 */
 .toolcall + .toolcall .chead,
 .thinking + .toolcall .chead,
 .toolcall + .thinking .chead {
-	border-top: 1px solid rgba(255, 255, 255, 0.04);
+    border-top: 1px solid rgba(255, 255, 255, 0.04);
 }
 
 /* 工具组首项与末项圆角封闭，整组浑然一体 */
 .msg-body > .toolcall:first-child .chead,
 .msg-body > .thinking:first-child .chead {
-	border-top-left-radius: 8px;
-	border-top-right-radius: 8px;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
 }
+
 .msg-body > .toolcall:last-child .chead,
 .msg-body > .thinking:last-child .chead {
-	border-bottom-left-radius: 8px;
-	border-bottom-right-radius: 8px;
+    border-bottom-left-radius: 8px;
+    border-bottom-right-radius: 8px;
 }
 
 .toolcall .chead::before,
 .thinking .chead::before {
-	display: none;
+    display: none;
 }
 
 pre,
 code {
-	text-shadow: none;
+    text-shadow: none;
 }
 
 pre {
-	background: rgba(6, 7, 10, 0.85);
-	border: 1px solid rgba(255, 255, 255, 0.08);
-	border-radius: 10px;
-	box-shadow: none;
+    background: rgba(6, 7, 10, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    box-shadow: none;
 }
 
 /* 7.1 工具调用与思考文字：彻底提亮为高对比纯白，注入1像素紧致微暗边缘 */
@@ -486,96 +499,68 @@ pre {
 .thinking-body span,
 .thinking-body strong,
 .thinking-body em {
-	color: #ffffff;
-	opacity: 0.98;
-	text-shadow:
-		0 0 1px rgba(0, 0, 0, 0.98),
-		0 1px 1.5px rgba(0, 0, 0, 0.88);
+    color: #fff;
+    opacity: 0.98;
+    text-shadow:
+        0 0 1px rgba(0, 0, 0, 0.98),
+        0 1px 1.5px rgba(0, 0, 0, 0.88);
 }
 
 .toolcall-path,
 .toolcall-cmd {
-	color: #e2e8f0;
+    color: #e2e8f0;
 }
 
 .quick-chip {
-	background: rgba(14, 16, 24, 0.45);
-	border: 1px solid rgba(255, 255, 255, 0.16);
-	border-radius: 14px;
-	backdrop-filter: blur(8px) saturate(130%);
-	-webkit-backdrop-filter: blur(8px) saturate(130%);
-	box-shadow: none;
-	text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+    background: rgba(14, 16, 24, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 14px;
+    backdrop-filter: blur(8px) saturate(130%);
+    -webkit-backdrop-filter: blur(8px) saturate(130%);
+    box-shadow: none;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
 }
 
 .quick-chip:hover {
-	background: rgba(255, 255, 255, 0.16);
-	border-color: rgba(255, 255, 255, 0.4);
+    background: rgba(255, 255, 255, 0.16);
+    border-color: rgba(255, 255, 255, 0.4);
 }
 
 /* 对话底栏建议按钮行：块级独占整行，绝不与上方正文文字重叠 */
 .action-suggestions {
-	display: block;
-	clear: both;
-	width: 100%;
-	min-width: 0;
-	margin: 12px 0 16px 0;
-	padding: 0 4px;
+    display: block;
+    clear: both;
+    width: 100%;
+    min-width: 0;
+    margin: 12px 0 16px 0;
+    padding: 0 4px;
 }
 
 .dd-menu,
 .ctx-menu,
 .pm-panel,
 .modal-dialog {
-	background: #111218;
-	border: 1px solid rgba(255, 255, 255, 0.22);
-	box-shadow:
-		0 12px 40px rgba(0, 0, 0, 0.85),
-		0 0 20px rgba(255, 255, 255, 0.1);
+    background: #111218;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    box-shadow:
+        0 12px 40px rgba(0, 0, 0, 0.85),
+        0 0 20px rgba(255, 255, 255, 0.1);
 }
 
 [data-pi-floating-panel],
 .floating-panel {
-	background: rgba(12, 13, 18, 0.85);
-	border: 1px solid rgba(255, 255, 255, 0.22);
-	box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
-	color: #ffffff;
+    background: rgba(12, 13, 18, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+    color: #fff;
 }
 
 [data-pi-floating-panel] *,
 .floating-panel * {
-	color: #ffffff;
-	text-shadow:
-		0 0 1px rgba(0, 0, 0, 0.98),
-		0 1px 1.2px rgba(0, 0, 0, 0.88);
-}
-
-/* 9.1 右下角状态栏指标（GitHub、CPU/内存68%·32%、工作区路径等）全量高对比提亮与矢量锁边 */
-.statusbar-right,
-.statusbar-right *,
-.statusbar .bar-item-host-metrics,
-.statusbar .bar-item-host-metrics *,
-.statusbar .status-host-metrics,
-.statusbar .status-host-metrics *,
-.statusbar .bar-item-cwd,
-.statusbar .bar-item-cwd *,
-.statusbar .status-cwd,
-.statusbar .status-cwd * {
-	color: #ffffff;
-	opacity: 0.98;
-	text-shadow:
-		0 0 1px rgba(0, 0, 0, 0.98),
-		0 1px 1.5px rgba(0, 0, 0, 0.88);
-}
-
-.statusbar-right .bar-item-icon svg,
-.statusbar .bar-item-host-metrics svg,
-.statusbar .status-host-metrics svg,
-.statusbar .bar-item-cwd svg,
-.statusbar .status-cwd svg {
-	color: #ffffff;
-	stroke: #ffffff;
-	filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.95)) drop-shadow(0 1px 1.2px rgba(0, 0, 0, 0.85));
+    color: #fff;
+    text-shadow:
+        0 0 1px rgba(0, 0, 0, 0.98),
+        0 1px 1.2px rgba(0, 0, 0, 0.88);
 }
 
 /* 10. 顶部按钮与所有图标：所有按钮统一度量衡，阴影唯一精准挂载在矢量笔画上，严禁父子容器双重叠加产生浓黑光晕 */
@@ -593,16 +578,16 @@ span.plugin-icon-svg,
 .topbar .icon-btn,
 .icon-btn,
 .project-icon {
-	background: transparent;
-	border: none;
-	box-shadow: none;
-	filter: none;
-	text-shadow: none;
-	color: #f8fafc;
-	transition:
-		filter 0.15s ease,
-		transform 0.15s ease,
-		color 0.15s ease;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    filter: none;
+    text-shadow: none;
+    color: #f8fafc;
+    transition:
+        filter 0.15s ease,
+        transform 0.15s ease,
+        color 0.15s ease;
 }
 
 /* 全界面所有图标矢量元素（SVG / Glyph / 胶囊图标）：统一定义唯一、精致、锐利的微黑锁边，绝不晕染；
@@ -625,18 +610,18 @@ svg.bar-item-icon,
 .thinking-icon svg,
 .toolcall-status svg,
 .toolcall-open svg {
-	color: #f8fafc;
-	stroke: #f8fafc;
-	filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.95)) drop-shadow(0 1px 1.2px rgba(0, 0, 0, 0.85));
-	transition:
-		filter 0.15s ease,
-		color 0.15s ease;
+    color: #f8fafc;
+    stroke: #f8fafc;
+    filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.95)) drop-shadow(0 1px 1.2px rgba(0, 0, 0, 0.85));
+    transition:
+        filter 0.15s ease,
+        color 0.15s ease;
 }
 
 /* 悬停微高光微反馈：统一只对图标自身应用光晕，容器 span 保持无滤镜 */
 .bar-item:hover span.bar-item-icon,
 .bar-item:hover span.plugin-icon-svg {
-	filter: none;
+    filter: none;
 }
 
 .bar-item:hover svg.bar-item-icon,
@@ -651,9 +636,9 @@ svg.bar-item-icon,
 .panel-rail:hover svg,
 .icon-btn:hover svg,
 .toolcall-open:hover svg {
-	color: #ffffff;
-	stroke: #ffffff;
-	filter: drop-shadow(0 0 2px #ffffff) drop-shadow(0 1px 2px rgba(0, 0, 0, 0.95));
+    color: #fff;
+    stroke: #fff;
+    filter: drop-shadow(0 0 2px #fff) drop-shadow(0 1px 2px rgba(0, 0, 0, 0.95));
 }
 
 .side-dock-btn:hover,
@@ -665,7 +650,7 @@ svg.bar-item-icon,
 .panel-rail:hover,
 .icon-btn:hover,
 .toolcall-open:hover {
-	transform: scale(1.08);
+    transform: scale(1.08);
 }
 
 /* 顶栏所有按钮（含沙盒、临时对话等）默认彻底裸幽灵化，绝不残留突兀的高亮黄色圆环或生硬外边框 */
@@ -673,9 +658,9 @@ svg.bar-item-icon,
 .topbar .chip:not(:hover),
 .topbar .sandbox-chip:not(:hover),
 .topbar .ephemeral-chat-btn:not(:hover) {
-	background: transparent;
-	border-color: transparent;
-	box-shadow: none;
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
 }
 
 /* ========================================================
@@ -685,8 +670,9 @@ svg.bar-item-icon,
 .statusbar *,
 .footer-bar *,
 .footer * {
-	text-shadow: none;
+    text-shadow: none;
 }
+
 .statusbar .bar-item,
 .statusbar .bar-item.chip,
 .statusbar .chip,
@@ -696,23 +682,24 @@ svg.bar-item-icon,
 .footer-bar .bar-item,
 .footer-bar .bar-item.chip,
 .footer-bar .chip {
-	height: 18px;
-	min-height: 18px;
-	padding: 0 4px;
-	font-size: 11px;
-	line-height: 18px;
-	gap: 3px;
-	color: var(--text-dim);
-	background: transparent;
-	border: 1px solid transparent;
-	border-radius: 2px;
-	box-shadow: none;
-	opacity: 1;
-	filter: none;
-	text-shadow: none;
-	cursor: pointer;
-	transform: none;
+    height: 18px;
+    min-height: 18px;
+    padding: 0 4px;
+    font-size: 11px;
+    line-height: 18px;
+    gap: 3px;
+    color: var(--text-dim);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 2px;
+    box-shadow: none;
+    opacity: 1;
+    filter: none;
+    text-shadow: none;
+    cursor: pointer;
+    transform: none;
 }
+
 .statusbar .bar-item:hover,
 .statusbar .bar-item.chip:hover,
 .statusbar .chip:hover,
@@ -722,16 +709,17 @@ svg.bar-item-icon,
 .footer-bar .bar-item:hover,
 .footer-bar .bar-item.chip:hover,
 .footer-bar .chip:hover {
-	background: var(--glow-12);
-	color: var(--text);
-	border-color: transparent;
-	border-radius: 2px;
-	box-shadow: none;
-	opacity: 1;
-	filter: none;
-	text-shadow: none;
-	transform: none;
+    background: var(--glow-12);
+    color: var(--text);
+    border-color: transparent;
+    border-radius: 2px;
+    box-shadow: none;
+    opacity: 1;
+    filter: none;
+    text-shadow: none;
+    transform: none;
 }
+
 .statusbar .bar-item.active,
 .statusbar .bar-item.chip.active,
 .statusbar .chip.active,
@@ -741,67 +729,74 @@ svg.bar-item-icon,
 .footer-bar .bar-item.active,
 .footer-bar .bar-item.chip.active,
 .footer-bar .chip.active {
-	background: var(--bg-elev2);
-	color: var(--text);
+    background: var(--bg-elev2);
+    color: var(--text);
 }
+
 .statusbar .bar-item-text,
 .footer .bar-item-text,
 .footer-bar .bar-item-text {
-	font-size: 11px;
-	line-height: 1.2;
-	color: inherit;
-	opacity: 1;
-	text-shadow: none;
+    font-size: 11px;
+    line-height: 1.2;
+    color: inherit;
+    opacity: 1;
+    text-shadow: none;
 }
+
 .statusbar .bar-item-char,
 .footer .bar-item-char,
 .footer-bar .bar-item-char {
-	font-size: 11px;
-	line-height: 1;
-	font-weight: 600;
-	color: var(--text-faint);
-	opacity: 0.85;
-	text-shadow: none;
+    font-size: 11px;
+    line-height: 1;
+    font-weight: 600;
+    color: var(--text-faint);
+    opacity: 0.85;
+    text-shadow: none;
 }
+
 .statusbar .bar-item.status-cost,
 .footer .bar-item.status-cost,
 .footer-bar .bar-item.status-cost {
-	gap: 0;
+    gap: 0;
 }
+
 .statusbar span.bar-item-icon,
 .statusbar span.plugin-icon-svg,
 .footer span.bar-item-icon,
 .footer span.plugin-icon-svg,
 .footer-bar span.bar-item-icon,
 .footer-bar span.plugin-icon-svg {
-	background: transparent;
-	border: none;
-	box-shadow: none;
-	filter: none;
-	text-shadow: none;
-	color: inherit;
-	opacity: 0.75;
-	transform: none;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    filter: none;
+    text-shadow: none;
+    color: inherit;
+    opacity: 0.75;
+    transform: none;
 }
+
 .statusbar .bar-item-icon,
 .footer .bar-item-icon,
 .footer-bar .bar-item-icon {
-	font-size: 11px;
-	width: 11px;
-	height: 11px;
-	min-width: 11px;
-	opacity: 0.75;
-	color: inherit;
-	filter: none;
-	text-shadow: none;
+    font-size: 11px;
+    width: 11px;
+    height: 11px;
+    min-width: 11px;
+    opacity: 0.75;
+    color: inherit;
+    filter: none;
+    text-shadow: none;
 }
+
 .statusbar .bar-item:hover .bar-item-icon,
 .footer .bar-item:hover .bar-item-icon,
 .footer-bar .bar-item:hover .bar-item-icon {
-	opacity: 1;
-	color: inherit;
-	filter: none;
+    opacity: 1;
+    color: inherit;
+    filter: none;
 }
+
 .statusbar svg.bar-item-icon,
 .statusbar .bar-item-glyph,
 .statusbar .bar-item-icon svg,
@@ -812,13 +807,14 @@ svg.bar-item-icon,
 .footer-bar svg.bar-item-icon,
 .footer-bar .bar-item-glyph,
 .footer-bar .bar-item-icon svg {
-	width: 11px;
-	height: 11px;
-	color: inherit;
-	stroke: currentColor;
-	filter: none;
-	text-shadow: none;
+    width: 11px;
+    height: 11px;
+    color: inherit;
+    stroke: currentColor;
+    filter: none;
+    text-shadow: none;
 }
+
 .statusbar .bar-item:hover svg.bar-item-icon,
 .statusbar .bar-item:hover .bar-item-icon svg,
 .statusbar .bar-item:hover .bar-item-glyph,
@@ -828,25 +824,26 @@ svg.bar-item-icon,
 .footer-bar .bar-item:hover svg.bar-item-icon,
 .footer-bar .bar-item:hover .bar-item-icon svg,
 .footer-bar .bar-item:hover .bar-item-glyph {
-	color: inherit;
-	stroke: currentColor;
-	filter: none;
+    color: inherit;
+    stroke: currentColor;
+    filter: none;
 }
+
 .statusbar .bar-item-badge,
 .footer .bar-item-badge,
 .footer-bar .bar-item-badge {
-	background: none;
-	color: var(--accent);
-	font-size: 10px;
-	font-weight: 700;
-	min-width: 0;
-	height: auto;
-	padding: 0;
-	margin-left: 0;
-	border-radius: 0;
-	opacity: 1;
-	text-shadow: none;
-	box-shadow: none;
+    background: none;
+    color: var(--accent);
+    font-size: 10px;
+    font-weight: 700;
+    min-width: 0;
+    height: auto;
+    padding: 0;
+    margin-left: 0;
+    border-radius: 0;
+    opacity: 1;
+    text-shadow: none;
+    box-shadow: none;
 }
 /* 右下角指标（主机 CPU/内存、工作区路径等）回归继承，不再强制白字锁边 */
 .statusbar-right,
@@ -859,37 +856,39 @@ svg.bar-item-icon,
 .statusbar .bar-item-cwd *,
 .statusbar .status-cwd,
 .statusbar .status-cwd * {
-	color: inherit;
-	opacity: 1;
-	text-shadow: none;
+    color: inherit;
+    opacity: 1;
+    text-shadow: none;
 }
+
 .statusbar-right .bar-item-icon svg,
 .statusbar .bar-item-host-metrics svg,
 .statusbar .status-host-metrics svg,
 .statusbar .bar-item-cwd svg,
 .statusbar .status-cwd svg {
-	color: inherit;
-	stroke: currentColor;
-	filter: none;
+    color: inherit;
+    stroke: currentColor;
+    filter: none;
 }
 /* 底栏引擎选择器回归基线纯平微矩形 */
 .statusbar .engine-picker-btn,
 .footer .engine-picker-btn,
 .footer-bar .engine-picker-btn {
-	background: transparent;
-	border: 1px solid transparent;
-	border-radius: 2px;
-	padding: 0 4px;
-	color: var(--text-dim);
-	box-shadow: none;
-	opacity: 1;
-	filter: none;
-	text-shadow: none;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 2px;
+    padding: 0 4px;
+    color: var(--text-dim);
+    box-shadow: none;
+    opacity: 1;
+    filter: none;
+    text-shadow: none;
 }
+
 .statusbar .engine-picker-btn:hover,
 .footer .engine-picker-btn:hover,
 .footer-bar .engine-picker-btn:hover {
-	background: var(--glow-12);
-	border-color: transparent;
-	color: var(--text);
+    background: var(--glow-12);
+    border-color: transparent;
+    color: var(--text);
 }

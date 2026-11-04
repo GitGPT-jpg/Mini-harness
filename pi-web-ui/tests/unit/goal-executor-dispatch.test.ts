@@ -1,6 +1,21 @@
-import { describe, expect, it, vi } from "vitest";
-import { ClientSession } from "../../server/agent-service.js";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { GoalConversation } from "../../server/goal-service.js";
+
+// agent-service loads extension.ts, whose run root is fixed at module initialization.
+const LOOP_RUNS_ROOT = mkdtempSync(join(tmpdir(), "goal-executor-loop-runs-"));
+const previousLoopRunsRoot = process.env.MINI_HARNESS_RUNTIME_ROOT;
+process.env.MINI_HARNESS_RUNTIME_ROOT = LOOP_RUNS_ROOT;
+const { ClientSession } = await import("../../server/agent-service.js");
+const { createLoopRun, loadLoopState } = await import("../../server/loop/extension.js");
+if (previousLoopRunsRoot === undefined) delete process.env.MINI_HARNESS_RUNTIME_ROOT;
+else process.env.MINI_HARNESS_RUNTIME_ROOT = previousLoopRunsRoot;
+
+afterAll(() => {
+	rmSync(LOOP_RUNS_ROOT, { recursive: true, force: true });
+});
 
 function makeFakeSession() {
 	const sentMessages: { text: string; options?: { deliverAs?: string } }[] = [];
@@ -174,5 +189,104 @@ describe("Goal 2.0 执行期主会话插话自动转发给执行者 (#625)", () 
 		expect(emitted.some((m) => m.type === "notice" && m.level === "error" && m.text.includes("同步消息失败"))).toBe(
 			true,
 		);
+	});
+});
+
+describe("ClientSession.startLoop", () => {
+	it("拒绝未知能力模板，不创建 run", async () => {
+		const conv: any = { session: {} };
+		const cs = Object.create(ClientSession.prototype) as any;
+		cs.convs = new Map([["c1", conv]]);
+		cs.activeId = "c1";
+		cs.emitNotice = vi.fn();
+		cs.flushSnapshot = vi.fn();
+
+		await ClientSession.prototype.startLoop.call(cs, {
+			goal: "优化吞吐",
+			taskId: "unknown-pack-test",
+			packId: "does-not-exist",
+		});
+
+		expect(conv.loop).toMatchObject({
+			kind: "request-failed",
+			taskId: "unknown-pack-test",
+			goal: "优化吞吐",
+			reason: "未知能力模板：does-not-exist",
+		});
+		expect(cs.emitNotice).toHaveBeenCalledWith("warning", "Loop 启动失败：未知能力模板 does-not-exist");
+		expect(cs.flushSnapshot).toHaveBeenCalledTimes(1);
+	});
+
+	it("缺少必要输入时阻止启动（暴露缺失项与候选），不创建 run", async () => {
+		const ws = mkdtempSync(join(tmpdir(), "loop-start-missing-"));
+		const conv: any = { session: { sessionId: "s-missing" }, runtime: { cwd: ws }, cwd: ws };
+		const cs = Object.create(ClientSession.prototype) as any;
+		cs.convs = new Map([["c1", conv]]);
+		cs.activeId = "c1";
+		cs.emitNotice = vi.fn();
+		cs.flushSnapshot = vi.fn();
+
+		await ClientSession.prototype.startLoop.call(cs, {
+			goal: "测缺失",
+			taskId: "missing-block-test",
+			packId: "cache-loss",
+			workspace: ws,
+		});
+
+		expect(conv.loop).toMatchObject({
+			kind: "request-failed",
+			taskId: "missing-block-test",
+			goal: "测缺失",
+		});
+		expect(conv.loop.reason).toContain("缺少必要输入");
+		expect(conv.loop.reason).toContain("validateCmd");
+		rmSync(ws, { recursive: true, force: true });
+	});
+});
+
+describe("worktree Loop executor kickoff", () => {
+	it("sendUserMessage 拒绝时停止 run、标记父会话失败并刷新快照", async () => {
+		const created = createLoopRun({
+			sessionId: "loop-parent-session",
+			cwd: LOOP_RUNS_ROOT,
+			goal: "run in a worktree",
+		});
+		if (!created.ok) throw new Error(created.error);
+		const st = {
+			...created.st,
+			worktreeDir: join(LOOP_RUNS_ROOT, created.runId, "worktree"),
+			worktreeBranch: `mini-harness/${created.runId}`,
+		};
+
+		const cs = Object.create(ClientSession.prototype) as any;
+		const parent: any = { id: "parent", loop: { kind: "run", runId: created.runId } };
+		const executor: any = {
+			id: "executor",
+			session: {
+				sessionId: "loop-executor-session",
+				sendUserMessage: vi.fn().mockRejectedValue(new Error("transport closed")),
+			},
+		};
+		cs.convs = new Map([
+			[parent.id, parent],
+			[executor.id, executor],
+		]);
+		cs.spawnSubagentConversation = vi.fn(async () => executor.id);
+		cs.emitNotice = vi.fn();
+		cs.flushSnapshot = vi.fn();
+
+		await (ClientSession.prototype as any).startWorktreeExecutor.call(cs, parent, st, "kick off");
+		await executor.kickoff;
+
+		expect(loadLoopState(created.runId)).toMatchObject({
+			status: "stopped",
+			stopReason: "worktree-executor-error",
+		});
+		expect(parent.loop).toMatchObject({
+			kind: "request-failed",
+			reason: expect.stringContaining("transport closed"),
+		});
+		expect(cs.emitNotice).toHaveBeenCalledWith("warning", expect.stringContaining("transport closed"));
+		expect(cs.flushSnapshot).toHaveBeenCalled();
 	});
 });

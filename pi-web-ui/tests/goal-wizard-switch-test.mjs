@@ -119,7 +119,11 @@ writeFileSync(
 				api: "openai-completions",
 				baseUrl: `http://127.0.0.1:${MOCK_PORT}`,
 				apiKey: "mock-key",
-				models: [{ id: MODEL_ID, name: "Mock", input: ["text"], contextWindow: 32000, maxTokens: 4096 }],
+				models: [
+					{ id: MODEL_ID, name: "Mock", input: ["text"], contextWindow: 32000, maxTokens: 4096 },
+					// 执行者用另一家族（执行与审查必须不同家族；主对话 mock-model 归 other 家族）
+					{ id: "gpt-mock", name: "GPT Mock", input: ["text"], contextWindow: 32000, maxTokens: 4096 },
+				],
 			},
 		},
 	}),
@@ -282,6 +286,7 @@ try {
 	await client.waitForType("snapshot");
 	client.send({ type: "set_model", modelId: `mock/${MODEL_ID}` });
 	await client.waitForState((s) => s.model?.id === MODEL_ID, 20000);
+	client.send({ type: "set_goal_prefs", execModel: "mock/gpt-mock" });
 
 	// ---- A/B：不切会话的一轮 -------------------------------------------------
 	wizStep = 0;

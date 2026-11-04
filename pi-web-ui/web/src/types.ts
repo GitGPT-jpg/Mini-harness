@@ -21,22 +21,6 @@ export type { FileEntry, PptxSlidePayload, PptxSlideImagePayload };
 /** 前端 WebSocket 连接状态。 */
 export type ConnStatus = "connecting" | "open" | "closed";
 
-export interface FileListing {
-	path: string;
-	parent: string | null;
-	entries: FileEntry[];
-	/**
-	 * The directory had more entries than the platform cap (win32: 2000,
-	 * posix: 500) — the list was cut short. UI shows a hint when true.
-	 */
-	truncated: boolean;
-	/**
-	 * true = 机器浏览模式（此电脑/盘符/工作区外绝对路径）：path/entries 为绝对
-	 * wire 路径；false/缺省 = 工作区相对视图。
-	 */
-	absolute?: boolean;
-}
-
 /** Content of a workspace file fetched for the preview panel. */
 export interface FileContent {
 	path: string;
