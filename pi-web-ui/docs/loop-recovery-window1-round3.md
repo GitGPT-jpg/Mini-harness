@@ -81,3 +81,45 @@
   真实宿主跨进程恢复（`loop-core-restart.test.ts` 七模式）通过。
 - 未覆盖：容器重建端到端（本机无 Docker）；Linux 实机；真实模型评审输入的内容绑定
   （reviewer 返回后的门禁已覆盖，评审输入的逐字内容仍以 diff 快照为界）。
+
+## 5. 第二批·停止只取消「已注册且对应本回合」的实体
+
+- 基线缺陷：控制器只在 startLoop/resumeLoop 注册一次且带随机 turnId；A 回合结束后同会话
+  普通聊天 B 开始时，停止 A 会经旧控制器把 B 的回合一起取消；stopLoop 还会临时把控制器
+  绑到当前聊天；回合结束事件不清理控制器。
+- 修改（`server/loop/extension.ts`）：
+  1. 投递登记 → 回合启动两段式：服务层/扩展投递 run 回合前 `markRunTurnDispatch`
+     （持久「回合在途」证据含 turnId），`before_agent_start` 经 `beginLoopTurn` 消费登记
+     并注册绑定本回合的控制器（abort 取消本运行时当前回合，turnEnded 只在可核验 idle 时
+     判结束）；普通聊天回合无登记 → 不置位、不注册。
+  2. `agent_end` 经 `endLoopTurnsForSession` 只清理属于本会话本回合的标记与控制器。
+  3. 停止绑定发起时登记的回合（`stopTurnId`）：登记回合已更换 → 不取消新回合、不计在途；
+     租约代次变化（接管）后旧控制器失效，无法核验的退出保持未确认。
+  4. 投递被拒时 `unmarkRunTurnDispatch` 撤销登记，不留下虚假在途证据。
+- 回归（`tests/unit/loop-turn-entity-batch2.test.ts`）：A 结束→同会话聊天 B 不被取消且停止
+  立即确认；活跃 A 仍可取消；登记回合更换不取消新回合；跨会话结束事件互不清理；接管代次
+  失效不取消且保持未确认。
+
+## 6. 第二批·旧执行实体逐实体判定
+
+- 基线缺陷：旧实现只要存在「当前 round/attempt 未消费 operation」就把全部旧实体视为已核实
+  （`!pending` 一刀切）；同一 PID 或 PID 复用可解除门禁；运行中（无退出证据）也放行。
+- 修改（`server/loop/extension.ts`）：
+  1. `unverifiedLegacyEntities` 逐实体判定：PID + 宿主 + 进程启动身份 + 可信退出证据
+     （result 已发布）全匹配才算核实；同 PID/PID 复用/缺身份/仍在运行都不能单独解除门禁。
+  2. `pendingUnconsumedOp` 统一恢复观察与接续投递的「当前 round/attempt 未消费 operation」
+     选择规则：观察仅消费一次，消费后不再被选中。
+  3. `recoverRun` 允许在持权状态下观察在途实体（running + inFlightOpId）；投递门禁
+     `canResumeLoopDelivery` 在无关旧实体未核实期间保持不放行。
+- 回归（`tests/unit/loop-turn-entity-batch2.test.ts`）：旧 PID A 真实存活 + 独立 operation B
+  （真实执行、可信退出证据）→ B 的退出证据只核实 B，A 未核实期间投递门禁不放行、A 退出后放行；
+  同一实体（身份全匹配 + 退出证据）不双重阻断；startId 不符/仍在运行均阻断、退出证据落地后放行。
+
+## 验证范围与剩余（Round 5 追加）
+
+- 两批次分开提交：`f60bf61`（第一批：验收与Git收尾）、`bed48cd`（第二批：停止与旧实体续跑）；
+  两提交合计与全量改动逐字节一致（`git apply --reverse --check` 核对）。
+- 全量 Vitest 340 文件 3568 通过、typecheck、lint、协议 v40、双端构建、浏览器 pending-stop
+  （10 项全过）、跨宿主恢复（loop-core-restart / loop-recovery-process / loop-running-takeover）通过。
+- 未覆盖：容器重建端到端（本机无 Docker）；Linux 实机；窗口二整合（cluster A + import B +
+  restart restore A 的组合回归）待 W2-HANDOFF.md 后执行。
