@@ -1163,6 +1163,8 @@ export type ClientMessage =
 	| { type: "destroy_sandbox"; path: string }
 	| { type: "switch_worktree"; path: string }
 	| { type: "remove_worktree"; path: string; force?: boolean }
+	/** 重新读取当前工作区的 Git 工作树状态（任务工作树被删除后由界面发起）。 */
+	| { type: "refresh_worktree" }
 	/** Permanently delete a persisted session transcript file (history list). */
 	| { type: "delete_session"; path: string }
 	/** Append a session_info name entry to a persisted session transcript (history rename). */

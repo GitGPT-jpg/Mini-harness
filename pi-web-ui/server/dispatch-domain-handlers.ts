@@ -110,6 +110,9 @@ export function handleWorktreeMessage(msg: ClientMessage, cs: DispatchSession): 
 		case "remove_worktree":
 			void cs.removeWorktree?.(msg.path, msg.force);
 			return true;
+		case "refresh_worktree":
+			void cs.refreshWorktreeInfo?.();
+			return true;
 		default:
 			return false;
 	}

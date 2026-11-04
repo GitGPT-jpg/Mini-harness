@@ -6,30 +6,59 @@
  *    - 强视觉提示当前分支与关联主仓库；
  *    - 一键切回主仓库 (main)；
  *    - 一键清理/销毁工作树。
- * 2. 状态二：当前在主仓库，但检测到名下有尚未清理的子工作树（含修改/隔离分支）：
- *    - 提醒用户有未合入或未清理的工作树，防止漏改；
- *    - 支持一键切换过去查看或一键清理。
+ * 2. 状态二：当前在主仓库，名下有关联工作树：
+ *    - 默认只列出当前任务的工作树（分支 mini-harness/<runId>）和含未提交改动的工作树；
+ *    - 其余收进「更多」，展开后仍可查看状态（未提交改动 / 领先提交数）并切换过去。
  */
 
 import React, { useState, useEffect } from "react";
-import type { WorktreeInfo } from "../types";
+import type { LinkedWorktreeEntry, WorktreeInfo } from "../types";
 import { useT } from "../i18n";
 import { FiX } from "react-icons/fi";
 
 export interface WorktreeBannerProps {
 	worktree: WorktreeInfo;
+	/** 当前对话的代码任务 runId：它的工作树在首页突出显示。 */
+	taskRunId?: string | null;
 	onSwitch: (path: string) => void;
 	onRemove: (path: string, force?: boolean) => void;
 }
 
-export const WorktreeBanner: React.FC<WorktreeBannerProps> = ({ worktree, onSwitch, onRemove }) => {
+/** 首页直接列出的工作树上限，超出的并入「更多」。 */
+const FOCUS_MAX = 3;
+
+const getFolderName = (p: string) => {
+	const parts = p.replace(/\\/g, "/").split("/").filter(Boolean);
+	return parts[parts.length - 1] || p;
+};
+
+/** 任务工作树：分支 mini-harness/<runId>，目录 <runsRoot>/<runId>/worktree。 */
+export function isTaskWorktree(w: LinkedWorktreeEntry, runId: string | null | undefined): boolean {
+	if (!runId) return false;
+	return w.branch === `mini-harness/${runId}` || w.path.replace(/\\/g, "/").endsWith(`/${runId}/worktree`);
+}
+
+const readDismissed = (key: string, sig: string) => {
+	try {
+		return sessionStorage.getItem(key) === sig;
+	} catch {
+		return false;
+	}
+};
+
+export const WorktreeBanner: React.FC<WorktreeBannerProps> = ({ worktree, taskRunId, onSwitch, onRemove }) => {
 	const t = useT();
 	const [expanded, setExpanded] = useState(false);
-
-	const getFolderName = (p: string) => {
-		const parts = p.replace(/\\/g, "/").split("/").filter(Boolean);
-		return parts[parts.length - 1] || p;
-	};
+	const linked = worktree.linkedWorktrees || [];
+	const linkedSig = linked
+		.map((w) => `${w.path}:${w.branch ?? ""}:${w.isDirty}`)
+		.sort()
+		.join(";");
+	const dismissKey = `pi-worktree-dismiss:${worktree.mainPath}`;
+	const [isDismissed, setIsDismissed] = useState(() => readDismissed(dismissKey, linkedSig));
+	useEffect(() => {
+		setIsDismissed(readDismissed(dismissKey, linkedSig));
+	}, [dismissKey, linkedSig]);
 
 	// 状态一：当前工作区就是子工作树
 	if (worktree.isLinkedWorktree) {
@@ -74,30 +103,7 @@ export const WorktreeBanner: React.FC<WorktreeBannerProps> = ({ worktree, onSwit
 		);
 	}
 
-	// 状态二：当前在主仓库，名下有子工作树
-	const linked = worktree.linkedWorktrees || [];
-	const linkedSig = linked
-		.map((w) => `${w.path}:${w.branch ?? ""}:${w.isDirty}`)
-		.sort()
-		.join(";");
-	const dismissKey = `pi-worktree-dismiss:${worktree.mainPath}`;
-
-	const [isDismissed, setIsDismissed] = useState(() => {
-		try {
-			return sessionStorage.getItem(dismissKey) === linkedSig;
-		} catch {
-			return false;
-		}
-	});
-
-	useEffect(() => {
-		try {
-			setIsDismissed(sessionStorage.getItem(dismissKey) === linkedSig);
-		} catch {
-			// ignore
-		}
-	}, [dismissKey, linkedSig]);
-
+	// 状态二：当前在主仓库，名下有关联工作树
 	if (linked.length === 0 || isDismissed) {
 		return null;
 	}
@@ -111,56 +117,78 @@ export const WorktreeBanner: React.FC<WorktreeBannerProps> = ({ worktree, onSwit
 		}
 	};
 
+	// 首页只突出当前任务的工作树和含未提交改动的工作树，其余收进「更多」
+	const isTask = (w: LinkedWorktreeEntry) => isTaskWorktree(w, taskRunId);
+	const focus = [...linked.filter(isTask), ...linked.filter((w) => w.isDirty && !isTask(w))];
+	const shown = focus.slice(0, FOCUS_MAX);
+	const rest = linked.filter((w) => !shown.includes(w));
 	const dirtyCount = linked.filter((w) => w.isDirty).length;
-	const namesSummary = linked
-		.map((w) => {
-			const b = w.branch || getFolderName(w.path);
-			return w.isDirty ? `${b}*` : b;
-		})
-		.join(" · ");
 
-	return (
-		<div className="worktree-banner notice" role="region" aria-label="Git Worktrees">
-			<div className="worktree-banner-info">
-				<span className="worktree-banner-title">
-					⚠️ {t("worktreeBannerUncleanedTitle", { count: linked.length })}
-					{dirtyCount > 0 && (
-						<span className="lp-worktree-badge dirty">{t("worktreeBadgeDirtyCount", { count: dirtyCount })}</span>
+	const row = (wt: LinkedWorktreeEntry) => {
+		const name = wt.branch || getFolderName(wt.path);
+		return (
+			<div key={wt.path} className="worktree-expand-row" data-worktree-path={wt.path}>
+				<span className="worktree-expand-name" title={wt.path}>
+					<span className="worktree-expand-label">{name}</span>
+					{isTask(wt) && <span className="lp-worktree-badge task">{t("worktreeTagTask")}</span>}
+					{wt.isDirty ? (
+						<span className="lp-worktree-badge dirty">
+							{t("worktreeBadgeDirtyCount", { count: wt.uncommittedCount || 1 })}
+						</span>
+					) : (
+						<span className="lp-worktree-badge plain">{t("worktreeTagClean")}</span>
+					)}
+					{!!wt.aheadCount && (
+						<span className="lp-worktree-badge plain">{t("worktreeTagAhead", { count: wt.aheadCount })}</span>
 					)}
 				</span>
-				<span className="worktree-banner-desc">{t("worktreeBannerUncleanedDesc", { names: namesSummary })}</span>
+				<div className="worktree-expand-actions">
+					<button
+						type="button"
+						className="worktree-banner-btn"
+						title={t("worktreeActionSwitchToTip", { name })}
+						onClick={() => onSwitch(wt.path)}
+					>
+						➡️ {t("worktreeActionSwitch")}
+					</button>
+					<button
+						type="button"
+						className="worktree-banner-btn danger"
+						title={t("worktreeActionRemoveTip")}
+						aria-label={t("worktreeActionRemove")}
+						onClick={() => {
+							if (window.confirm(t("worktreeActionRemoveConfirm", { path: name }))) {
+								onRemove(wt.path);
+							}
+						}}
+					>
+						🗑️
+					</button>
+				</div>
+			</div>
+		);
+	};
+
+	return (
+		<div className={`worktree-banner ${dirtyCount > 0 ? "notice" : "quiet"}`} role="region" aria-label="Git Worktrees">
+			<div className="worktree-banner-info">
+				<span className="worktree-banner-title">
+					{dirtyCount > 0 ? "⚠️" : "🌿"} {t("worktreeBannerLinkedTitle", { count: linked.length })}
+					{dirtyCount > 0 && (
+						<span className="lp-worktree-badge dirty">{t("worktreeDirtyTrees", { count: dirtyCount })}</span>
+					)}
+				</span>
+				{shown.length === 0 && <span className="worktree-banner-desc">{t("worktreeBannerNoFocus")}</span>}
 			</div>
 			<div className="worktree-banner-actions">
-				{linked.slice(0, 2).map((wt) => {
-					const name = wt.branch || getFolderName(wt.path);
-					return (
-						<React.Fragment key={wt.path}>
-							<button
-								type="button"
-								className="worktree-banner-btn"
-								title={t("worktreeActionSwitchToTip", { name })}
-								onClick={() => onSwitch(wt.path)}
-							>
-								➡️ {t("worktreeActionSwitchTo", { name })}
-							</button>
-							<button
-								type="button"
-								className="worktree-banner-btn danger"
-								title={t("worktreeActionRemoveTip")}
-								onClick={() => {
-									if (window.confirm(t("worktreeActionRemoveConfirm", { path: name }))) {
-										onRemove(wt.path);
-									}
-								}}
-							>
-								🗑️
-							</button>
-						</React.Fragment>
-					);
-				})}
-				{linked.length > 2 && (
-					<button type="button" className="worktree-banner-btn" onClick={() => setExpanded(!expanded)}>
-						{expanded ? t("worktreeActionCollapse") : t("worktreeActionMore", { count: linked.length - 2 })}
+				{rest.length > 0 && (
+					<button
+						type="button"
+						className="worktree-banner-btn worktree-more-toggle"
+						aria-expanded={expanded}
+						onClick={() => setExpanded(!expanded)}
+					>
+						{expanded ? t("worktreeActionCollapse") : t("worktreeActionMore", { count: rest.length })}
 					</button>
 				)}
 				<button
@@ -173,41 +201,8 @@ export const WorktreeBanner: React.FC<WorktreeBannerProps> = ({ worktree, onSwit
 					<FiX aria-hidden />
 				</button>
 			</div>
-			{expanded && linked.length > 2 && (
-				<div className="worktree-banner-expand">
-					{linked.slice(2).map((wt) => {
-						const name = wt.branch || getFolderName(wt.path);
-						return (
-							<div key={wt.path} className="worktree-expand-row">
-								<span className="worktree-expand-name">
-									{name}
-									{wt.isDirty && (
-										<span className="lp-worktree-badge dirty">
-											{t("worktreeBadgeDirtyCount", { count: wt.uncommittedCount || 1 })}
-										</span>
-									)}
-								</span>
-								<div className="worktree-expand-actions">
-									<button type="button" className="worktree-banner-btn" onClick={() => onSwitch(wt.path)}>
-										➡️ {t("worktreeActionSwitchTo", { name })}
-									</button>
-									<button
-										type="button"
-										className="worktree-banner-btn danger"
-										onClick={() => {
-											if (window.confirm(t("worktreeActionRemoveConfirm", { path: name }))) {
-												onRemove(wt.path);
-											}
-										}}
-									>
-										🗑️
-									</button>
-								</div>
-							</div>
-						);
-					})}
-				</div>
-			)}
+			{shown.length > 0 && <div className="worktree-banner-expand worktree-focus">{shown.map(row)}</div>}
+			{expanded && rest.length > 0 && <div className="worktree-banner-expand worktree-more">{rest.map(row)}</div>}
 		</div>
 	);
 };

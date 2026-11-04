@@ -6936,6 +6936,12 @@
         border: 1px solid rgba(245, 158, 11, 0.35);
     }
 
+    /* 没有需要处理的工作树：只留一行可展开的入口 */
+    .worktree-banner.quiet {
+        background: color-mix(in srgb, var(--text) 4%, transparent);
+        border: 1px solid var(--border);
+    }
+
     .worktree-banner-info {
         display: flex;
         flex-direction: column;
@@ -7060,6 +7066,18 @@
         color: var(--red);
     }
 
+    .lp-worktree-badge.task {
+        background: color-mix(in srgb, var(--accent) 14%, transparent);
+        border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+        color: var(--text);
+    }
+
+    .lp-worktree-badge.plain {
+        background: color-mix(in srgb, var(--text) 6%, transparent);
+        border: 1px solid var(--border);
+        color: var(--text-dim);
+    }
+
     .worktree-banner-expand {
         width: 100%;
         display: flex;
@@ -7074,7 +7092,9 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
+        gap: 8px;
         font-size: 11px;
+        min-width: 0;
     }
 
     .worktree-expand-name {
@@ -7082,12 +7102,31 @@
         align-items: center;
         gap: 4px;
         color: var(--text-dim);
+        min-width: 0;
+    }
+
+    .worktree-expand-label {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .worktree-focus {
+        margin-top: 0;
+        padding-top: 0;
+        border-top: none;
+    }
+
+    .worktree-focus .worktree-expand-name {
+        color: var(--text);
     }
 
     .worktree-expand-actions {
         display: flex;
         align-items: center;
         gap: 4px;
+        flex-shrink: 0;
     }
 
     .project-icon.sandbox-icon {

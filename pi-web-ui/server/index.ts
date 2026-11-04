@@ -1122,6 +1122,7 @@ export interface DispatchSession {
 	destroySandbox?(path: string): Promise<void>;
 	switchWorktree?(path: string): Promise<void>;
 	removeWorktree?(path: string, force?: boolean): Promise<void>;
+	refreshWorktreeInfo?(): Promise<void>;
 	deleteSession(path: string): Promise<void>;
 	renameSession(path: string, name: string): Promise<void>;
 	renameConversation(id: string, name: string): Promise<void>;

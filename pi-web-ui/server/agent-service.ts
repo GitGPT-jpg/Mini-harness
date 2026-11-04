@@ -12714,6 +12714,8 @@ export class ClientSession {
 		);
 		lines.push("不要向用户提问。");
 		if (st.worktreeBranch && st.worktreeDir) {
+			// 首页工作树横幅要立即列出这个任务的工作树
+			void this.refreshWorktreeInfo?.();
 			// worktree 执行者会话：模型工具/终端/validator/reviewer 全落独立 worktree，不污染 base 工作区
 			await this.startWorktreeExecutor(conv, st, lines.join("\n"), executorSpec);
 		} else if (workspaceDiffers || executorSpec) {

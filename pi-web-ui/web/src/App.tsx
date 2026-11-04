@@ -1544,6 +1544,7 @@ export function App() {
 									{chat.state.worktree && (
 										<WorktreeBanner
 											worktree={chat.state.worktree}
+											taskRunId={chat.state.loop?.kind === "run" ? (chat.state.loop.runId ?? null) : null}
 											onSwitch={(path) => send({ type: "switch_worktree", path })}
 											onRemove={(path, force) => send({ type: "remove_worktree", path, force })}
 										/>
