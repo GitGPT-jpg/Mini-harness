@@ -1,6 +1,6 @@
 {
 	"name": "pi-web-ui",
-	"version": "1.0.1",
+	"version": "1.5.0",
 	"description": "训推引擎组 Harness — pi 推理工程驾驶舱，支持对话、终端、Skills、知识库与受控 Loop",
 	"license": "MIT",
 	"author": {
