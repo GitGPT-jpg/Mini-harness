@@ -272,7 +272,8 @@ describe("收下后协调 Git index（P2）", () => {
 			const commit = git(repo, "commit-tree", tree, "-p", base, "-m", "accept");
 			git(repo, "update-ref", `refs/heads/${branch}`, commit);
 			git(repo, "read-tree", base); // 故意让 index 停在旧 HEAD（分支保持 commit）
-			const again = finalizeVerifiedCommit(repo, branch, commit, tree, "accept");
+			// 幂等重入：expectedParent = 收下前的 HEAD = commit 的父提交。
+			const again = finalizeVerifiedCommit(repo, branch, base, tree, "accept");
 			expect(again.ok).toBe(true);
 			expect(again.commit).toBeNull();
 			expect(git(repo, "rev-parse", "HEAD")).toBe(commit);

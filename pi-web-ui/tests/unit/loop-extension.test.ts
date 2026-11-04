@@ -491,13 +491,18 @@ describe("mini-harness loop extension", () => {
 		git("init", "-q");
 		git("config", "user.email", "t@example.com");
 		git("config", "user.name", "t");
-		writeFileSync(join(wt, "a.txt"), "x");
+		writeFileSync(join(wt, "a.txt"), "baseline");
+		git("add", "-A");
+		git("commit", "-qm", "baseline");
 		const h = makeHarness(SID(), { review: "这不是 JSON" });
 		const start = await h.tools
 			.get("loop_start")!
 			.execute("t", { goal: "g", validateCmd: "true" }, undefined, undefined, h.ctx);
 		const runId = start.details.runId;
-		patchRun(runId, { worktreeDir: wt, worktreeBranch: `mini-harness/${runId}` });
+		// 运行内容落在 git worktree：冻结快照从 worktree 生成，收下提交到独立分支（P2 收尾）。
+		patchRun(runId, { workspace: wt, worktreeDir: wt, worktreeBranch: `mini-harness/${runId}` });
+		git("checkout", "-qb", `mini-harness/${runId}`);
+		writeFileSync(join(wt, "a.txt"), "x"); // 本轮改动
 		await h.tools.get("loop_done")!.execute("t", { summary: "s" }, undefined, undefined, h.ctx);
 		await h.handlers.get("agent_end")![0](undefined, h.ctx);
 		expect(loadRun(runId)).toMatchObject({ stopReason: "reviewer-error", worktreeCommitted: false });

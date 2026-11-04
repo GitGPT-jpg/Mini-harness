@@ -909,12 +909,14 @@ interface ValidationResult {
 	workspaceChangedDuringValidation: boolean;
 }
 
-function resolveValidator(st: LoopState) {
+function resolveValidator(st: LoopState, dir?: string) {
 	if (st.validateCmd) {
 		return { cmd: "bash", args: ["-lc", st.validateCmd], label: st.validateCmd };
 	}
 	const candidates: string[] = [];
-	if (st.workspace) candidates.push(path.join(st.workspace, "validate.py"));
+	// 物化冻结目录优先：validator 从冻结内容中解析（执行 cwd 也指向冻结目录）。
+	const base = dir ?? st.workspace;
+	if (base) candidates.push(path.join(base, "validate.py"));
 	if (st.harnessRoot) candidates.push(path.join(st.harnessRoot, "validate.py"));
 	if (process.env.HARNESS_ROOT) candidates.push(path.join(process.env.HARNESS_ROOT, "validate.py"));
 	for (const p of candidates) {
@@ -975,6 +977,15 @@ async function validationFromOperation(st: LoopState, opId: string): Promise<Val
 		throw new Error("缺少执行前身份");
 	if (op.snapshotSha !== identity.snapshotSha || op.snapshotRef !== identity.snapshotRef)
 		throw new Error("结果快照身份冲突");
+	// operation 的执行 cwd 必须等于冻结目录（恢复时同 run 目录复用；缺失即未验收状态）。
+	if (identity.frozenDir && real(op.cwd) !== real(identity.frozenDir)) {
+		throw new Error("操作执行目录与冻结内容不一致");
+	}
+	// 冻结目录未被改写：validator 若改写了纳入验收的源码，结果失效并重新冻结验证。
+	if (identity.frozenHash && identity.frozenDir) {
+		if (frozenDirectoryHash(identity.frozenDir) !== identity.frozenHash)
+			throw new Error("冻结执行目录已被改写，本轮证据失效");
+	}
 	// 同一冻结内容：op.snapshotSha 必须等于冻结快照（上面已校验），此处再把
 	// 当前工作树重建树与冻结树比较。A→B 竞态下即使内容指纹已在 B 上计算，
 	// 树比较仍会把「验证 B、提交 A」识别为漂移。
@@ -1048,6 +1059,7 @@ async function runValidationOnce(pi: ExtensionAPI, st: LoopState): Promise<Valid
 			if (!saveState(st, token)) throw new Error("执行身份提交冲突");
 		}
 		const preCmd = st.precheckCmd ?? "";
+		const execCwd = preId.frozenDir || cwd;
 		const execOptions = {
 			attemptId: st.attemptId,
 			...preId,
@@ -1160,7 +1172,7 @@ async function runValidationOnce(pi: ExtensionAPI, st: LoopState): Promise<Valid
 			}
 		}
 
-		const r = resolveValidator(st);
+		const r = resolveValidator(st, execCwd);
 		if (!r) {
 			return {
 				pass: false,
@@ -1182,7 +1194,7 @@ async function runValidationOnce(pi: ExtensionAPI, st: LoopState): Promise<Valid
 		try {
 			res = await loopExec(r.cmd, r.args, {
 				...execOptions,
-				cwd,
+				cwd: execCwd,
 				timeout: 30 * 60 * 1000,
 				signal: ac.signal,
 				runId: st.runId,
@@ -1282,11 +1294,85 @@ interface AttemptIdentity {
 	snapshotSha: string | null;
 	/** 冻结快照对应的 tree 对象：validator/reviewer/提交绑定的是同一棵树，不是随后的工作树。 */
 	treeSha: string | null;
+	/** 冻结树物化后的隔离执行目录（validator 从这里运行，不读原可变工作树）。 */
+	frozenDir: string | null;
+	/** 冻结目录内容指纹：检测 validator 是否改写了纳入验收的源码。 */
+	frozenHash: string | null;
 	recoverable: boolean;
 }
 
+/**
+ * 把冻结树物化到 run 目录内的隔离执行目录（git archive 保留执行位/符号链接/路径）。
+ * 同名目录已存在且标记相同 tree 时复用；不同则清空重建。跨宿主恢复时同 run 目录直接复用。
+ */
+function materializeFrozenTree(runId: string, round: number, tree: string, workspace: string): string {
+	const dir = path.join(runDir(runId), "frozen", "r" + round);
+	const marker = path.join(dir, ".frozen-tree");
+	try {
+		if (fs.existsSync(marker) && fs.readFileSync(marker, "utf8").trim() === tree) return dir;
+		fs.rmSync(dir, { recursive: true, force: true });
+		fs.mkdirSync(dir, { recursive: true });
+		const archive = execFileSync("git", ["--no-optional-locks", "-C", workspace, "archive", tree], {
+			timeout: 30000,
+			maxBuffer: 256 * 1024 * 1024,
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+		const untar = execFileSync("tar", ["-x", "-C", dir], {
+			input: archive,
+			timeout: 30000,
+			stdio: ["pipe", "pipe", "pipe"],
+		});
+		void untar;
+		fs.writeFileSync(marker, tree + "\n");
+		return dir;
+	} catch (error) {
+		throw new Error("冻结树物化受阻：" + String((error as Error).message || error).slice(0, 300));
+	}
+}
+
+/** 冻结目录内容指纹（非 git 目录：目录项相对路径 + 模式 + sha256）。 */
+function frozenDirectoryHash(dir: string): string | null {
+	try {
+		const parts: string[] = [];
+		const walk = (current: string) => {
+			for (const entry of fs.readdirSync(current, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+				if (entry.name === ".frozen-tree") continue;
+				const full = path.join(current, entry.name);
+				const rel = path.relative(dir, full);
+				if (entry.isDirectory()) {
+					parts.push("d " + rel);
+					walk(full);
+				} else if (entry.isSymbolicLink()) {
+					parts.push("l " + rel + " -> " + fs.readlinkSync(full));
+				} else if (entry.isFile()) {
+					const mode = fs.statSync(full).mode & 0o7777;
+					parts.push(
+						"f " +
+							rel +
+							" " +
+							mode.toString(8) +
+							" " +
+							crypto.createHash("sha256").update(fs.readFileSync(full)).digest("hex"),
+					);
+				}
+			}
+		};
+		walk(dir);
+		return crypto.createHash("sha256").update(parts.join("\n")).digest("hex");
+	} catch {
+		return null;
+	}
+}
+
 async function captureAttemptIdentity(st: LoopState, token: ExecToken): Promise<AttemptIdentity> {
-	const blocked = (): AttemptIdentity => ({ snapshotRef: null, snapshotSha: null, treeSha: null, recoverable: false });
+	const blocked = (): AttemptIdentity => ({
+		snapshotRef: null,
+		snapshotSha: null,
+		treeSha: null,
+		frozenDir: null,
+		frozenHash: null,
+		recoverable: false,
+	});
 	try {
 		if (!stillCurrent(token)) return blocked();
 		const sha = await createWorkspaceSnapshot(st.workspace);
@@ -1303,7 +1389,11 @@ async function captureAttemptIdentity(st: LoopState, token: ExecToken): Promise<
 		if (!tree) throw new Error("冻结快照缺少可核对的 tree 对象");
 		const ref = "refs/mini-harness/checkpoints/" + st.runId + "-r" + st.round;
 		gitSync(["-C", st.workspace, "update-ref", ref, sha], st.workspace, 15000);
-		return { snapshotRef: ref, snapshotSha: sha, treeSha: tree, recoverable: true };
+		// 物化冻结树到隔离执行目录：validator/reviewer 从这里读取，原工作树不再参与。
+		const frozenDir = materializeFrozenTree(st.runId, st.round, tree, st.workspace);
+		const frozenHash = frozenDirectoryHash(frozenDir);
+		if (!frozenHash) throw new Error("冻结目录身份不可用");
+		return { snapshotRef: ref, snapshotSha: sha, treeSha: tree, frozenDir, frozenHash, recoverable: true };
 	} catch (error) {
 		// 阻断原因不外泄内容：统一为冻结快照受阻。
 		throw new Error("执行内容冻结受阻：" + String((error as Error).message || error).slice(0, 300));
@@ -1485,7 +1575,7 @@ function nextRoundPrompt(st: LoopState, v: { code?: number | null; output?: stri
 
 // ---------- 证据采集与评审 ----------
 
-async function collectDiff(pi: ExtensionAPI, st: LoopState) {
+async function collectDiff(pi: ExtensionAPI, st: LoopState, frozenDir?: string) {
 	try {
 		// git diff 不包含未跟踪的新文件；非 git 目录还要回退成目录快照，reviewer 才能核验真实状态。
 		const script = [
@@ -1504,7 +1594,8 @@ async function collectDiff(pi: ExtensionAPI, st: LoopState) {
 				'do echo "--- $f ---"; head -c 2000 "$f" 2>/dev/null; echo; done',
 			"fi",
 		].join("\n");
-		const res = await pi.exec("bash", ["-lc", script], { cwd: st.workspace, timeout: 30000 });
+		const evidenceCwd = frozenDir && fs.existsSync(frozenDir) ? frozenDir : st.workspace;
+		const res = await pi.exec("bash", ["-lc", script], { cwd: evidenceCwd, timeout: 30000 });
 		let out = `${res.stdout || ""}${res.stderr ? "\n" + res.stderr : ""}`;
 		// 外部产物根（artifact roots）：workspace 之外的真实产出，reviewer 也必须能看到
 		for (const root of st.artifactRoots || []) {
@@ -1577,7 +1668,7 @@ async function runReview(ctx: LoopCtx, st: LoopState, v: { code?: number | null;
 	if (!model) {
 		return { verdict: "error", reasons: ["reviewer model unavailable"], diff: "" };
 	}
-	const diff = await collectDiff(pi, st);
+	const diff = await collectDiff(pi, st, st.validationIdentity?.frozenDir ?? undefined);
 	if (!stillCurrent(token)) throw new Error("评审执行权已失效");
 	const system =
 		"你是独立审查者。下面给出的是「运行时自动采集的真实证据」：工作区快照" +
@@ -1780,52 +1871,57 @@ export function finalizeVerifiedCommit(
 			...(input !== undefined ? { input } : {}),
 		});
 	try {
+		const treeEntry = (sha: string, rel: string) => {
+			try {
+				const out = run(["ls-tree", "-z", sha + "^{tree}", "--", rel])
+					.split("\0")
+					.filter(Boolean)[0];
+				if (!out) return null;
+				return { mode: out.split(" ")[1]!, blob: out.split(" ")[2]!.split("\t")[0]! };
+			} catch {
+				return null;
+			}
+		};
 		const tip = run(["rev-parse", "--verify", "refs/heads/" + branch]).trim();
 		const tipTree = run(["rev-parse", tip + "^{tree}"]).trim();
 		let commit: string | null = null;
 		if (tipTree !== tree) {
 			// 引用必须先等于预期旧 SHA：并发推进时要么同一内容（幂等接续），要么明确拒绝。
 			if (tip !== expectedParent) return { ok: false, error: "worktree 分支已被并发推进，未覆盖他人提交" };
-			// 冲突预检：用户 staged 与「旧 HEAD → 收下树」同路径但内容不同 → 更新引用前拒绝。
+			// 冲突预检：用户 staged（含 staged 删除与仅模式变化）与「旧 HEAD → 收下树」同路径
+			// 且内容/模式不同 → 更新引用前拒绝。
 			// 用户 staged = 真实 index 相对「旧 HEAD」的差异（而不是相对即将推进的新 HEAD）。
 			const staged = run(["diff", "--cached", expectedParent, "--name-only", "-z"]).split("\0").filter(Boolean);
 			for (const rel of staged) {
 				const entry = run(["ls-files", "--stage", "-z", "--", rel]).split("\0").filter(Boolean)[0];
-				if (!entry) continue;
-				const tab = entry.indexOf("\t");
-				const stagedBlob = entry.slice(0, tab).split(" ")[1];
-				const blobIn = (sha: string) => {
-					try {
-						const out = run(["ls-tree", "-z", sha + "^{tree}", "--", rel])
-							.split("\0")
-							.filter(Boolean)[0];
-						return out ? out.split(" ")[2].split("\t")[0] : "";
-					} catch {
-						return "";
-					}
-				};
-				const oldBlob = blobIn(expectedParent);
-				const newBlob = blobIn(tree);
-				// 冲突只在「收下改动了该路径」且用户 staged 第三种内容时成立；
+				// 无条目 = staged 删除。
+				const stagedEntry = entry
+					? (() => {
+							const tab = entry.indexOf("\t");
+							const meta = entry.slice(0, tab).split(" ");
+							return { mode: meta[0]!, blob: meta[1]! };
+						})()
+					: null;
+				const oldEntry = treeEntry(expectedParent, rel);
+				const newEntry = treeEntry(tree, rel);
+				const oldKey = oldEntry ? oldEntry.mode + ":" + oldEntry.blob : "";
+				const newKey = newEntry ? newEntry.mode + ":" + newEntry.blob : "";
+				const stagedKey = stagedEntry ? stagedEntry.mode + ":" + stagedEntry.blob : "";
+				// 冲突只在「收下改动了该路径（mode/blob）」且用户 staged 第三种状态时成立；
 				// 收下未触及的路径上的 staged 内容是用户的独立暂存，保留即可。
-				if (oldBlob !== newBlob && stagedBlob && stagedBlob !== newBlob && stagedBlob !== oldBlob) {
+				if (oldKey !== newKey && stagedKey !== newKey && stagedKey !== oldKey) {
 					return { ok: false, error: "暂存内容与收下的改动冲突（" + rel + "），未更新分支引用" };
 				}
 			}
 			commit = run(["commit-tree", tree, "-p", tip, "-m", message]).trim();
-			run(["update-ref", "refs/heads/" + branch, commit]);
+			// update-ref 自身携带预期旧 SHA（CAS）：关闭「检查之后、推进之前」的并发窗口。
+			run(["update-ref", "refs/heads/" + branch, commit, tip]);
 		}
 		// 协调 index：新 index = 收下树 + 用户额外 staged（staged 与收下树不同的条目）。
 		// 工作树与 unstaged 改动不动；重写真实 index 为原子拷贝。
 		// 「用户暂存」按收下前的旧 HEAD 判定：幂等重入时旧 HEAD 是当前 tip 的父提交。
-		let preHead = tip;
-		if (tipTree === tree) {
-			try {
-				preHead = run(["rev-parse", tip + "^"]).trim();
-			} catch {
-				preHead = tip;
-			}
-		}
+		// 收下前的旧 HEAD 恒为 expectedParent：调用方保证（幂等重入时传 tip 的父提交）。
+		const preHead = expectedParent;
 		const gitDir = run(["rev-parse", "--absolute-git-dir"]).trim();
 		const tmp = path.join(gitDir, `pi-finalize-index-${process.pid}-${crypto.randomBytes(6).toString("hex")}`);
 		try {
@@ -1836,7 +1932,15 @@ export function finalizeVerifiedCommit(
 			const extra: string[] = [];
 			for (const rel of stagedNow) {
 				const entry = run(["ls-files", "--stage", "-z", "--", rel]).split("\0").filter(Boolean)[0];
-				if (!entry) continue;
+				if (!entry) {
+					// staged 删除：收下未改动的路径（old==new）→ 保留用户删除（全零条目）。
+					const oldEntry = treeEntry(preHead, rel);
+					const newEntry = treeEntry(tree, rel);
+					const oldKey = oldEntry ? oldEntry.mode + ":" + oldEntry.blob : "";
+					const newKey = newEntry ? newEntry.mode + ":" + newEntry.blob : "";
+					if (oldKey === newKey) extra.push("0 0000000000000000000000000000000000000000 0\t" + rel);
+					continue;
+				}
 				const tab = entry.indexOf("\t");
 				const meta = entry.slice(0, tab).split(" ");
 				const blobIn = (sha: string) => {
@@ -1857,7 +1961,18 @@ export function finalizeVerifiedCommit(
 			}
 			const realIndex = run(["rev-parse", "--git-path", "index"]).trim();
 			const realPath = path.resolve(worktree, realIndex);
-			fs.copyFileSync(tmp, realPath);
+			// 按 git lockfile 协议发布：index.lock 存在 = 并发 git 操作占用 → 明确受阻可重试；
+			// 否则写 lock 后原子 rename 到真实 index。
+			const lockPath = realPath + ".lock";
+			const lockFd = fs.openSync(lockPath, "wx", 0o600);
+			try {
+				const content = fs.readFileSync(tmp);
+				fs.writeFileSync(lockFd, content);
+				fs.fsyncSync(lockFd);
+			} finally {
+				fs.closeSync(lockFd);
+			}
+			fs.renameSync(lockPath, realPath);
 		} finally {
 			fs.rmSync(tmp, { force: true });
 		}
@@ -1880,7 +1995,17 @@ async function commitVerifiedWorktreeTree(st: LoopState): Promise<string | null 
 	}
 	if (!evidenceStillValid(st)) return "drift";
 	const branch = st.worktreeBranch!;
-	const parent = gitSync(["-C", worktree, "rev-parse", "--verify", "refs/heads/" + branch], worktree, 15000).trim();
+	const tip = gitSync(["-C", worktree, "rev-parse", "--verify", "refs/heads/" + branch], worktree, 15000).trim();
+	const tipTree = gitSync(["-C", worktree, "rev-parse", tip + "^{tree}"], worktree, 15000).trim();
+	// 幂等重入（tip 树已等于收下树）：收下前 HEAD 是 tip 的父提交。
+	let parent = tip;
+	if (tipTree === tree) {
+		try {
+			parent = gitSync(["-C", worktree, "rev-parse", tip + "^"], worktree, 15000).trim();
+		} catch {
+			parent = tip;
+		}
+	}
 	const result = finalizeVerifiedCommit(worktree, branch, parent, tree, `mini-harness run ${st.runId}`);
 	if (!result.ok) throw new Error(result.error);
 	return result.commit;
@@ -3409,14 +3534,8 @@ export function acceptRunValidatorOnly(runId: string): { ok: boolean; error?: st
 				);
 				if (!result.ok) throw new Error(result.error);
 			} else {
-				// 无预存快照（非快照路径的旧状态）：退化为 add+commit，每步之间核对控制权。
-				gitSync(["-C", st.worktreeDir, "add", "-A"], st.worktreeDir, 60000);
-				assertAcceptControl();
-				const staged = gitSync(["-C", st.worktreeDir, "diff", "--cached", "--name-only"], st.worktreeDir, 60000);
-				if (staged.trim()) {
-					assertAcceptControl();
-					gitSync(["-C", st.worktreeDir, "commit", "-m", `mini-harness run ${st.runId}`], st.worktreeDir, 60000);
-				}
+				// Git 工作区禁止 git add -A 回退提交：无冻结树即明确受阻。
+				throw new Error("缺少已验证冻结快照，无法安全收下（git 工作区不提供回退提交）");
 			}
 			assertAcceptControl();
 			st.worktreeCommitted = true;
@@ -3554,6 +3673,11 @@ function syncCurrentTreeSha(cwd: string): string | null {
 function frozenContentMatches(st: LoopState): boolean {
 	const identity = st.validationIdentity;
 	if (!identity || identity.round !== st.round || identity.attemptId !== st.attemptId) return false;
+	// 冻结目录（validator 实际读取的内容）必须未被改写。
+	if (identity.frozenHash && identity.frozenDir && frozenDirectoryHash(identity.frozenDir) !== identity.frozenHash) {
+		return false;
+	}
+	// 原工作树仍须与冻结树一致：验证/评审期间模型的新改动进入下一轮重新验证。
 	if (identity.treeSha) {
 		return syncCurrentTreeSha(st.workspace) === identity.treeSha;
 	}
