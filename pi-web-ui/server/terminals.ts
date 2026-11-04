@@ -993,8 +993,9 @@ export class TerminalManager {
 	 *  noteAgentActivity）。宿主自行判断会话是否在运行并决定是否注入。 */
 	onAgentIdle: ((terminalId: string, idleMs: number, title: string, lastLines: string) => void) | null = null;
 
-	/** 宿主回调：每次起 PTY 前调整环境（运行中任务的集群绑定）；null = 原样用 shellEnv()。 */
-	envFor: ((env: Record<string, string>) => Record<string, string>) | null = null;
+	/** 宿主回调：每次起 PTY 前调整环境（运行中任务的集群绑定）；null = 原样用 shellEnv()。
+	 *  agent = 由 Agent 发起（终端接管 bash 或终端工具创建），用户在界面手开的终端为 false。 */
+	envFor: ((env: Record<string, string>, ctx: { agent: boolean }) => Record<string, string>) | null = null;
 
 	constructor(
 		private emit: (msg: ServerMessage) => void,
@@ -1017,7 +1018,7 @@ export class TerminalManager {
 		rows: number,
 		fallbackCwd: string,
 		title?: string,
-		opts?: { forceBash?: boolean; agentBash?: boolean; locale?: string },
+		opts?: { forceBash?: boolean; agentBash?: boolean; locale?: string; agentTool?: boolean },
 	): TerminalInfo | null {
 		const valid = this.validateId(id);
 		if (valid) {
@@ -1061,6 +1062,7 @@ export class TerminalManager {
 				opts?.forceBash,
 				priorAgentBash,
 				opts?.locale,
+				opts?.agentTool === true,
 			)
 		) {
 			this.maybeEmitTccHint(id);
@@ -1189,6 +1191,8 @@ export class TerminalManager {
 		forceBash?: boolean,
 		agentBash = false,
 		locale?: string,
+		/** 终端工具（terminal_create）由 Agent 创建：起进程的环境按 Agent 归属处理。 */
+		agentTool = false,
 	): boolean {
 		let abs = cwd;
 		let shell: string;
@@ -1248,7 +1252,7 @@ export class TerminalManager {
 					cols: Math.max(2, Math.floor(cols) || 80),
 					rows: Math.max(2, Math.floor(rows) || 24),
 					cwd: abs,
-					env: this.envFor ? this.envFor(shellEnv()) : shellEnv(),
+					env: this.envFor ? this.envFor(shellEnv(), { agent: agentBash || agentTool }) : shellEnv(),
 				});
 			}
 		} catch (err) {
@@ -2443,7 +2447,9 @@ export function makePersistentTerminalTools(
 				const lang = getLang();
 				const safeCols = Math.max(2, Math.min(500, Math.floor(p.cols ?? 120)));
 				const safeRows = Math.max(2, Math.min(200, Math.floor(p.rows ?? 40)));
-				const info = terminals.create(p.terminalId, p.cwd ?? cwd, safeCols, safeRows, cwd, p.terminalId);
+				const info = terminals.create(p.terminalId, p.cwd ?? cwd, safeCols, safeRows, cwd, p.terminalId, {
+					agentTool: true,
+				});
 				const infoJson = JSON.stringify(info);
 				if (!info)
 					throw new Error(

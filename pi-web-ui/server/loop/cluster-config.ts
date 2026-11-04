@@ -75,7 +75,9 @@ export interface ClusterBinding {
 	generation: number;
 	status: "pinned" | "none" | "blocked";
 	context: string | null;
-	reason: "no-kubectl" | "snapshot-failed" | "snapshot-missing" | "snapshot-changed" | null;
+	reason: "no-kubectl" | "snapshot-failed" | "snapshot-unpinnable" | "snapshot-missing" | "snapshot-changed" | null;
+	/** 凭据来自配置之外（exec 插件 / auth-provider / 绝对路径 tokenFile）：目标已固定，凭据内容随外部来源刷新。 */
+	externalCredentials: boolean;
 	createdAt: string;
 }
 
@@ -474,7 +476,15 @@ export class ClusterConfig {
 		const base = { key, source: t.source, generation: t.generation, createdAt: new Date().toISOString() };
 		let rec: BindingRecord;
 		if (t.source === "none") {
-			rec = { ...base, status: "none", context: null, reason: null, file: null, sha256: null };
+			rec = {
+				...base,
+				status: "none",
+				context: null,
+				reason: null,
+				externalCredentials: false,
+				file: null,
+				sha256: null,
+			};
 		} else if (t.source === "app" && t.kubeconfig) {
 			let sha: string | null = null;
 			try {
@@ -482,9 +492,26 @@ export class ClusterConfig {
 			} catch {
 				sha = null;
 			}
+			const external = sha ? /^\s*(?:exec|auth-provider|tokenFile):/m.test(readFileSync(t.kubeconfig, "utf8")) : false;
 			rec = sha
-				? { ...base, status: "pinned", context: this.cachedContext(t), reason: null, file: t.kubeconfig, sha256: sha }
-				: { ...base, status: "blocked", context: null, reason: "snapshot-missing", file: null, sha256: null };
+				? {
+						...base,
+						status: "pinned",
+						context: this.cachedContext(t),
+						reason: null,
+						externalCredentials: external,
+						file: t.kubeconfig,
+						sha256: sha,
+					}
+				: {
+						...base,
+						status: "blocked",
+						context: null,
+						reason: "snapshot-missing",
+						externalCredentials: false,
+						file: null,
+						sha256: null,
+					};
 		} else {
 			rec = await this.snapshotBinding(t, base);
 		}
@@ -514,11 +541,16 @@ export class ClusterConfig {
 			status: "blocked",
 			context: null,
 			reason,
+			externalCredentials: false,
 			file: null,
 			sha256: null,
 		});
 		if (res.err) return blocked(res.err.code === "ENOENT" ? "no-kubectl" : "snapshot-failed");
 		if (!/^\s*apiVersion:/m.test(res.stdout) || !/^\s*clusters:/m.test(res.stdout)) return blocked("snapshot-failed");
+		// --flatten 会内联证书 / 私钥文件；仍残留的相对路径引用（如 tokenFile）在快照目录下解析不到原文件，
+		// 快照固定不了 → 受阻，而不是让它在别处解析出另一份凭据。
+		if (/^\s*(?:certificate-authority|client-certificate|client-key|tokenFile):\s*["']?(?![/"'])\S/m.test(res.stdout))
+			return blocked("snapshot-unpinnable");
 		const file = join(this.dir, `bound-${Date.now()}-${randomBytes(3).toString("hex")}.yaml`);
 		try {
 			mkdirSync(this.dir, { recursive: true, mode: 0o700 });
@@ -533,6 +565,7 @@ export class ClusterConfig {
 			status: "pinned",
 			context: safeContext(ctx),
 			reason: null,
+			externalCredentials: /^\s*(?:exec|auth-provider|tokenFile):/m.test(res.stdout),
 			file,
 			sha256: sha256Of(res.stdout),
 		};

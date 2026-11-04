@@ -201,5 +201,62 @@ describe("核实不了就受阻，不落到当前全局配置", () => {
 		expect(await bashTarget((env) => again.envForTask(`run:${RUN_A}`, env))).toBe("TARGET=https://a.example");
 		expect(again.taskBinding("goal:conv-1")).toBeNull();
 		expect(existsSync(goalSnap)).toBe(false);
+		// 重启后 validator 经 operation.ts 取的同样是持久绑定（当前全局已被外部改写成 evil）
+		setActiveClusterConfig(again);
+		const res = await runCommandPersistent("kubectl", ["get", "--raw=/version"], {
+			cwd: ROOT,
+			runId: RUN_A,
+			stage: "validate",
+			round: 2,
+		});
+		expect(res.code).toBe(0);
+		expect(lastTarget()).toBe("TARGET=https://a.example");
+	});
+});
+
+describe("快照能否固定 kubeconfig 引用的文件", () => {
+	it("残留相对路径引用（tokenFile 等）→ 受阻；绝对路径 / exec 插件 → 固定目标并标记外部凭据", async () => {
+		const s = setup("refs");
+		writeFileSync(
+			s.extFile,
+			kubeconfig("https://a.example", "ctx-a", TOKEN_A).replace(`token: ${TOKEN_A}`, "tokenFile: token.txt"),
+		);
+		const cc = s.make();
+		expect(await cc.bindTask(`run:${RUN_A}`)).toMatchObject({ status: "blocked", reason: "snapshot-unpinnable" });
+		expect(await bashTarget((env) => cc.envForTask(`run:${RUN_A}`, env))).toBe(
+			"TARGET=https://harness-cluster-binding-blocked.invalid",
+		);
+		writeFileSync(
+			s.extFile,
+			kubeconfig("https://a.example", "ctx-a", TOKEN_A).replace(
+				`token: ${TOKEN_A}`,
+				`tokenFile: ${join(s.dir, "token.txt")}`,
+			),
+		);
+		expect(await cc.bindTask(`run:${RUN_B}`)).toMatchObject({ status: "pinned", externalCredentials: true });
+	});
+});
+
+describe("终端归属：Agent 发起的终端带 agent 标记，用户手开的不带", () => {
+	it("terminal_create 工具与终端接管 bash 为 agent=true，界面创建为 agent=false", async () => {
+		const seen: Array<{ id: string; agent: boolean }> = [];
+		const mgr = new TerminalManager(() => {}, ROOT);
+		let current = "";
+		mgr.envFor = (env, ctx) => {
+			seen.push({ id: current, agent: ctx.agent });
+			return env;
+		};
+		current = "user-term";
+		mgr.create("user-term", ROOT, 80, 24, ROOT, "user");
+		current = "tool-term";
+		mgr.create("tool-term", ROOT, 80, 24, ROOT, "tool", { agentTool: true });
+		current = "bash-term";
+		mgr.create("bash-term", ROOT, 80, 24, ROOT, "bash", { agentBash: true });
+		mgr.killAll();
+		expect(seen).toEqual([
+			{ id: "user-term", agent: false },
+			{ id: "tool-term", agent: true },
+			{ id: "bash-term", agent: true },
+		]);
 	});
 });

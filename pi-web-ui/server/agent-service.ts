@@ -54,6 +54,7 @@ import {
 	registerRunTurnController,
 	stopRunExternal,
 	canContinueLoop,
+	listRuns,
 	loadLoopState,
 	loadLoopStateForRecovery,
 	observeRunOperation,
@@ -897,7 +898,8 @@ export class ClientSession {
 			return cc.envForTask(`goal:${conv.parentId}`, env);
 		}
 		const sid = conv.session?.sessionId;
-		const runId = sid ? this.loopRunBySession?.get(sid) : undefined;
+		// 重启后未经 resumeLoop 的接续（例如用户直接在原会话继续）：按 sessionId 精确找活跃 run 补登记。
+		const runId = sid ? (this.loopRunBySession?.get(sid) ?? this.activeRunIdForSession(sid)) : undefined;
 		if (runId) {
 			let active = false;
 			try {
@@ -911,6 +913,22 @@ export class ClientSession {
 		return env;
 	}
 
+	/** sessionId → 活跃 run 的精确查找（5 秒缓存：每次起进程都扫 run 目录太贵）。 */
+	private activeRunLookup = new Map<string, { runId: string | null; at: number }>();
+	private activeRunIdForSession(sid: string): string | undefined {
+		const hit = this.activeRunLookup?.get(sid);
+		if (hit && Date.now() - hit.at < 5000) return hit.runId ?? undefined;
+		let runId: string | null = null;
+		try {
+			runId = listRuns().find((r) => r.status === "active" && r.sessionId === sid)?.runId ?? null;
+		} catch {
+			runId = null;
+		}
+		this.activeRunLookup?.set(sid, { runId, at: Date.now() });
+		if (runId) this.loopRunBySession?.set(sid, runId);
+		return runId ?? undefined;
+	}
+
 	private makeTerminalManager(conversationId: string, cwd: string): TerminalManager {
 		const mgr = new TerminalManager(
 			(msg) => this.emitTerminal(conversationId, msg),
@@ -918,8 +936,12 @@ export class ClientSession {
 			// issue #91：终端输入错误按客户端 UI 语言出中英（英文默认）。
 			() => this.getLang(),
 		);
-		// 属于运行中任务的会话：终端起的 PTY 同样用任务绑定的集群配置。
-		mgr.envFor = (env) => {
+		// 属于运行中任务的终端用任务绑定的集群配置：任务专属会话（目标执行 / 审查、loop 执行者）里的
+		// 全部终端，以及主对话里由 Agent 发起的终端；主对话里用户手开的终端照当前配置。
+		mgr.envFor = (env, { agent }) => {
+			const type = this.convs.get(conversationId)?.subagentType;
+			const dedicated = type === "goal-executor" || type === "goal-reviewer" || type === "loop-executor";
+			if (!agent && !dedicated) return env;
 			const out = this.clusterEnvForConversation(conversationId, env);
 			return Object.fromEntries(Object.entries(out).filter((e): e is [string, string] => typeof e[1] === "string"));
 		};
